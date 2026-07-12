@@ -1,0 +1,498 @@
+"use client";
+
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { AlertCircle, CheckCircle2, LockKeyhole, MessageCircle, PhoneCall, Send } from "lucide-react";
+import type { Department } from "@/app/lib/data";
+import { consentText, emergencyNotice, hospital } from "@/app/lib/data";
+
+type SlotsResponse = {
+  departmentName?: string;
+  timing?: { startTime: string; endTime: string; days: string; slotGapMinutes: number };
+  slots?: string[];
+  error?: string;
+};
+
+function todayIso() {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  return now.toISOString().slice(0, 10);
+}
+
+function FieldMessage({ message, success }: { message: string; success?: boolean }) {
+  if (!message) return null;
+  return (
+    <div className={success ? "form-message success" : "form-message"}>
+      {success ? <CheckCircle2 size={18} aria-hidden="true" /> : <AlertCircle size={18} aria-hidden="true" />}
+      <span>{message}</span>
+    </div>
+  );
+}
+
+function TurnstileBox({ siteKey, onToken }: { siteKey?: string; onToken: (token: string) => void }) {
+  useEffect(() => {
+    if (!siteKey) {
+      onToken("preview-turnstile");
+      return;
+    }
+
+    const callbackName = "pchTurnstile";
+    (window as unknown as Record<string, (token: string) => void>)[callbackName] = onToken;
+    const existing = document.querySelector<HTMLScriptElement>("script[data-pch-turnstile]");
+    if (!existing) {
+      const script = document.createElement("script");
+      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js";
+      script.async = true;
+      script.defer = true;
+      script.dataset.pchTurnstile = "true";
+      document.head.appendChild(script);
+    }
+    return () => {
+      delete (window as unknown as Record<string, unknown>)[callbackName];
+    };
+  }, [siteKey, onToken]);
+
+  if (!siteKey) {
+    return (
+      <div className="turnstile-preview">
+        <LockKeyhole size={18} aria-hidden="true" />
+        <span>Security verification placeholder active until Turnstile keys are configured.</span>
+      </div>
+    );
+  }
+
+  return <div className="cf-turnstile" data-sitekey={siteKey} data-callback="pchTurnstile" />;
+}
+
+async function postJson(url: string, payload: Record<string, unknown>) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) throw new Error(String(data.error || "Request failed. Please try again."));
+  return data;
+}
+
+export function AppointmentForm({
+  departments,
+  initialDepartment,
+  turnstileSiteKey,
+}: {
+  departments: Department[];
+  initialDepartment?: string;
+  turnstileSiteKey?: string;
+}) {
+  const selectableDepartments = departments;
+  const [step, setStep] = useState(1);
+  const [departmentSlug, setDepartmentSlug] = useState(initialDepartment || selectableDepartments[0]?.slug || "");
+  const [slots, setSlots] = useState<string[]>([]);
+  const [slotError, setSlotError] = useState("");
+  const [form, setForm] = useState({
+    patientName: "",
+    phone: "",
+    email: "",
+    requestedDate: todayIso(),
+    requestedTime: "",
+    concern: "",
+    otpCode: "",
+    consent: false,
+    company: "",
+  });
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [message, setMessage] = useState("");
+  const [success, setSuccess] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpVerified, setOtpVerified] = useState(false);
+  const department = useMemo(
+    () => selectableDepartments.find((item) => item.slug === departmentSlug),
+    [selectableDepartments, departmentSlug],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!departmentSlug) return;
+    fetch(`/api/department-slots?departmentSlug=${encodeURIComponent(departmentSlug)}`)
+      .then((response) => response.json())
+      .then((data: SlotsResponse) => {
+        if (cancelled) return;
+        if (data.error) setSlotError(data.error);
+        setSlots(data.slots || []);
+      })
+      .catch(() => {
+        if (!cancelled) setSlotError("Please call the hospital desk to confirm timing for this department.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [departmentSlug]);
+
+  function chooseDepartment(slug: string) {
+    setSlots([]);
+    setSlotError("");
+    setForm((current) => ({ ...current, requestedTime: "" }));
+    setDepartmentSlug(slug);
+  }
+
+  function update(name: keyof typeof form, value: string | boolean) {
+    setForm((current) => ({ ...current, [name]: value }));
+  }
+
+  async function sendOtp() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const data = await postJson("/api/otp/send", { phone: form.phone, purpose: "appointment" });
+      setOtpSent(true);
+      setMessage(String(data.previewOtp ? `Preview OTP: ${data.previewOtp}` : data.message || "OTP sent."));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not send OTP.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verifyOtp() {
+    setBusy(true);
+    setMessage("");
+    try {
+      await postJson("/api/otp/verify", { phone: form.phone, code: form.otpCode, purpose: "appointment" });
+      setOtpVerified(true);
+      setStep(3);
+      setMessage("Mobile number verified.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "OTP verification failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    setSuccess(false);
+    try {
+      const data = await postJson("/api/appointments", {
+        ...form,
+        departmentSlug,
+        turnstileToken,
+      });
+      setSuccess(true);
+      setMessage(`${data.message || "Appointment request received."} Request ID: ${data.requestId || ""}`);
+      setStep(1);
+      setOtpSent(false);
+      setOtpVerified(false);
+      setForm({
+        patientName: "",
+        phone: "",
+        email: "",
+        requestedDate: todayIso(),
+        requestedTime: "",
+        concern: "",
+        otpCode: "",
+        consent: false,
+        company: "",
+      });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not submit appointment request.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="flow-card appointment-flow" onSubmit={submit}>
+      <div className="flow-steps" aria-label="Appointment request steps">
+        {[1, 2, 3].map((item) => (
+          <button type="button" className={step === item ? "active" : ""} key={item} onClick={() => setStep(item)}>
+            {item}
+          </button>
+        ))}
+      </div>
+
+      {step === 1 ? (
+        <div className="form-section">
+          <label>
+            Department
+            <select value={departmentSlug} onChange={(event) => chooseDepartment(event.target.value)} required>
+              {selectableDepartments.map((item) => (
+                <option value={item.slug} key={item.slug}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {department ? <p className="field-hint">{department.hindi} · {department.summary}</p> : null}
+          <div className="two-fields">
+            <label>
+              Preferred date
+              <input type="date" value={form.requestedDate} min={todayIso()} onChange={(event) => update("requestedDate", event.target.value)} required />
+            </label>
+            <label>
+              Preferred time
+              <select value={form.requestedTime} onChange={(event) => update("requestedTime", event.target.value)} required>
+                <option value="">Select a 15-minute slot</option>
+                {slots.map((slot) => (
+                  <option value={slot} key={slot}>
+                    {slot}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {slotError ? <p className="field-hint warning">{slotError}</p> : null}
+          <button className="button primary" type="button" onClick={() => setStep(2)} disabled={!departmentSlug || !form.requestedTime}>
+            Continue
+          </button>
+        </div>
+      ) : null}
+
+      {step === 2 ? (
+        <div className="form-section">
+          <input className="honeypot" value={form.company} onChange={(event) => update("company", event.target.value)} tabIndex={-1} autoComplete="off" aria-hidden="true" />
+          <div className="two-fields">
+            <label>
+              Patient name
+              <input value={form.patientName} onChange={(event) => update("patientName", event.target.value)} required />
+            </label>
+            <label>
+              Mobile number
+              <input value={form.phone} onChange={(event) => update("phone", event.target.value)} inputMode="tel" required />
+            </label>
+          </div>
+          <label>
+            Email
+            <input value={form.email} onChange={(event) => update("email", event.target.value)} type="email" required />
+          </label>
+          <label>
+            Concern / reason for visit
+            <textarea value={form.concern} onChange={(event) => update("concern", event.target.value)} rows={4} required />
+          </label>
+          <div className="otp-row">
+            <button type="button" className="button secondary" onClick={sendOtp} disabled={busy || !form.phone}>
+              <PhoneCall size={18} aria-hidden="true" /> Send OTP
+            </button>
+            <label>
+              OTP
+              <input value={form.otpCode} onChange={(event) => update("otpCode", event.target.value)} inputMode="numeric" maxLength={6} />
+            </label>
+            <button type="button" className="button subtle" onClick={verifyOtp} disabled={busy || !otpSent || !form.otpCode}>
+              Verify
+            </button>
+          </div>
+          <button className="button primary" type="button" onClick={() => setStep(3)} disabled={!otpVerified}>
+            Continue
+          </button>
+        </div>
+      ) : null}
+
+      {step === 3 ? (
+        <div className="form-section">
+          <div className="summary-box">
+            <strong>{department?.name}</strong>
+            <span>{form.requestedDate} · {form.requestedTime}</span>
+            <p>Hospital staff will call to confirm final availability.</p>
+          </div>
+          <TurnstileBox siteKey={turnstileSiteKey} onToken={setTurnstileToken} />
+          <label className="checkbox-field">
+            <input type="checkbox" checked={form.consent} onChange={(event) => update("consent", event.target.checked)} required />
+            <span>{consentText}</span>
+          </label>
+          <p className="field-hint warning">{emergencyNotice}</p>
+          <button className="button primary full" disabled={busy || !form.consent || !turnstileToken} type="submit">
+            <Send size={18} aria-hidden="true" /> Submit Request
+          </button>
+        </div>
+      ) : null}
+
+      <FieldMessage message={message} success={success || otpVerified} />
+    </form>
+  );
+}
+
+export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }) {
+  const [form, setForm] = useState({
+    patientName: "",
+    phone: "",
+    rating: "5",
+    message: "",
+    otpCode: "",
+    consent: false,
+    company: "",
+  });
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpVerified, setOtpVerified] = useState(false);
+  const [message, setMessage] = useState("");
+  const [success, setSuccess] = useState(false);
+
+  function update(name: keyof typeof form, value: string | boolean) {
+    setForm((current) => ({ ...current, [name]: value }));
+  }
+
+  async function sendOtp() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const data = await postJson("/api/otp/send", { phone: form.phone, purpose: "feedback" });
+      setOtpSent(true);
+      setMessage(String(data.previewOtp ? `Preview OTP: ${data.previewOtp}` : data.message || "OTP sent."));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not send OTP.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verifyOtp() {
+    setBusy(true);
+    setMessage("");
+    try {
+      await postJson("/api/otp/verify", { phone: form.phone, code: form.otpCode, purpose: "feedback" });
+      setOtpVerified(true);
+      setMessage("Mobile number verified.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "OTP verification failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    setSuccess(false);
+    try {
+      const data = await postJson("/api/feedback", {
+        ...form,
+        rating: Number(form.rating),
+        turnstileToken,
+      });
+      setSuccess(true);
+      setMessage(String(data.message || "Feedback submitted for review."));
+      setForm({ patientName: "", phone: "", rating: "5", message: "", otpCode: "", consent: false, company: "" });
+      setOtpSent(false);
+      setOtpVerified(false);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not submit feedback.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="flow-card" onSubmit={submit}>
+      <input className="honeypot" value={form.company} onChange={(event) => update("company", event.target.value)} tabIndex={-1} autoComplete="off" aria-hidden="true" />
+      <div className="two-fields">
+        <label>
+          Patient name
+          <input value={form.patientName} onChange={(event) => update("patientName", event.target.value)} required />
+        </label>
+        <label>
+          Mobile number
+          <input value={form.phone} onChange={(event) => update("phone", event.target.value)} inputMode="tel" required />
+        </label>
+      </div>
+      <label>
+        Rating
+        <select value={form.rating} onChange={(event) => update("rating", event.target.value)}>
+          <option value="5">5 - Excellent</option>
+          <option value="4">4 - Good</option>
+          <option value="3">3 - Average</option>
+          <option value="2">2 - Needs attention</option>
+          <option value="1">1 - Poor</option>
+        </select>
+      </label>
+      <label>
+        Feedback
+        <textarea rows={5} value={form.message} onChange={(event) => update("message", event.target.value)} required />
+      </label>
+      <div className="otp-row">
+        <button type="button" className="button secondary" onClick={sendOtp} disabled={busy || !form.phone}>
+          <PhoneCall size={18} aria-hidden="true" /> Send OTP
+        </button>
+        <label>
+          OTP
+          <input value={form.otpCode} onChange={(event) => update("otpCode", event.target.value)} inputMode="numeric" maxLength={6} />
+        </label>
+        <button type="button" className="button subtle" onClick={verifyOtp} disabled={busy || !otpSent || !form.otpCode}>
+          Verify
+        </button>
+      </div>
+      <TurnstileBox siteKey={turnstileSiteKey} onToken={setTurnstileToken} />
+      <label className="checkbox-field">
+        <input type="checkbox" checked={form.consent} onChange={(event) => update("consent", event.target.checked)} required />
+        <span>I consent to Protone Care Hospital reviewing this feedback and contacting me if follow-up is needed. Public display requires hospital approval.</span>
+      </label>
+      <button className="button primary full" type="submit" disabled={busy || !otpVerified || !form.consent || !turnstileToken}>
+        <Send size={18} aria-hidden="true" /> Submit Feedback
+      </button>
+      <FieldMessage message={message} success={success || otpVerified} />
+    </form>
+  );
+}
+
+export function ContactForm() {
+  const [form, setForm] = useState({ name: "", phone: "", email: "", subject: "", message: "", company: "" });
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [success, setSuccess] = useState(false);
+
+  function update(name: keyof typeof form, value: string) {
+    setForm((current) => ({ ...current, [name]: value }));
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setNotice("");
+    setSuccess(false);
+    try {
+      const data = await postJson("/api/contact", form);
+      setSuccess(true);
+      setNotice(String(data.message || "Message received."));
+      setForm({ name: "", phone: "", email: "", subject: "", message: "", company: "" });
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not send message.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="flow-card" onSubmit={submit}>
+      <input className="honeypot" value={form.company} onChange={(event) => update("company", event.target.value)} tabIndex={-1} autoComplete="off" aria-hidden="true" />
+      <div className="two-fields">
+        <label>
+          Name
+          <input value={form.name} onChange={(event) => update("name", event.target.value)} required />
+        </label>
+        <label>
+          Phone
+          <input value={form.phone} onChange={(event) => update("phone", event.target.value)} inputMode="tel" />
+        </label>
+      </div>
+      <label>
+        Email
+        <input value={form.email} onChange={(event) => update("email", event.target.value)} type="email" required />
+      </label>
+      <label>
+        Subject
+        <input value={form.subject} onChange={(event) => update("subject", event.target.value)} />
+      </label>
+      <label>
+        Message
+        <textarea rows={5} value={form.message} onChange={(event) => update("message", event.target.value)} required />
+      </label>
+      <button className="button primary full" type="submit" disabled={busy}>
+        <MessageCircle size={18} aria-hidden="true" /> Send Message
+      </button>
+      <p className="field-hint">For emergencies, call <a href={hospital.phoneHref}>{hospital.phone}</a>.</p>
+      <FieldMessage message={notice} success={success} />
+    </form>
+  );
+}
