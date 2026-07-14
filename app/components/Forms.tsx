@@ -105,14 +105,79 @@ export function AppointmentForm({
   const [busy, setBusy] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
   const [otpVerified, setOtpVerified] = useState(false);
+  const [idempotencyKey, setIdempotencyKey] = useState("");
   const department = useMemo(
     () => selectableDepartments.find((item) => item.slug === departmentSlug),
     [selectableDepartments, departmentSlug],
   );
 
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    if (mounted) {
+      const savedKey = localStorage.getItem("pch_appointment_idempotency");
+      if (savedKey) {
+        setIdempotencyKey(savedKey);
+      } else {
+        const newKey = crypto.randomUUID();
+        setIdempotencyKey(newKey);
+        localStorage.setItem("pch_appointment_idempotency", newKey);
+      }
+    }
+  }, [mounted, success]);
+
+  useEffect(() => {
+    setMounted(true);
+    const savedForm = localStorage.getItem("pch_appointment_draft");
+    if (savedForm) {
+      try {
+        const parsed = JSON.parse(savedForm);
+        setForm((current) => ({ ...current, ...parsed, otpCode: "" }));
+      } catch {}
+    }
+    const savedDept = localStorage.getItem("pch_appointment_dept");
+    if (savedDept) {
+      setDepartmentSlug(savedDept);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem(
+        "pch_appointment_draft",
+        JSON.stringify({
+          patientName: form.patientName,
+          phone: form.phone,
+          email: form.email,
+          requestedDate: form.requestedDate,
+          requestedTime: form.requestedTime,
+          concern: form.concern,
+          consent: form.consent,
+        })
+      );
+    }
+  }, [form, mounted]);
+
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem("pch_appointment_dept", departmentSlug);
+    }
+  }, [departmentSlug, mounted]);
+
+  const isEmergency = departmentSlug === "emergency-medicine";
+  const isUntimed = department && !department.timing;
+
+  useEffect(() => {
+    if (isUntimed) {
+      update("requestedTime", "Manual Allocation");
+    } else if (form.requestedTime === "Manual Allocation") {
+      update("requestedTime", "");
+    }
+  }, [isUntimed]);
+
   useEffect(() => {
     let cancelled = false;
-    if (!departmentSlug) return;
+    if (!departmentSlug || isEmergency) return;
     fetch(`/api/department-slots?departmentSlug=${encodeURIComponent(departmentSlug)}`)
       .then((response) => response.json())
       .then((data: SlotsResponse) => {
@@ -126,12 +191,15 @@ export function AppointmentForm({
     return () => {
       cancelled = true;
     };
-  }, [departmentSlug]);
+  }, [departmentSlug, isEmergency]);
 
   function chooseDepartment(slug: string) {
     setSlots([]);
     setSlotError("");
-    setForm((current) => ({ ...current, requestedTime: "" }));
+    setForm((current) => ({ ...current, requestedTime: "", otpCode: "" }));
+    setOtpSent(false);
+    setOtpVerified(false);
+    setStep(1);
     setDepartmentSlug(slug);
   }
 
@@ -178,6 +246,7 @@ export function AppointmentForm({
         ...form,
         departmentSlug,
         turnstileToken,
+        idempotencyKey,
       });
       setSuccess(true);
       setMessage(`${data.message || "Appointment request received."} Request ID: ${data.requestId || ""}`);
@@ -195,11 +264,41 @@ export function AppointmentForm({
         consent: false,
         company: "",
       });
+      localStorage.removeItem("pch_appointment_draft");
+      localStorage.removeItem("pch_appointment_dept");
+      localStorage.removeItem("pch_appointment_idempotency");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not submit appointment request.");
     } finally {
       setBusy(false);
     }
+  }
+
+  if (isEmergency) {
+    return (
+      <div className="flow-card emergency-block-card" style={{ borderColor: "#dc2626", borderLeftWidth: 4 }}>
+        <div className="emergency-alert-banner" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#dc2626" }}>
+            <AlertCircle size={32} />
+            <h2 style={{ margin: 0 }}>Emergency Care Required / आपातकालीन देखभाल</h2>
+          </div>
+          <p style={{ fontSize: 15, lineHeight: 1.5 }}>
+            For life-threatening conditions or urgent medical emergencies, please do not wait for an online appointment request. Call or visit our hospital directly. / आपातकालीन स्थिति में ऑनलाइन अपॉइंटमेंट की प्रतीक्षा न करें, सीधे संपर्क करें।
+          </p>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 15 }}>
+          <a href={hospital.phoneHref} className="button primary call-button" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: "#dc2626", color: "white" }}>
+            <PhoneCall size={20} /> Call Emergency Desk: {hospital.phone}
+          </a>
+          <a href={hospital.mapsUrl} target="_blank" rel="noopener noreferrer" className="button secondary map-button" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+            Get Directions to Hospital / दिशा-निर्देश प्राप्त करें
+          </a>
+        </div>
+        <button type="button" className="button subtle" style={{ marginTop: 15 }} onClick={() => chooseDepartment(selectableDepartments[0]?.slug || "")}>
+          Choose another department / दूसरा विभाग चुनें
+        </button>
+      </div>
+    );
   }
 
   return (
@@ -232,14 +331,21 @@ export function AppointmentForm({
             </label>
             <label>
               Preferred time
-              <select value={form.requestedTime} onChange={(event) => update("requestedTime", event.target.value)} required>
-                <option value="">Select a 15-minute slot</option>
-                {slots.map((slot) => (
-                  <option value={slot} key={slot}>
-                    {slot}
-                  </option>
-                ))}
-              </select>
+              {isUntimed ? (
+                <div className="manual-allocation-notice">
+                  <input type="text" value="Manual Allocation" disabled className="disabled-input" style={{ width: "100%", padding: "8px 12px", background: "var(--soft)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-muted)" }} />
+                  <p className="field-hint" style={{ marginTop: 4, fontSize: 12 }}>Our staff will manually allocate a slot for you.</p>
+                </div>
+              ) : (
+                <select value={form.requestedTime} onChange={(event) => update("requestedTime", event.target.value)} required>
+                  <option value="">Select a 15-minute slot</option>
+                  {slots.map((slot) => (
+                    <option value={slot} key={slot}>
+                      {slot}
+                    </option>
+                  ))}
+                </select>
+              )}
             </label>
           </div>
           {slotError ? <p className="field-hint warning">{slotError}</p> : null}
@@ -329,6 +435,48 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
   const [message, setMessage] = useState("");
   const [success, setSuccess] = useState(false);
 
+  const [idempotencyKey, setIdempotencyKey] = useState("");
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    if (mounted) {
+      const savedKey = localStorage.getItem("pch_feedback_idempotency");
+      if (savedKey) {
+        setIdempotencyKey(savedKey);
+      } else {
+        const newKey = crypto.randomUUID();
+        setIdempotencyKey(newKey);
+        localStorage.setItem("pch_feedback_idempotency", newKey);
+      }
+    }
+  }, [mounted, success]);
+
+  useEffect(() => {
+    setMounted(true);
+    const saved = localStorage.getItem("pch_feedback_draft");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setForm((current) => ({ ...current, ...parsed, otpCode: "" }));
+      } catch {}
+    }
+  }, []);
+
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem(
+        "pch_feedback_draft",
+        JSON.stringify({
+          patientName: form.patientName,
+          phone: form.phone,
+          rating: form.rating,
+          message: form.message,
+          consent: form.consent,
+        })
+      );
+    }
+  }, [form, mounted]);
+
   function update(name: keyof typeof form, value: string | boolean) {
     setForm((current) => ({ ...current, [name]: value }));
   }
@@ -371,12 +519,15 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
         ...form,
         rating: Number(form.rating),
         turnstileToken,
+        idempotencyKey,
       });
       setSuccess(true);
       setMessage(String(data.message || "Feedback submitted for review."));
       setForm({ patientName: "", phone: "", rating: "5", message: "", otpCode: "", consent: false, company: "" });
       setOtpSent(false);
       setOtpVerified(false);
+      localStorage.removeItem("pch_feedback_draft");
+      localStorage.removeItem("pch_feedback_idempotency");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not submit feedback.");
     } finally {
@@ -436,11 +587,45 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
   );
 }
 
-export function ContactForm() {
+export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string }) {
   const [form, setForm] = useState({ name: "", phone: "", email: "", subject: "", message: "", company: "" });
+  const [turnstileToken, setTurnstileToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [success, setSuccess] = useState(false);
+
+  const [idempotencyKey, setIdempotencyKey] = useState("");
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    if (mounted) {
+      const savedKey = localStorage.getItem("pch_contact_idempotency");
+      if (savedKey) {
+        setIdempotencyKey(savedKey);
+      } else {
+        const newKey = crypto.randomUUID();
+        setIdempotencyKey(newKey);
+        localStorage.setItem("pch_contact_idempotency", newKey);
+      }
+    }
+  }, [mounted, success]);
+
+  useEffect(() => {
+    setMounted(true);
+    const saved = localStorage.getItem("pch_contact_draft");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setForm((current) => ({ ...current, ...parsed }));
+      } catch {}
+    }
+  }, []);
+
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem("pch_contact_draft", JSON.stringify(form));
+    }
+  }, [form, mounted]);
 
   function update(name: keyof typeof form, value: string) {
     setForm((current) => ({ ...current, [name]: value }));
@@ -452,10 +637,13 @@ export function ContactForm() {
     setNotice("");
     setSuccess(false);
     try {
-      const data = await postJson("/api/contact", form);
+      const data = await postJson("/api/contact", { ...form, turnstileToken, idempotencyKey });
       setSuccess(true);
       setNotice(String(data.message || "Message received."));
       setForm({ name: "", phone: "", email: "", subject: "", message: "", company: "" });
+      setTurnstileToken("");
+      localStorage.removeItem("pch_contact_draft");
+      localStorage.removeItem("pch_contact_idempotency");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Could not send message.");
     } finally {
@@ -488,7 +676,8 @@ export function ContactForm() {
         Message
         <textarea rows={5} value={form.message} onChange={(event) => update("message", event.target.value)} required />
       </label>
-      <button className="button primary full" type="submit" disabled={busy}>
+      <TurnstileBox siteKey={turnstileSiteKey} onToken={setTurnstileToken} />
+      <button className="button primary full" type="submit" disabled={busy || (turnstileSiteKey ? !turnstileToken : false)}>
         <MessageCircle size={18} aria-hidden="true" /> Send Message
       </button>
       <p className="field-hint">For emergencies, call <a href={hospital.phoneHref}>{hospital.phone}</a>.</p>

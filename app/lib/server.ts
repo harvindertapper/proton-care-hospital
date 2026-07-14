@@ -34,6 +34,7 @@ const tableStatements = [
     internal_notes TEXT NOT NULL DEFAULT '',
     ip_address TEXT,
     user_agent TEXT,
+    schedule_version INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
@@ -156,6 +157,8 @@ const tableStatements = [
     purpose TEXT NOT NULL DEFAULT 'admin-upload',
     uploaded_by TEXT NOT NULL,
     consent_note TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'APPROVED',
+    is_visible INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS audit_logs (
@@ -181,6 +184,12 @@ const tableStatements = [
   `CREATE INDEX IF NOT EXISTS revisions_status_idx ON content_revisions(status, created_at)`,
   `CREATE INDEX IF NOT EXISTS doctors_department_idx ON doctor_profiles(department_slug, is_visible)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS rate_limits_action_identifier_idx ON rate_limits(action, identifier)`,
+  `CREATE TABLE IF NOT EXISTS idempotent_requests (
+    id TEXT PRIMARY KEY,
+    payload_hash TEXT NOT NULL,
+    response_body TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
 ];
 
 let initialized = false;
@@ -193,6 +202,21 @@ export async function getD1() {
 
   if (!initialized) {
     await db.batch(tableStatements.map((statement) => db.prepare(statement)));
+    try {
+      await db.prepare("SELECT schedule_version FROM appointments LIMIT 1").all();
+    } catch {
+      try {
+        await db.prepare("ALTER TABLE appointments ADD COLUMN schedule_version INTEGER NOT NULL DEFAULT 1").run();
+      } catch {}
+    }
+    try {
+      await db.prepare("SELECT status FROM media_assets LIMIT 1").all();
+    } catch {
+      try {
+        await db.prepare("ALTER TABLE media_assets ADD COLUMN status TEXT NOT NULL DEFAULT 'APPROVED'").run();
+        await db.prepare("ALTER TABLE media_assets ADD COLUMN is_visible INTEGER NOT NULL DEFAULT 1").run();
+      } catch {}
+    }
     await seedDepartmentTimings(db);
     await seedDoctorProfiles(db);
     initialized = true;
@@ -249,14 +273,60 @@ async function seedDoctorProfiles(db: D1Database) {
   );
 }
 
+async function retryOnLock<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (error) {
+      attempt++;
+      const msg = error instanceof Error ? error.message : String(error);
+      const isLocked = msg.includes("locked") || msg.includes("BUSY") || msg.includes("busy");
+      if (isLocked && attempt <= retries) {
+        const delay = 200 + Math.random() * 300;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 export async function query<T = Record<string, unknown>>(statement: string, ...binds: unknown[]) {
   const db = await getD1();
-  return (await db.prepare(statement).bind(...binds).all<T>()) as D1Result<T>;
+  return retryOnLock(() => db.prepare(statement).bind(...binds).all<T>() as Promise<D1Result<T>>);
 }
 
 export async function run(statement: string, ...binds: unknown[]) {
   const db = await getD1();
-  return db.prepare(statement).bind(...binds).run();
+  return retryOnLock(() => db.prepare(statement).bind(...binds).run());
+}
+
+export async function checkIdempotency(key: string, body: Record<string, unknown>) {
+  const hash = await sha256(JSON.stringify(body));
+  const rows = await query<{ payload_hash: string; response_body: string }>(
+    "SELECT payload_hash, response_body FROM idempotent_requests WHERE id = ? LIMIT 1",
+    key,
+  );
+  const row = rows.results?.[0];
+  if (!row) return null;
+  if (row.payload_hash !== hash) {
+    throw new Error("Idempotency signature mismatch: Request body does not match the original token.");
+  }
+  return JSON.parse(row.response_body) as Record<string, unknown>;
+}
+
+export async function saveIdempotency(key: string, body: Record<string, unknown>, response: Record<string, unknown>) {
+  const hash = await sha256(JSON.stringify(body));
+  const resStr = JSON.stringify(response);
+  const now = Math.floor(Date.now() / 1000);
+  await run(
+    "INSERT OR REPLACE INTO idempotent_requests (id, payload_hash, response_body, created_at) VALUES (?, ?, ?, ?)",
+    key,
+    hash,
+    resStr,
+    now,
+  );
 }
 
 export function getR2() {
@@ -355,11 +425,18 @@ function sessionSecret() {
   const configured = process.env.ADMIN_SESSION_SECRET || process.env.AUTH_SECRET;
   if (configured) return configured;
   if (process.env.NODE_ENV !== "production") return "pch-local-preview-session-secret";
-  return "";
+  throw new Error("ADMIN_SESSION_SECRET or AUTH_SECRET env secret is required in production.");
 }
 
 export async function hashOtp(code: string, phone: string) {
-  return sha256(`${phone}:${code}:${process.env.OTP_HASH_SECRET || "pch-preview-otp-secret"}`);
+  const secret = process.env.OTP_HASH_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("OTP_HASH_SECRET env secret is required in production.");
+    }
+    return sha256(`${phone}:${code}:pch-preview-otp-secret`);
+  }
+  return sha256(`${phone}:${code}:${secret}`);
 }
 
 export function normalizePhone(phone: string) {
@@ -513,7 +590,8 @@ export async function verifyAdminSession() {
   const secret = sessionSecret();
   if (!secret) return null;
   const cookieStore = await cookies();
-  const token = cookieStore.get(SESSION_COOKIE)?.value;
+  const name = process.env.NODE_ENV === "production" ? `__Host-${SESSION_COOKIE}` : SESSION_COOKIE;
+  const token = cookieStore.get(name)?.value;
   if (!token) return null;
   const [encoded, signature] = token.split(".");
   if (!encoded || !signature || (await hmac(encoded, secret)) !== signature) return null;
@@ -534,7 +612,8 @@ export function verifyCsrf(request: Request, session: { csrf?: string }) {
 
 export async function setAdminCookie(token: string) {
   const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, token, {
+  const name = process.env.NODE_ENV === "production" ? `__Host-${SESSION_COOKIE}` : SESSION_COOKIE;
+  cookieStore.set(name, token, {
     httpOnly: true,
     sameSite: "strict",
     secure: process.env.NODE_ENV === "production",
@@ -545,7 +624,8 @@ export async function setAdminCookie(token: string) {
 
 export async function clearAdminCookie() {
   const cookieStore = await cookies();
-  cookieStore.delete(SESSION_COOKIE);
+  const name = process.env.NODE_ENV === "production" ? `__Host-${SESSION_COOKIE}` : SESSION_COOKIE;
+  cookieStore.delete(name);
 }
 
 export async function requireAdmin(requiredRole?: "SUPER_ADMIN") {

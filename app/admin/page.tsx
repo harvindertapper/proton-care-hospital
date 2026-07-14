@@ -25,6 +25,7 @@ async function loadData() {
     blogs,
     jobs,
     videos,
+    media,
     audits,
   ] = await Promise.all([
     rows("SELECT * FROM appointments ORDER BY created_at DESC LIMIT 100"),
@@ -36,9 +37,10 @@ async function loadData() {
     rows("SELECT * FROM blog_posts ORDER BY created_at DESC LIMIT 100"),
     rows("SELECT * FROM career_jobs ORDER BY created_at DESC LIMIT 100"),
     rows("SELECT * FROM patient_videos ORDER BY created_at DESC LIMIT 100"),
+    rows("SELECT * FROM media_assets ORDER BY created_at DESC LIMIT 100"),
     rows("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 120"),
   ]);
-  return { appointments, timings, doctors: doctorProfiles, revisions, feedback, contacts, blogs, jobs, videos, audits };
+  return { appointments, timings, doctors: doctorProfiles, revisions, feedback, contacts, blogs, jobs, videos, media, audits };
 }
 
 export default async function AdminPage() {

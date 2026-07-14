@@ -4,11 +4,14 @@ import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
   CheckCircle2,
   Clock3,
+  EyeOff,
   FileText,
+  ImagePlus,
   LogOut,
   Newspaper,
   ShieldCheck,
   Stethoscope,
+  Upload,
   UserCog,
   Video,
   XCircle,
@@ -27,6 +30,7 @@ type AdminData = {
   blogs: Record<string, string | number | null>[];
   jobs: Record<string, string | number | null>[];
   videos: Record<string, string | number | null>[];
+  media: Record<string, string | number | null>[];
   audits: Record<string, string | number | null>[];
 };
 
@@ -35,6 +39,7 @@ const tabs = [
   "Appointments",
   "Department Timings",
   "Doctors",
+  "Media",
   "Approvals",
   "Blogs",
   "Careers",
@@ -55,8 +60,19 @@ async function postAdmin(csrf: string, payload: Record<string, unknown>) {
   return data;
 }
 
+async function uploadAdminMedia(csrf: string, formData: FormData) {
+  const response = await fetch("/api/admin/media", {
+    method: "POST",
+    headers: { "x-csrf-token": csrf },
+    body: formData,
+  });
+  const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) throw new Error(String(data.error || "Media upload failed."));
+  return data;
+}
+
 function cell(value: unknown) {
-  return value === null || value === undefined || value === "" ? "—" : String(value);
+  return value === null || value === undefined || value === "" ? "-" : String(value);
 }
 
 function slugify(value: string) {
@@ -128,6 +144,17 @@ export function AdminConsole({
   const [active, setActive] = useState("Dashboard");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [selectedAppointment, setSelectedAppointment] = useState<Record<string, string | number | null> | null>(null);
+  const [editForm, setEditForm] = useState({ requestedDate: "", requestedTime: "", internalNotes: "" });
+
+  function openTriage(row: Record<string, string | number | null>) {
+    setSelectedAppointment(row);
+    setEditForm({
+      requestedDate: String(row.requested_date || ""),
+      requestedTime: String(row.requested_time || ""),
+      internalNotes: String(row.internal_notes || ""),
+    });
+  }
 
   const stats = useMemo(
     () => [
@@ -147,6 +174,21 @@ export function AdminConsole({
       setNotice(successText);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Action failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadMedia(formData: FormData) {
+    setBusy(true);
+    setNotice("");
+    try {
+      const data = await uploadAdminMedia(session.csrf, formData);
+      setNotice("Media uploaded. Refresh to see it in the media list.");
+      return String(data.url || "");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Media upload failed.");
+      return "";
     } finally {
       setBusy(false);
     }
@@ -203,20 +245,33 @@ export function AdminConsole({
         ) : null}
 
         {active === "Appointments" ? (
-          <DataTable
-            rows={data.appointments}
-            columns={["request_id", "patient_name", "phone", "department_name", "requested_date", "requested_time", "status", "created_at"]}
-            actions={(row) => (
-              <div className="table-actions">
-                <button disabled={busy} onClick={() => mutate({ action: "appointment.status", id: row.id, status: "CONTACTED" }, "Appointment marked contacted.")}>
-                  Contacted
-                </button>
-                <button disabled={busy} onClick={() => mutate({ action: "appointment.status", id: row.id, status: "CONFIRMED" }, "Appointment marked confirmed by staff.")}>
-                  Confirmed
-                </button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 15 }}>
+            {session.role === "SUPER_ADMIN" ? (
+              <div style={{ display: "flex", justifyContent: "end" }}>
+                <a href="/api/admin/export-csv" className="button secondary" style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  Export CSV
+                </a>
               </div>
-            )}
-          />
+            ) : null}
+            <DataTable
+              rows={data.appointments}
+              columns={["request_id", "patient_name", "phone", "department_name", "requested_date", "requested_time", "status", "created_at"]}
+              actions={(row) => (
+                <div className="table-actions">
+                  <button disabled={busy} onClick={() => mutate({ action: "appointment.status", id: row.id, status: "CONTACTED" }, "Appointment marked contacted.")}>
+                    Contacted
+                  </button>
+                  <button disabled={busy} onClick={() => mutate({ action: "appointment.status", id: row.id, status: "CONFIRMED" }, "Appointment marked confirmed by staff.")}>
+                    Confirmed
+                  </button>
+                  <button disabled={busy} onClick={() => mutate({ action: "appointment.status", id: row.id, status: "CANCELLED" }, "Appointment marked cancelled.")}>
+                    Cancelled
+                  </button>
+                </div>
+              )}
+              onRowClick={openTriage}
+            />
+          </div>
         ) : null}
 
         {active === "Department Timings" ? (
@@ -224,8 +279,10 @@ export function AdminConsole({
         ) : null}
 
         {active === "Doctors" ? (
-          <DoctorManager rows={data.doctors} departments={departments} staticDoctors={staticDoctors} busy={busy} onSave={(payload) => mutate({ action: "doctor.save", payload }, "Doctor profile saved or sent for approval.")} />
+          <DoctorManager rows={data.doctors} media={data.media} departments={departments} staticDoctors={staticDoctors} busy={busy} onUpload={uploadMedia} onSave={(payload) => mutate({ action: "doctor.save", payload }, "Doctor profile saved or sent for approval.")} />
         ) : null}
+
+        {active === "Media" ? <MediaManager busy={busy} rows={data.media} onUpload={uploadMedia} /> : null}
 
         {active === "Approvals" ? (
           <DataTable
@@ -244,25 +301,111 @@ export function AdminConsole({
           />
         ) : null}
 
-        {active === "Blogs" ? <BlogForm busy={busy} onSave={(payload) => mutate({ action: "blog.save", payload }, "Blog saved or sent for approval.")} rows={data.blogs} /> : null}
-        {active === "Careers" ? <CareerForm busy={busy} onSave={(payload) => mutate({ action: "career.save", payload }, "Job saved or sent for approval.")} rows={data.jobs} /> : null}
-        {active === "Videos" ? <VideoForm busy={busy} onSave={(payload) => mutate({ action: "video.save", payload }, "Patient video saved or sent for approval.")} rows={data.videos} /> : null}
+        {active === "Blogs" ? <BlogForm busy={busy} onSave={(payload) => mutate({ action: "blog.save", payload }, "Blog saved or sent for approval.")} onVisibility={(slug, isVisible) => mutate({ action: "blog.visibility", payload: { slug, isVisible } }, isVisible ? "Blog shown publicly." : "Blog hidden from public site.")} rows={data.blogs} /> : null}
+        {active === "Careers" ? <CareerForm busy={busy} onSave={(payload) => mutate({ action: "career.save", payload }, "Job saved or sent for approval.")} onVisibility={(slug, isVisible) => mutate({ action: "career.visibility", payload: { slug, isVisible } }, isVisible ? "Job shown publicly." : "Job hidden from public site.")} rows={data.jobs} /> : null}
+        {active === "Videos" ? <VideoForm busy={busy} onSave={(payload) => mutate({ action: "video.save", payload }, "Patient video saved or sent for approval.")} onVisibility={(id, isVisible) => mutate({ action: "video.visibility", payload: { id, isVisible } }, isVisible ? "Video shown publicly." : "Video hidden from public site.")} rows={data.videos} /> : null}
 
         {active === "Reviews" ? (
           <DataTable
             rows={data.feedback}
             columns={["patient_name", "rating", "message", "status", "is_visible", "created_at"]}
             actions={(row) => (
-              <button disabled={busy} onClick={() => mutate({ action: "feedback.visibility", id: row.id, isVisible: 1 }, "Feedback approved for public display.")}>
-                Approve Display
-              </button>
+              <div className="table-actions">
+                <button disabled={busy} onClick={() => mutate({ action: "feedback.visibility", id: row.id, isVisible: 1 }, "Feedback approved for public display.")}>
+                  Approve Display
+                </button>
+                <button disabled={busy} onClick={() => mutate({ action: "feedback.visibility", id: row.id, isVisible: 0 }, "Feedback hidden from public display.")}>
+                  <EyeOff size={15} aria-hidden="true" /> Hide
+                </button>
+              </div>
             )}
           />
         ) : null}
 
-        {active === "Messages" ? <DataTable rows={data.contacts} columns={["name", "phone", "email", "subject", "message", "status", "created_at"]} /> : null}
+        {active === "Messages" ? (
+          <DataTable
+            rows={data.contacts}
+            columns={["name", "phone", "email", "subject", "message", "status", "created_at"]}
+            actions={(row) => (
+              <div className="table-actions">
+                <button disabled={busy} onClick={() => mutate({ action: "contact.status", id: row.id, status: "CONTACTED" }, "Message marked contacted.")}>Contacted</button>
+                <button disabled={busy} onClick={() => mutate({ action: "contact.status", id: row.id, status: "CLOSED" }, "Message closed.")}>Closed</button>
+              </div>
+            )}
+          />
+        ) : null}
         {active === "Audit Logs" ? <DataTable rows={data.audits} columns={["actor_email", "action", "entity_type", "entity_id", "details", "created_at"]} /> : null}
       </div>
+
+      {selectedAppointment ? (
+        <div className="admin-drawer-overlay" onClick={() => setSelectedAppointment(null)} style={{ position: "fixed", top: 0, right: 0, bottom: 0, left: 0, background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "end", zIndex: 1000 }}>
+          <div className="admin-drawer" onClick={(e) => e.stopPropagation()} style={{ width: 450, background: "#fff", height: "100%", padding: 24, overflowY: "auto", boxShadow: "-4px 0 24px rgba(0,0,0,0.15)", display: "flex", flexDirection: "column", gap: 18 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h2 style={{ margin: 0 }}>Triage & Reschedule</h2>
+              <button className="button subtle" onClick={() => setSelectedAppointment(null)}>Close</button>
+            </div>
+            
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 15, borderBottom: "1px solid var(--border)" }}>
+              <strong>Request ID: {selectedAppointment.request_id}</strong>
+              <span>Patient: {selectedAppointment.patient_name}</span>
+              <span>Phone: {selectedAppointment.phone}</span>
+              <span>Email: {selectedAppointment.email}</span>
+              <span>Dept: {selectedAppointment.department_name}</span>
+              <span>Created: {selectedAppointment.created_at}</span>
+            </div>
+
+            <div>
+              <h4 style={{ margin: "0 0 6px 0" }}>Patient Concern / Reason for Visit</h4>
+              <p style={{ padding: 12, background: "#f3f4f6", borderRadius: 6, margin: 0, fontSize: 14 }}>
+                {String(selectedAppointment.concern || "")}
+              </p>
+            </div>
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <a href={`tel:${selectedAppointment.phone}`} className="button secondary" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, textDecoration: "none" }}>
+                Call Patient
+              </a>
+              <a href={`https://wa.me/91${selectedAppointment.phone}?text=${encodeURIComponent(`Hello ${selectedAppointment.patient_name}, this is Protone Care Hospital. We received your appointment request for ${selectedAppointment.department_name} on ${selectedAppointment.requested_date} at ${selectedAppointment.requested_time}. Please confirm if this works for you.`)}`} target="_blank" rel="noopener noreferrer" className="button secondary" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, textDecoration: "none" }}>
+                WhatsApp Msg
+              </a>
+            </div>
+
+            <hr style={{ border: 0, borderTop: "1px solid var(--border)", margin: "10px 0" }} />
+
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              mutate({
+                action: "appointment.status",
+                id: selectedAppointment.id,
+                status: selectedAppointment.status,
+                requestedDate: editForm.requestedDate,
+                requestedTime: editForm.requestedTime,
+                internalNotes: editForm.internalNotes,
+              }, "Appointment details updated.");
+              setSelectedAppointment(null);
+            }} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <label>
+                Reschedule Date
+                <input type="date" value={editForm.requestedDate} onChange={(e) => setEditForm({ ...editForm, requestedDate: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, marginTop: 4 }} />
+              </label>
+
+              <label>
+                Reschedule Time Slot
+                <input type="text" value={editForm.requestedTime} onChange={(e) => setEditForm({ ...editForm, requestedTime: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, marginTop: 4 }} />
+              </label>
+
+              <label>
+                Internal Notes
+                <textarea rows={3} value={editForm.internalNotes} onChange={(e) => setEditForm({ ...editForm, internalNotes: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, marginTop: 4 }} />
+              </label>
+
+              <button className="button primary full" type="submit" disabled={busy}>
+                Save & Reschedule
+              </button>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -271,10 +414,12 @@ function DataTable({
   rows,
   columns,
   actions,
+  onRowClick,
 }: {
   rows: Record<string, string | number | null>[];
   columns: string[];
   actions?: (row: Record<string, string | number | null>) => ReactNode;
+  onRowClick?: (row: Record<string, string | number | null>) => void;
 }) {
   if (!rows.length) return <div className="admin-empty">No rows yet.</div>;
   return (
@@ -290,11 +435,31 @@ function DataTable({
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={String(row.id || index)}>
-              {columns.map((column) => (
-                <td key={column}>{cell(row[column])}</td>
-              ))}
-              {actions ? <td>{actions(row)}</td> : null}
+            <tr key={String(row.id || index)} onClick={() => onRowClick?.(row)} style={{ cursor: onRowClick ? "pointer" : "default" }}>
+              {columns.map((column) => {
+                const val = row[column];
+                if (column === "status" && typeof val === "string") {
+                  const lower = val.toLowerCase();
+                  return (
+                    <td key={column}>
+                      <span className="admin-badge" style={{
+                        display: "inline-block",
+                        padding: "2px 8px",
+                        borderRadius: "4px",
+                        fontSize: "11px",
+                        fontWeight: "600",
+                        textTransform: "uppercase",
+                        backgroundColor: lower === "approved" || lower === "confirmed" ? "#d1fae5" : lower === "needs_review" || lower === "new" || lower === "pending" || lower === "contacted" ? "#fef3c7" : "#fee2e2",
+                        color: lower === "approved" || lower === "confirmed" ? "#065f46" : lower === "needs_review" || lower === "new" || lower === "pending" || lower === "contacted" ? "#92400e" : "#991b1b"
+                      }}>
+                        {val.replace("_", " ")}
+                      </span>
+                    </td>
+                  );
+                }
+                return <td key={column}>{cell(val)}</td>;
+              })}
+              {actions ? <td onClick={(event) => event.stopPropagation()}>{actions(row)}</td> : null}
             </tr>
           ))}
         </tbody>
@@ -492,6 +657,93 @@ function VideoForm({ busy, onSave, rows }: { busy: boolean; onSave: (payload: Re
         <button className="button primary" disabled={busy}><Video size={17} aria-hidden="true" /> Save Video</button>
       </form>
       <DataTable rows={rows} columns={["title", "youtube_url", "status", "is_visible", "created_at"]} />
+    </div>
+  );
+}
+
+function MediaManager({
+  busy,
+  rows,
+  onUpload,
+}: {
+  busy: boolean;
+  rows: Record<string, string | number | null>[];
+  onUpload: (formData: FormData) => Promise<string>;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [purpose, setPurpose] = useState("gallery");
+  const [consentNote, setConsentNote] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [message, setMessage] = useState("");
+
+  async function handleUpload(e: React.FormEvent) {
+    e.preventDefault();
+    if (!file) {
+      setMessage("Please select a file to upload.");
+      return;
+    }
+    setUploading(true);
+    setMessage("");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("purpose", purpose);
+      formData.append("consentNote", consentNote);
+      await onUpload(formData);
+      setMessage("Media uploaded successfully! Refresh the page to see the updated assets list.");
+      setFile(null);
+      setConsentNote("");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="admin-panel-grid">
+      <form className="admin-form" onSubmit={handleUpload}>
+        <h3 style={{ margin: "0 0 12px 0", fontSize: "16px", fontWeight: "600" }}>Upload New Media (R2 Gateway)</h3>
+        <label>
+          File
+          <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} required style={{ marginTop: 4, width: "100%" }} />
+        </label>
+        <label>
+          Purpose
+          <select value={purpose} onChange={(e) => setPurpose(e.target.value)} style={{ marginTop: 4, width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }}>
+            <option value="gallery">Gallery (Public Photos Grid)</option>
+            <option value="doctor-photo">Doctor Photo</option>
+            <option value="admin-upload">General Admin Upload</option>
+          </select>
+        </label>
+        <label>
+          Consent Note / Metadata
+          <textarea rows={3} value={consentNote} onChange={(e) => setConsentNote(e.target.value)} placeholder="Explain consent status or asset details" style={{ marginTop: 4, width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }} />
+        </label>
+        <button className="button primary full" type="submit" disabled={busy || uploading} style={{ marginTop: 8 }}>
+          <Upload size={17} aria-hidden="true" /> {uploading ? "Uploading..." : "Upload Asset"}
+        </button>
+        {message ? (
+          <p style={{ fontSize: "13px", fontWeight: "600", marginTop: 8, color: message.includes("successfully") ? "green" : "red" }}>
+            {message}
+          </p>
+        ) : null}
+      </form>
+
+      <div>
+        <h3 style={{ margin: "0 0 12px 0", fontSize: "16px", fontWeight: "600" }}>R2 Uploaded Assets Directory</h3>
+        <DataTable
+          rows={rows}
+          columns={["file_name", "r2_key", "purpose", "size_bytes", "status", "created_at"]}
+          actions={(row) => (
+            <div className="table-actions">
+              <a href={`/api/media/${row.r2_key}`} target="_blank" rel="noopener noreferrer" className="button subtle small" style={{ display: "inline-flex", textDecoration: "none", alignItems: "center" }}>
+                Open Preview
+              </a>
+            </div>
+          )}
+        />
+      </div>
     </div>
   );
 }

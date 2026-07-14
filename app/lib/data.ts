@@ -160,6 +160,13 @@ export const departments: Department[] = [
     group: "Diagnostics",
     summary: "Pathology and diagnostic support for clinical testing.",
   },
+  {
+    slug: "emergency-medicine",
+    name: "Critical Care & Emergency Medicine / क्रिटिकल केयर और आपातकालीन चिकित्सा",
+    hindi: "क्रिटिकल केयर और आपातकालीन चिकित्सा",
+    group: "Emergency & Critical Care",
+    summary: "24x7 immediate emergency medical care and intensive care unit (ICU/NICU) triage support.",
+  },
 ];
 
 export type Doctor = {

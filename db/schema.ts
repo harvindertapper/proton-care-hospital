@@ -28,6 +28,7 @@ export const appointments = sqliteTable("appointments", {
   internalNotes: text("internal_notes").notNull().default(""),
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
+  scheduleVersion: integer("schedule_version").notNull().default(1),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
@@ -160,6 +161,8 @@ export const mediaAssets = sqliteTable("media_assets", {
   purpose: text("purpose").notNull().default("admin-upload"),
   uploadedBy: text("uploaded_by").notNull(),
   consentNote: text("consent_note").notNull().default(""),
+  status: text("status").notNull().default("APPROVED"),
+  isVisible: integer("is_visible", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
@@ -181,4 +184,10 @@ export const rateLimits = sqliteTable("rate_limits", {
   count: integer("count").notNull().default(0),
   resetAt: integer("reset_at").notNull(),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export const idempotentRequests = sqliteTable("idempotent_requests", {
+  id: text("id").primaryKey(),
+  payloadHash: text("payload_hash").notNull(),
+  responseBody: text("response_body").notNull(),
+  createdAt: integer("created_at").notNull(),
 });

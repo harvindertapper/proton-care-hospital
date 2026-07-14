@@ -4,7 +4,7 @@ import { DoctorDirectory } from "@/app/components/Directories";
 import { PageHero, PageShell, PrimaryActions, SectionHeader } from "@/app/components/SiteShell";
 import { getPublicDoctors } from "@/app/lib/public-data";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 export const metadata: Metadata = {
   title: "Doctors",

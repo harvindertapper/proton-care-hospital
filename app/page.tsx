@@ -10,6 +10,7 @@ import {
   tpaPanels,
 } from "@/app/lib/data";
 import { ArrowLink, EmergencyBand, InfoBadge, PageShell, PrimaryActions, SectionHeader, TimingNote } from "@/app/components/SiteShell";
+import { HeroCarousel } from "@/app/components/HeroCarousel";
 
 export const metadata: Metadata = {
   title: "Protone Care Hospital | 24x7 Emergency & Multispeciality Care",
@@ -20,6 +21,7 @@ export const metadata: Metadata = {
 
 export default function Home() {
   const featuredDepartments = departments.slice(0, 8);
+  const isCarouselEnabled = process.env.HERO_CAROUSEL_ENABLED === "true";
   const schema = {
     "@context": "https://schema.org",
     "@type": "Hospital",
@@ -42,7 +44,8 @@ export default function Home() {
   return (
     <PageShell>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }} />
-      <section className="hero-home">
+      <section className="hero-home" style={isCarouselEnabled ? { backgroundImage: "none" } : undefined}>
+        {isCarouselEnabled ? <HeroCarousel /> : null}
         <div className="container">
           <div className="hero-copy">
             <span className="eyebrow">{hospital.tagline}</span>

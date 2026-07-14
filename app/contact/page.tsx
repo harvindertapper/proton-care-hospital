@@ -23,7 +23,7 @@ export default function ContactPage() {
         <div className="container flow-layout">
           <div>
             <SectionHeader eyebrow="Message desk" title="Send a contact message" body="The contact endpoint is rate-limited and protected with validation and honeypot checks." />
-            <ContactForm />
+            <ContactForm turnstileSiteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY} />
           </div>
           <aside className="contact-card">
             <h3>Hospital contacts</h3>

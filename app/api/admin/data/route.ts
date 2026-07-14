@@ -25,7 +25,7 @@ function slugify(value: string) {
     .slice(0, 90);
 }
 
-async function dashboardData() {
+async function dashboardData(role: "SUPER_ADMIN" | "STAFF") {
   const [
     appointments,
     timings,
@@ -36,6 +36,7 @@ async function dashboardData() {
     blogs,
     jobs,
     videos,
+    media,
     audits,
   ] = await Promise.all([
     query("SELECT * FROM appointments ORDER BY created_at DESC LIMIT 100"),
@@ -47,11 +48,20 @@ async function dashboardData() {
     query("SELECT * FROM blog_posts ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM career_jobs ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM patient_videos ORDER BY created_at DESC LIMIT 100"),
+    query("SELECT * FROM media_assets ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 120"),
   ]);
 
+  let rawAppointments = appointments.results || [];
+  if (role !== "SUPER_ADMIN") {
+    rawAppointments = rawAppointments.map((app: any) => ({
+      ...app,
+      concern: "[REDACTED - SUPER ADMIN ONLY]",
+    }));
+  }
+
   return {
-    appointments: appointments.results || [],
+    appointments: rawAppointments,
     timings: timings.results || [],
     doctors: doctors.results || [],
     revisions: revisions.results || [],
@@ -60,6 +70,7 @@ async function dashboardData() {
     blogs: blogs.results || [],
     jobs: jobs.results || [],
     videos: videos.results || [],
+    media: media.results || [],
     audits: audits.results || [],
   };
 }
@@ -237,13 +248,78 @@ async function applyBlogVisibility(payload: Record<string, unknown>, actorEmail:
   await audit(actorEmail, "BLOG_VISIBILITY", "BlogPost", slug, `visible=${isVisible}`);
 }
 
+async function applyCareerVisibility(payload: Record<string, unknown>, actorEmail: string) {
+  const slug = clean(payload.slug, 120);
+  const isVisible = Number(payload.isVisible) === 1 ? 1 : 0;
+  if (!slug) throw new Error("Career slug is required.");
+  await run("UPDATE career_jobs SET is_visible = ?, status = ? WHERE slug = ?", isVisible, isVisible ? "APPROVED" : "HIDDEN", slug);
+  await audit(actorEmail, "CAREER_VISIBILITY", "CareerJob", slug, `visible=${isVisible}`);
+}
+
+async function applyVideoVisibility(payload: Record<string, unknown>, actorEmail: string) {
+  const id = clean(payload.id, 120);
+  const isVisible = Number(payload.isVisible) === 1 ? 1 : 0;
+  if (!id) throw new Error("Video id is required.");
+  await run("UPDATE patient_videos SET is_visible = ?, status = ? WHERE id = ?", isVisible, isVisible ? "APPROVED" : "HIDDEN", id);
+  await audit(actorEmail, "VIDEO_VISIBILITY", "PatientVideo", id, `visible=${isVisible}`);
+}
+
+async function applyContactStatus(payload: Record<string, unknown>, actorEmail: string) {
+  const id = clean(payload.id, 120);
+  const status = clean(payload.status, 40).toUpperCase();
+  if (!id || !["NEW", "CONTACTED", "CLOSED"].includes(status)) throw new Error("Invalid contact status.");
+  await run("UPDATE contact_messages SET status = ? WHERE id = ?", status, id);
+  await audit(actorEmail, "CONTACT_STATUS", "ContactMessage", id, status);
+}
+
 async function applyAppointmentStatus(payload: Record<string, unknown>, actorEmail: string) {
   const id = clean(payload.id, 120);
   const status = clean(payload.status, 40).toUpperCase();
   const notes = clean(payload.internalNotes, 1000);
+  const requestedDate = clean(payload.requestedDate, 20);
+  const requestedTime = clean(payload.requestedTime, 20);
   if (!id || !["NEW", "CONTACTED", "CONFIRMED", "CANCELLED", "CLOSED"].includes(status)) throw new Error("Invalid appointment status.");
-  await run("UPDATE appointments SET status = ?, internal_notes = COALESCE(NULLIF(?, ''), internal_notes), updated_at = CURRENT_TIMESTAMP WHERE id = ?", status, notes, id);
-  await audit(actorEmail, "APPOINTMENT_STATUS", "Appointment", id, status);
+
+  // Fetch current details to check if rescheduling occurred
+  const current = await query<{ requested_date: string; requested_time: string; schedule_version: number }>(
+    "SELECT requested_date, requested_time, schedule_version FROM appointments WHERE id = ? LIMIT 1",
+    id
+  );
+  const currentApp = current.results?.[0];
+
+  let newDate = currentApp?.requested_date || "";
+  let newTime = currentApp?.requested_time || "";
+  let scheduleVersion = currentApp?.schedule_version || 1;
+
+  let rescheduled = false;
+  if (requestedDate && requestedDate !== currentApp?.requested_date) {
+    newDate = requestedDate;
+    rescheduled = true;
+  }
+  if (requestedTime && requestedTime !== currentApp?.requested_time) {
+    newTime = requestedTime;
+    rescheduled = true;
+  }
+
+  if (rescheduled) {
+    scheduleVersion += 1;
+  }
+
+  await run(
+    "UPDATE appointments SET status = ?, internal_notes = COALESCE(NULLIF(?, ''), internal_notes), requested_date = ?, requested_time = ?, schedule_version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    status,
+    notes,
+    newDate,
+    newTime,
+    scheduleVersion,
+    id
+  );
+  await audit(actorEmail, "APPOINTMENT_STATUS", "Appointment", id, `${status}; rescheduled=${rescheduled}; version=${scheduleVersion}`);
+
+  // Mock Resend Email dispatch logic
+  if (rescheduled) {
+    console.log(`[RESEND EMAIL DISPATCH] Rescheduling notification sent for appointment ${id}. Version ${scheduleVersion}. New slot: ${newDate} at ${newTime}`);
+  }
 }
 
 async function applyAction(action: string, payload: Record<string, unknown>, actorEmail: string) {
@@ -254,6 +330,9 @@ async function applyAction(action: string, payload: Record<string, unknown>, act
   if (action === "video.save") return applyVideo(payload, actorEmail);
   if (action === "feedback.visibility") return applyFeedbackVisibility(payload, actorEmail);
   if (action === "blog.visibility") return applyBlogVisibility(payload, actorEmail);
+  if (action === "career.visibility") return applyCareerVisibility(payload, actorEmail);
+  if (action === "video.visibility") return applyVideoVisibility(payload, actorEmail);
+  if (action === "contact.status") return applyContactStatus(payload, actorEmail);
   if (action === "appointment.status") return applyAppointmentStatus(payload, actorEmail);
   throw new Error("Unknown admin action.");
 }
@@ -261,7 +340,7 @@ async function applyAction(action: string, payload: Record<string, unknown>, act
 export async function GET() {
   const admin = await requireAdmin();
   if (!admin.ok) return json({ error: admin.error }, { status: admin.status });
-  return json({ success: true, data: await dashboardData() });
+  return json({ success: true, data: await dashboardData(admin.session.role) });
 }
 
 export async function POST(request: Request) {
