@@ -99,8 +99,8 @@ export default function Home() {
         <div className="container">
           <SectionHeader
             eyebrow="Departments"
-            title="Confirmed specialities for Protone Care Hospital"
-            body="Appointment requests stay department-based. Patients do not select doctors in the public booking flow."
+            title="Our Medical Specialities & Services"
+            body="Please select your required medical department below. Select your preferred timing window to request an OPD consultation slot."
           />
           <div className="department-grid">
             {featuredDepartments.map((department) => (

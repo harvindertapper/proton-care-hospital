@@ -8,7 +8,7 @@ export const revalidate = 300;
 
 export const metadata: Metadata = {
   title: "Doctors",
-  description: "Search and filter Protone Care Hospital doctor profiles by department and speciality. Placeholder cards are used until approved photos are available.",
+  description: "Consult with our team of medical practitioners, specialists, and senior clinical consultants at Protone Care Hospital, Gurugram.",
   alternates: { canonical: `${SITE_URL}/doctors` },
 };
 
@@ -18,8 +18,8 @@ export default async function DoctorsPage() {
     <PageShell>
       <PageHero
         eyebrow="Doctors"
-        title="Doctor profiles with approved source information"
-        body="Profiles use the confirmed list and approved photos where available. No bios or achievements are invented."
+        title="Our Senior Medical Consultants & Specialists"
+        body="Meet our team of highly qualified clinical experts, surgeons, and physicians dedicated to delivering compassionate care at Gurugram."
       >
         <PrimaryActions />
       </PageHero>

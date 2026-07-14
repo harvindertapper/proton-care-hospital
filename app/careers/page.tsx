@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Careers",
-  description: "Approved job openings at Protone Care Hospital. Apply through the confirmed hospital email contact.",
+  description: "Explore rewarding career opportunities and join our team of medical practitioners and care professionals.",
   alternates: { canonical: `${SITE_URL}/careers` },
 };
 
@@ -19,11 +19,11 @@ export default async function CareersPage() {
       <PageHero
         eyebrow="Careers"
         title="Join Protone Care Hospital"
-        body="Open roles are controlled from the admin panel and published after approval."
+        body="Work alongside senior clinical specialists and healthcare leaders in Sector 11, Gurugram."
       />
       <section className="section">
         <div className="container">
-          <SectionHeader eyebrow="Open roles" title="Approved job posts" />
+          <SectionHeader eyebrow="Open roles" title="Current Career Opportunities" />
           {jobs.length ? (
             <div className="career-grid">
               {jobs.map((job) => (
@@ -38,7 +38,7 @@ export default async function CareersPage() {
             </div>
           ) : (
             <div className="empty-state">
-              Approved career openings will appear here. For current opportunities, email <a href={hospital.emailHref}>{hospital.email}</a>.
+              Our current job openings will appear here. To apply, please send your CV to <a href={hospital.emailHref}>{hospital.email}</a>.
             </div>
           )}
         </div>

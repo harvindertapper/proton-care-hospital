@@ -7,8 +7,8 @@ import { PageHero, PageShell, SectionHeader } from "@/app/components/SiteShell";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Blog",
-  description: "Approved Protone Care Hospital blog posts and patient information updates.",
+  title: "Blog & Wellness Hub",
+  description: "Read the latest health articles, medical news, and patient wellness tips from Protone Care Hospital.",
   alternates: { canonical: `${SITE_URL}/blog` },
 };
 
@@ -17,13 +17,13 @@ export default async function BlogPage() {
   return (
     <PageShell>
       <PageHero
-        eyebrow="Blog"
-        title="Hospital updates and patient information"
-        body="Blog posts are published from the admin panel after approval."
+        eyebrow="Wellness Hub"
+        title="Clinical Updates & Health Articles"
+        body="Expert medical insights, healthcare articles, and wellness guidance curated by our senior consultants."
       />
       <section className="section">
         <div className="container">
-          <SectionHeader eyebrow="Published posts" title="Approved articles" />
+          <SectionHeader eyebrow="Published posts" title="Our Health Articles & Wellness Tips" />
           {blogs.length ? (
             <div className="blog-grid">
               {blogs.map((blog) => (
@@ -36,7 +36,7 @@ export default async function BlogPage() {
               ))}
             </div>
           ) : (
-            <div className="empty-state">Approved blog posts will appear here after super admin review.</div>
+            <div className="empty-state">Check back soon for our latest clinical articles and wellness updates.</div>
           )}
         </div>
       </section>

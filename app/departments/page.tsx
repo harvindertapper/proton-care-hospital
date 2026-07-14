@@ -13,17 +13,17 @@ export default function DepartmentsPage() {
     <PageShell>
       <PageHero
         eyebrow="Departments"
-        title="Specialities with department-based appointment requests"
-        body={`Choose a department and preferred 15-minute slot. ${hospital.name} confirms final appointment availability by phone.`}
+        title="Specialities & OPD Consultation Schedules"
+        body={`Select a department and your preferred timing window. ${hospital.name} coordindation desk will confirm final appointment details by phone.`}
       >
         <PrimaryActions />
       </PageHero>
       <section className="section">
         <div className="container">
           <SectionHeader
-            eyebrow="Confirmed list"
-            title="All departments and specialities"
-            body="Hindi labels are included from the client-confirmed source. Timings shown only where confirmed."
+            eyebrow="Clinical Excellence"
+            title="All medical departments & specialities"
+            body="Access specialized healthcare across clinical departments. Select a department to request an appointment."
           />
           <div className="department-grid">
             {departments.map((department) => (

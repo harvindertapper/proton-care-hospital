@@ -40,7 +40,7 @@ export default async function DepartmentDetailPage({ params }: { params: Promise
             <SectionHeader
               eyebrow="Care information"
               title="Department overview"
-              body="Appointment requests from this page carry department context only. Patients are not asked to select a doctor."
+              body="Schedule your OPD consultation directly under our specialized department."
             />
             <div className="quick-grid">
               <article className="quick-card">
@@ -50,12 +50,12 @@ export default async function DepartmentDetailPage({ params }: { params: Promise
               </article>
               <article className="quick-card">
                 <Stethoscope size={25} aria-hidden="true" />
-                <h3>Doctors linked to speciality</h3>
-                <p>{departmentDoctors.length ? `${departmentDoctors.length} doctor profile(s) in the approved source list.` : "Doctor profile details can be added after approval."}</p>
+                <h3>Clinical Consultants</h3>
+                <p>{departmentDoctors.length ? `Consult with our ${departmentDoctors.length} resident department specialist(s).` : "Resident doctor details are confirmed upon scheduling."}</p>
               </article>
               <article className="quick-card">
                 <h3>Hospital confirmation</h3>
-                <p>{hospital.name} staff confirms final appointment availability manually by call or message.</p>
+                <p>{hospital.name} coordination desk will confirm final appointment timing manually by call or message.</p>
               </article>
             </div>
           </div>

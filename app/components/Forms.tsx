@@ -348,8 +348,8 @@ export function AppointmentForm({
               </span>
               {isUntimed ? (
                 <div className="manual-allocation-notice">
-                  <input type="text" value="Manual Allocation" disabled className="disabled-input" style={{ width: "100%", padding: "8px 12px", background: "var(--soft)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-muted)" }} />
-                  <p className="field-hint" style={{ marginTop: 4, fontSize: 12 }}>Our staff will manually allocate a slot for you.</p>
+                  <input type="text" value="Timing Confirmed by Desk" disabled className="disabled-input" style={{ width: "100%", padding: "8px 12px", background: "var(--soft)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-muted)" }} />
+                  <p className="field-hint" style={{ marginTop: 4, fontSize: 12 }}>Our coordination desk will confirm your consultation timing window.</p>
                 </div>
               ) : (
                 <div className="space-y-4 w-full mt-2">
@@ -478,7 +478,7 @@ export function AppointmentForm({
           </label>
           <p className="field-hint warning">{emergencyNotice}</p>
           <button className="button primary full" disabled={busy || !form.consent || !turnstileToken} type="submit">
-            <Send size={18} aria-hidden="true" /> Submit Request
+            <Send size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Submit Request"}
           </button>
         </div>
       ) : null}
@@ -650,7 +650,7 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
         <span>I consent to Protone Care Hospital reviewing this feedback and contacting me if follow-up is needed. Public display requires hospital approval.</span>
       </label>
       <button className="button primary full" type="submit" disabled={busy || !otpVerified || !form.consent || !turnstileToken}>
-        <Send size={18} aria-hidden="true" /> Submit Feedback
+        <Send size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Submit Feedback"}
       </button>
       <FieldMessage message={message} success={success || otpVerified} />
     </form>
@@ -748,7 +748,7 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
       </label>
       <TurnstileBox siteKey={turnstileSiteKey} onToken={setTurnstileToken} />
       <button className="button primary full" type="submit" disabled={busy || (turnstileSiteKey ? !turnstileToken : false)}>
-        <MessageCircle size={18} aria-hidden="true" /> Send Message
+        <MessageCircle size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Send Message"}
       </button>
       <p className="field-hint">For emergencies, call <a href={hospital.phoneHref}>{hospital.phone}</a>.</p>
       <FieldMessage message={notice} success={success} />

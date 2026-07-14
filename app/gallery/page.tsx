@@ -38,7 +38,7 @@ export default function GalleryPage() {
           const formatted = data.assets.map((asset: any) => ({
             url: `/api/media/${asset.r2_key}`,
             title: asset.file_name || "Gallery Asset",
-            note: asset.consent_note || "Approved hospital asset",
+            note: asset.consent_note || "Protone Care Hospital Facility",
           }));
           setAssets(formatted);
         } else {
@@ -90,12 +90,12 @@ export default function GalleryPage() {
         <div className="max-w-7xl mx-auto px-4">
           <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between border-b border-slate-200 pb-4">
             <div>
-              <h2 className="text-2xl font-bold text-slate-800">Compliance Verified Infrastructure Photos</h2>
-              <p className="text-slate-600 text-sm mt-1">Verified R2 storage assets showing our certified clinical zones.</p>
+              <h2 className="text-2xl font-bold text-slate-800">Our Medical Facilities & Technology</h2>
+              <p className="text-slate-600 text-sm mt-1">Take a virtual tour of the clinical environments designed for patient safety and healing.</p>
             </div>
             <div className="mt-4 md:mt-0">
               <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-teal-50 text-teal-700 border border-teal-200">
-                NABH Standards Compliant
+                NABH Accredited Standards
               </span>
             </div>
           </div>
