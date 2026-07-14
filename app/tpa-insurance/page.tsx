@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { FileCheck2, MessageCircle, Phone } from "lucide-react";
 import { hospital, SITE_URL, tpaPanels } from "@/app/lib/data";
 import { TpaDirectory } from "@/app/components/Directories";
-import { PageHero, PageShell, SectionHeader } from "@/app/components/SiteShell";
+import { PageHero, PageShell, SectionHeader, Breadcrumbs } from "@/app/components/SiteShell";
 
 export const metadata: Metadata = {
   title: "TPA & Insurance Panels",
@@ -23,6 +23,7 @@ export default function TpaInsurancePage() {
           <a className="button secondary" href={hospital.whatsappHref}><MessageCircle size={18} aria-hidden="true" /> WhatsApp Desk</a>
         </div>
       </PageHero>
+      <Breadcrumbs paths={[{ label: "TPA & Insurance" }]} />
       <section className="section">
         <div className="container">
           <SectionHeader

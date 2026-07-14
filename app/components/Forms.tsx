@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { AlertCircle, CheckCircle2, LockKeyhole, MessageCircle, PhoneCall, Send } from "lucide-react";
+import { AlertCircle, CheckCircle2, LockKeyhole, MessageCircle, PhoneCall, Send, Sunrise, Sun } from "lucide-react";
 import type { Department } from "@/app/lib/data";
 import { consentText, emergencyNotice, hospital } from "@/app/lib/data";
 
@@ -108,8 +108,20 @@ export function AppointmentForm({
   const [idempotencyKey, setIdempotencyKey] = useState("");
   const department = useMemo(
     () => selectableDepartments.find((item) => item.slug === departmentSlug),
-    [selectableDepartments, departmentSlug],
+    [departmentSlug, selectableDepartments]
   );
+
+  const { morningSlots, afternoonSlots } = useMemo(() => {
+    const morning = slots.filter((s) => {
+      const l = s.toLowerCase();
+      if (l.includes("am")) return true;
+      if (l.includes("pm")) return false;
+      const hour = parseInt(s.split(":")[0], 10);
+      return hour < 12;
+    });
+    const afternoon = slots.filter((s) => !morning.includes(s));
+    return { morningSlots: morning, afternoonSlots: afternoon };
+  }, [slots]);
 
   const [mounted, setMounted] = useState(false);
 
@@ -324,32 +336,90 @@ export function AppointmentForm({
             </select>
           </label>
           {department ? <p className="field-hint">{department.hindi} · {department.summary}</p> : null}
-          <div className="two-fields">
-            <label>
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px", marginTop: "16px" }}>
+            <label style={{ width: "100%" }}>
               Preferred date
-              <input type="date" value={form.requestedDate} min={todayIso()} onChange={(event) => update("requestedDate", event.target.value)} required />
+              <input type="date" value={form.requestedDate} min={todayIso()} onChange={(event) => update("requestedDate", event.target.value)} required style={{ width: "100%" }} />
             </label>
-            <label>
-              Preferred time
+            
+            <div style={{ width: "100%" }}>
+              <span style={{ display: "block", fontSize: "14px", fontWeight: "600", color: "var(--text)", marginBottom: "8px" }}>
+                Preferred time slot
+              </span>
               {isUntimed ? (
                 <div className="manual-allocation-notice">
                   <input type="text" value="Manual Allocation" disabled className="disabled-input" style={{ width: "100%", padding: "8px 12px", background: "var(--soft)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-muted)" }} />
                   <p className="field-hint" style={{ marginTop: 4, fontSize: 12 }}>Our staff will manually allocate a slot for you.</p>
                 </div>
               ) : (
-                <select value={form.requestedTime} onChange={(event) => update("requestedTime", event.target.value)} required>
-                  <option value="">Select a 15-minute slot</option>
-                  {slots.map((slot) => (
-                    <option value={slot} key={slot}>
-                      {slot}
-                    </option>
-                  ))}
-                </select>
+                <div className="space-y-4 w-full mt-2">
+                  {morningSlots.length > 0 && (
+                    <div>
+                      <div className="flex items-center gap-1.5 text-amber-600 font-semibold text-xs mb-2">
+                        <Sunrise size={14} />
+                        <span>Morning Slots</span>
+                      </div>
+                      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                        {morningSlots.map((slot) => {
+                          const isSelected = form.requestedTime === slot;
+                          const hasSelectedSomething = form.requestedTime !== "";
+                          return (
+                            <button
+                              key={slot}
+                              type="button"
+                              onClick={() => update("requestedTime", slot)}
+                              className={`py-2 px-3 text-xs font-semibold rounded-lg border text-center transition-all duration-300 transform cursor-pointer focus:outline-none ${
+                                isSelected
+                                  ? "bg-teal-50 border-teal-600 text-teal-850 scale-105 shadow-sm font-bold"
+                                  : hasSelectedSomething
+                                  ? "bg-white border-slate-200 text-slate-700 opacity-50 hover:opacity-100"
+                                  : "bg-white border-slate-200 text-slate-700 hover:border-teal-500 hover:bg-slate-50"
+                              }`}
+                            >
+                              {slot}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {afternoonSlots.length > 0 && (
+                    <div className="mt-3">
+                      <div className="flex items-center gap-1.5 text-orange-605 font-semibold text-xs mb-2">
+                        <Sun size={14} />
+                        <span>Afternoon Slots</span>
+                      </div>
+                      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                        {afternoonSlots.map((slot) => {
+                          const isSelected = form.requestedTime === slot;
+                          const hasSelectedSomething = form.requestedTime !== "";
+                          return (
+                            <button
+                              key={slot}
+                              type="button"
+                              onClick={() => update("requestedTime", slot)}
+                              className={`py-2 px-3 text-xs font-semibold rounded-lg border text-center transition-all duration-300 transform cursor-pointer focus:outline-none ${
+                                isSelected
+                                  ? "bg-teal-50 border-teal-600 text-teal-855 scale-105 shadow-sm font-bold"
+                                  : hasSelectedSomething
+                                  ? "bg-white border-slate-200 text-slate-700 opacity-50 hover:opacity-100"
+                                  : "bg-white border-slate-200 text-slate-700 hover:border-teal-500 hover:bg-slate-50"
+                              }`}
+                            >
+                              {slot}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
-            </label>
+            </div>
           </div>
           {slotError ? <p className="field-hint warning">{slotError}</p> : null}
-          <button className="button primary" type="button" onClick={() => setStep(2)} disabled={!departmentSlug || !form.requestedTime}>
+          <button className="button primary mt-4" type="button" onClick={() => setStep(2)} disabled={!departmentSlug || !form.requestedTime}>
             Continue
           </button>
         </div>

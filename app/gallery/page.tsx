@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Image from "next/image";
 import { ArrowLeft, ArrowRight, X, ZoomIn } from "lucide-react";
-import { PageHero, PageShell, PrimaryActions } from "@/app/components/SiteShell";
+import { PageHero, PageShell, PrimaryActions, Breadcrumbs } from "@/app/components/SiteShell";
 
 type GalleryAsset = {
   url: string;
@@ -84,6 +84,7 @@ export default function GalleryPage() {
       >
         <PrimaryActions />
       </PageHero>
+      <Breadcrumbs paths={[{ label: "Gallery" }]} />
 
       <section className="py-12 bg-slate-50 min-h-screen">
         <div className="max-w-7xl mx-auto px-4">

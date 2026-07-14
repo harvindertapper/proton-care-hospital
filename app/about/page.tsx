@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Building2, HeartHandshake, MapPin, ShieldPlus, ShieldCheck } from "lucide-react";
 import { hospital, SITE_URL } from "@/app/lib/data";
-import { EmergencyBand, PageHero, PageShell, PrimaryActions, SectionHeader } from "@/app/components/SiteShell";
+import { EmergencyBand, PageHero, PageShell, PrimaryActions, SectionHeader, Breadcrumbs } from "@/app/components/SiteShell";
 import { FacilitiesDirectory } from "@/app/components/Directories";
 
 export const metadata: Metadata = {
@@ -21,6 +21,7 @@ export default function AboutPage() {
         <PrimaryActions />
       </PageHero>
       <EmergencyBand />
+      <Breadcrumbs paths={[{ label: "About" }]} />
 
       <section className="section py-16 bg-white">
         <div className="container max-w-7xl mx-auto px-4">

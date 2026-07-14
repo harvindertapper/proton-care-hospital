@@ -55,23 +55,25 @@ export function DoctorDirectory({
         {filtered.map((doctor) => {
           const dept = departmentMap.get(doctor.departmentSlug);
           return (
-            <article className="doctor-card" key={doctor.slug}>
-              <div className="doctor-photo">
+            <article className="doctor-card transition-all duration-300 hover:-translate-y-1.5 hover:shadow-md hover:border-teal-500/40 group cursor-pointer" key={doctor.slug}>
+              <div className="doctor-photo overflow-hidden">
                 {doctor.photo ? (
-                  <img src={doctor.photo} alt={`${doctor.name}, ${doctor.speciality} at Protone Care Hospital`} />
+                  <img src={doctor.photo} alt={`${doctor.name}, ${doctor.speciality} at Protone Care Hospital`} className="transition-transform duration-500 group-hover:scale-105" />
                 ) : (
                   <div className="doctor-placeholder" aria-label={`${doctor.name} photo placeholder`}>
-                    <UserRound size={30} aria-hidden="true" />
+                    <UserRound size={30} aria-hidden="true" className="transition-transform duration-300 group-hover:scale-110" />
                     <span>{initials(doctor.name)}</span>
                   </div>
                 )}
               </div>
-              <div className="doctor-body">
-                <span>{dept?.name || "Department"}</span>
-                <h3>{doctor.name}</h3>
+              <div className="doctor-body transition-colors duration-300 group-hover:bg-slate-50/50">
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-teal-50 text-teal-700 transition-all duration-300 group-hover:bg-teal-100 group-hover:text-teal-800 shadow-sm border border-teal-100/50">
+                  {dept?.name || "Department"}
+                </span>
+                <h3 className="transition-colors duration-300 group-hover:text-teal-600">{doctor.name}</h3>
                 <p>{doctor.speciality}</p>
                 <strong>{doctor.qualification || "Qualification not provided in source list"}</strong>
-                <Link href={`/appointment?dept=${doctor.departmentSlug}`} className="small-button">
+                <Link href={`/appointment?dept=${doctor.departmentSlug}`} className="small-button transition-transform duration-300 hover:scale-105">
                   <CalendarDays size={16} aria-hidden="true" /> Request Department Slot
                 </Link>
               </div>

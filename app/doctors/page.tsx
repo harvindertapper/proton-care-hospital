@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { departments, SITE_URL } from "@/app/lib/data";
 import { DoctorDirectory } from "@/app/components/Directories";
-import { PageHero, PageShell, PrimaryActions, SectionHeader } from "@/app/components/SiteShell";
+import { PageHero, PageShell, PrimaryActions, SectionHeader, Breadcrumbs } from "@/app/components/SiteShell";
 import { getPublicDoctors } from "@/app/lib/public-data";
 
 export const revalidate = 300;
@@ -23,6 +23,7 @@ export default async function DoctorsPage() {
       >
         <PrimaryActions />
       </PageHero>
+      <Breadcrumbs paths={[{ label: "Doctors" }]} />
       <section className="section">
         <div className="container">
           <SectionHeader

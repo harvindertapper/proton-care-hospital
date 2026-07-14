@@ -10,6 +10,8 @@ import {
   MessageCircle,
   Phone,
   ShieldCheck,
+  ChevronRight,
+  Home,
 } from "lucide-react";
 import { formatWhatsApp, hospital, publicNav } from "@/app/lib/data";
 
@@ -249,5 +251,33 @@ export function ArrowLink({ href, children }: { href: string; children: React.Re
     <Link href={href} className="arrow-link">
       {children} <ArrowRight size={16} aria-hidden="true" />
     </Link>
+  );
+}
+
+export function Breadcrumbs({ paths }: { paths: { label: string; href?: string }[] }) {
+  return (
+    <nav aria-label="Breadcrumb" className="bg-slate-100 border-b border-slate-200/50 py-3 text-sm">
+      <div className="container max-w-7xl mx-auto px-4 flex items-center gap-2 text-slate-500 font-medium">
+        <Link href="/" className="hover:text-teal-600 flex items-center gap-1.5 transition-colors text-decoration-none" style={{ display: "inline-flex", alignItems: "center" }}>
+          <Home size={15} />
+          <span>Home</span>
+        </Link>
+        {paths.map((p, idx) => {
+          const isLast = idx === paths.length - 1;
+          return (
+            <div key={idx} className="flex items-center gap-2" style={{ display: "inline-flex", alignItems: "center" }}>
+              <ChevronRight size={14} className="text-slate-400 shrink-0" />
+              {isLast || !p.href ? (
+                <span className="text-slate-800 font-semibold">{p.label}</span>
+              ) : (
+                <Link href={p.href} className="hover:text-teal-600 transition-colors text-decoration-none">
+                  {p.label}
+                </Link>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </nav>
   );
 }
