@@ -137,6 +137,10 @@ export default function Home() {
             <ShieldCheck size={20} aria-hidden="true" />
             <p>{facilities.join(" · ")}</p>
           </div>
+          <div className="action-row" style={{ marginTop: 24 }}>
+            <Link href="/about" className="button subtle">Learn more about us</Link>
+            <Link href="/gallery" className="button subtle">View hospital gallery</Link>
+          </div>
         </div>
       </section>
 
@@ -144,8 +148,8 @@ export default function Home() {
         <div className="container">
           <SectionHeader
             eyebrow="OPD timings"
-            title="Confirmed OPD windows with live admin-editable slots"
-            body="Public slot options are generated from approved department timings in 15-minute intervals."
+            title="OPD Consultation & Timing Schedules"
+            body="Select an available time slot to coordinate your primary check-in with our consultants."
           />
           <div className="quick-grid">
             {departments.filter((item) => item.timing).map((department) => (

@@ -15,8 +15,8 @@ export default function TpaInsurancePage() {
     <PageShell>
       <PageHero
         eyebrow="TPA / Insurance"
-        title="Cashless assistance and confirmed panel list"
-        body="Search the client-confirmed TPA and insurance panel list. Please contact the hospital desk for documentation and current approval steps."
+        title="Cashless assistance and supported panel list"
+        body="Search our list of supported TPA and insurance panels. Please contact our desk for documentation requirements and pre-authorization support."
       >
         <div className="action-row">
           <a className="button primary" href={hospital.phoneHref}><Phone size={18} aria-hidden="true" /> Cashless Assistance</a>
@@ -27,9 +27,9 @@ export default function TpaInsurancePage() {
       <section className="section">
         <div className="container">
           <SectionHeader
-            eyebrow={`${tpaPanels.length} confirmed panels`}
-            title="Search TPA / insurance support"
-            body="Do not use old address or phone details from the source banner; all CTAs here use the confirmed hospital contact data."
+            eyebrow={`${tpaPanels.length} Active Panels`}
+            title="Search TPA / Insurance Support"
+            body="We support hassle-free cashless authorization and pre-auth assistance for all major third-party administrators (TPA) and health insurers."
           />
           <TpaDirectory panels={tpaPanels} />
           <div className="safety-note" style={{ marginTop: 18 }}>

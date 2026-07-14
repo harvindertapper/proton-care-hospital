@@ -48,5 +48,11 @@ export default async function AdminPage() {
   if (!session) redirect("/admin/login");
 
   const data = await loadData();
+  if (session.role !== "SUPER_ADMIN") {
+    data.appointments = data.appointments.map((app: any) => ({
+      ...app,
+      concern: "[REDACTED - SUPER ADMIN ONLY]",
+    }));
+  }
   return <AdminConsole session={session} data={data} departments={departments} staticDoctors={doctors} />;
 }

@@ -16,13 +16,13 @@ export default function ContactPage() {
       <PageHero
         eyebrow="Contact"
         title="Reach Protone Care Hospital"
-        body="All contact actions are interactive and use the confirmed phone, WhatsApp, email, and Google Maps details."
+        body="We are here to assist you. Contact our desk for general queries, OPD schedules, or other support."
       />
       <EmergencyBand />
       <section className="section">
         <div className="container flow-layout">
           <div>
-            <SectionHeader eyebrow="Message desk" title="Send a contact message" body="The contact endpoint is rate-limited and protected with validation and honeypot checks." />
+            <SectionHeader eyebrow="Message desk" title="Send a contact message" body="Send us a message using the form below, and our administration team will get back to you shortly." />
             <ContactForm turnstileSiteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY} />
           </div>
           <aside className="contact-card">

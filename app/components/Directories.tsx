@@ -72,7 +72,7 @@ export function DoctorDirectory({
                 </span>
                 <h3 className="transition-colors duration-300 group-hover:text-teal-600">{doctor.name}</h3>
                 <p>{doctor.speciality}</p>
-                <strong>{doctor.qualification || "Qualification not provided in source list"}</strong>
+                {doctor.qualification ? <strong>{doctor.qualification}</strong> : null}
                 <Link href={`/appointment?dept=${doctor.departmentSlug}`} className="small-button transition-transform duration-300 hover:scale-105">
                   <CalendarDays size={16} aria-hidden="true" /> Request Department Slot
                 </Link>

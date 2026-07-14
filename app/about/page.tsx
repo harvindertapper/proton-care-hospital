@@ -126,7 +126,7 @@ export default function AboutPage() {
 
       <section className="section bg-slate-50 py-16">
         <div className="container max-w-7xl mx-auto px-4">
-          <SectionHeader eyebrow="Clinical Infrastructure" title="Internal Medical Assets & Facilities" />
+          <SectionHeader eyebrow="Clinical Infrastructure" title="Advanced Medical Infrastructure & Facilities" />
           <FacilitiesDirectory />
         </div>
       </section>

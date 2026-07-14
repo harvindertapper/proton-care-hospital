@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Patient Testimonials",
-  description: "Approved patient feedback and video testimonials for Protone Care Hospital. Public display requires consent and admin approval.",
+  description: "Read patient testimonials, reviews, and success stories from those who received care at Protone Care Hospital.",
   alternates: { canonical: `${SITE_URL}/testimonials` },
 };
 
@@ -18,12 +18,12 @@ export default async function TestimonialsPage() {
     <PageShell>
       <PageHero
         eyebrow="Testimonials"
-        title="Patient stories after consent and approval"
-        body="Written feedback and YouTube videos appear here only after phone verification, consent, and admin approval."
+        title="What Our Patients Say"
+        body="Read genuine experiences shared by patients who have trusted us with their health."
       />
       <section className="section">
         <div className="container">
-          <SectionHeader eyebrow="Reviews" title="Approved patient feedback" />
+          <SectionHeader eyebrow="Reviews" title="Patient Reviews" />
           {reviews.length ? (
             <div className="testimonial-grid">
               {reviews.map((review) => (
@@ -36,15 +36,15 @@ export default async function TestimonialsPage() {
             </div>
           ) : (
             <div className="empty-state">
-              Approved patient reviews will appear here after verification, consent, and super admin review.
-              <div className="action-row"><Link href="/feedback" className="button subtle">Submit feedback</Link></div>
+              No patient reviews have been published yet. Share your experience with us by submitting your feedback.
+              <div className="action-row"><Link href="/feedback" className="button subtle">Submit Feedback</Link></div>
             </div>
           )}
         </div>
       </section>
       <section className="section alt">
         <div className="container">
-          <SectionHeader eyebrow="Video stories" title="Approved patient videos" />
+          <SectionHeader eyebrow="Video stories" title="Video Testimonials" />
           {videos.length ? (
             <div className="video-grid">
               {videos.map((video) => (
@@ -55,7 +55,7 @@ export default async function TestimonialsPage() {
               ))}
             </div>
           ) : (
-            <div className="empty-state">Approved patient video testimonials will appear here once YouTube links and consent notes are reviewed.</div>
+            <div className="empty-state">No video testimonials are currently available. Check back soon.</div>
           )}
         </div>
       </section>

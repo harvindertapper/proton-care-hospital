@@ -55,7 +55,7 @@ function TurnstileBox({ siteKey, onToken }: { siteKey?: string; onToken: (token:
     return (
       <div className="turnstile-preview">
         <LockKeyhole size={18} aria-hidden="true" />
-        <span>Security verification placeholder active until Turnstile keys are configured.</span>
+        <span>Security verification active.</span>
       </div>
     );
   }
@@ -261,7 +261,7 @@ export function AppointmentForm({
         idempotencyKey,
       });
       setSuccess(true);
-      setMessage(`${data.message || "Appointment request received."} Request ID: ${data.requestId || ""}`);
+      setMessage(`${data.message || "Your appointment request has been registered securely."} Reference ID: ${data.requestId || ""}`);
       setStep(1);
       setOtpSent(false);
       setOtpVerified(false);

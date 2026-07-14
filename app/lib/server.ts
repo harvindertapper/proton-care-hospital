@@ -353,30 +353,38 @@ export function getClientIp(request: Request) {
 export async function checkRateLimit(action: string, identifier: string, limit: number, windowSeconds: number) {
   const now = Date.now();
   const id = `${action}:${identifier}`;
+  const resetAt = now + windowSeconds * 1000;
+
+  await run(
+    `INSERT INTO rate_limits (id, action, identifier, count, reset_at, updated_at)
+     VALUES (?, ?, ?, 1, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(id) DO UPDATE SET
+       count = CASE WHEN reset_at <= ? THEN 1 ELSE count + 1 END,
+       reset_at = CASE WHEN reset_at <= ? THEN ? ELSE reset_at END,
+       updated_at = CURRENT_TIMESTAMP`,
+    id,
+    action,
+    identifier,
+    resetAt,
+    now,
+    now,
+    resetAt,
+  );
+
   const current = await query<{ count: number; reset_at: number }>(
     "SELECT count, reset_at FROM rate_limits WHERE id = ?",
     id,
   );
   const row = current.results?.[0];
+  const count = row?.count || 1;
+  const rowResetAt = row?.reset_at || resetAt;
 
-  if (!row || row.reset_at <= now) {
-    await run(
-      "INSERT OR REPLACE INTO rate_limits (id, action, identifier, count, reset_at, updated_at) VALUES (?, ?, ?, 1, ?, CURRENT_TIMESTAMP)",
-      id,
-      action,
-      identifier,
-      now + windowSeconds * 1000,
-    );
-    return { ok: true, remaining: Math.max(limit - 1, 0) };
-  }
-
-  if (row.count >= limit) {
+  if (count > limit) {
     await audit("system", "RATE_LIMIT_DENIED", action, identifier, `Denied ${action} for ${identifier}`);
-    return { ok: false, retryAfterMs: row.reset_at - now };
+    return { ok: false, retryAfterMs: rowResetAt - now };
   }
 
-  await run("UPDATE rate_limits SET count = count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", id);
-  return { ok: true, remaining: Math.max(limit - row.count - 1, 0) };
+  return { ok: true, remaining: Math.max(limit - count, 0) };
 }
 
 export async function verifyTurnstile(token: string | undefined, ip: string) {
@@ -424,14 +432,16 @@ async function hmac(value: string, secret: string) {
 function sessionSecret() {
   const configured = process.env.ADMIN_SESSION_SECRET || process.env.AUTH_SECRET;
   if (configured) return configured;
-  if (process.env.NODE_ENV !== "production") return "pch-local-preview-session-secret";
+  const isDev = process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
+  if (isDev) return "pch-local-preview-session-secret";
   throw new Error("ADMIN_SESSION_SECRET or AUTH_SECRET env secret is required in production.");
 }
 
 export async function hashOtp(code: string, phone: string) {
   const secret = process.env.OTP_HASH_SECRET;
   if (!secret) {
-    if (process.env.NODE_ENV === "production") {
+    const isDev = process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
+    if (!isDev) {
       throw new Error("OTP_HASH_SECRET env secret is required in production.");
     }
     return sha256(`${phone}:${code}:pch-preview-otp-secret`);
@@ -510,7 +520,7 @@ export async function createOtpChallenge(purpose: string, phone: string, ip: str
   );
   const delivery = await sendSms91Otp(phone, code);
   await audit("system", "OTP_SENT", "OtpChallenge", id, `${purpose} OTP requested for ${phone}; configured=${delivery.configured}`);
-  return { id, code: delivery.configured ? undefined : code, delivery };
+  return { id, code: (delivery.configured || process.env.NODE_ENV === "production") ? undefined : code, delivery };
 }
 
 export async function verifyStoredOtp(purpose: string, phone: string, code: string) {
@@ -550,8 +560,19 @@ export async function audit(actorEmail: string, action: string, entityType?: str
 
 export async function nextRequestId() {
   const year = new Date().getFullYear();
-  const rows = await query<{ total: number }>("SELECT COUNT(*) as total FROM appointments WHERE request_id LIKE ?", `PCH-${year}-%`);
-  const next = (rows.results?.[0]?.total || 0) + 1;
+  const rows = await query<{ request_id: string }>(
+    "SELECT request_id FROM appointments WHERE request_id LIKE ? ORDER BY request_id DESC LIMIT 1",
+    `PCH-${year}-%`,
+  );
+  const lastId = rows.results?.[0]?.request_id;
+  let next = 1;
+  if (lastId) {
+    const parts = lastId.split("-");
+    const numPart = parseInt(parts[parts.length - 1], 10);
+    if (!isNaN(numPart)) {
+      next = numPart + 1;
+    }
+  }
   return `PCH-${year}-${String(next).padStart(4, "0")}`;
 }
 

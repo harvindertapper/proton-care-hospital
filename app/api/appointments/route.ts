@@ -99,25 +99,42 @@ export async function POST(request: Request) {
     return json({ error: "Please verify the mobile number with OTP before submitting." }, { status: 400 });
   }
 
-  const requestId = await nextRequestId();
+  let requestId = "";
   const id = crypto.randomUUID();
-  await run(
-    `INSERT INTO appointments
-      (id, request_id, patient_name, phone, email, department_slug, department_name, requested_date, requested_time, concern, consent, otp_verified, ip_address, user_agent, schedule_version)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, 1)`,
-    id,
-    requestId,
-    patientName,
-    phone,
-    email,
-    department.slug,
-    department.name,
-    requestedDate,
-    requestedTime,
-    concern,
-    ip,
-    request.headers.get("user-agent") || "",
-  );
+  let inserted = false;
+  let attempts = 0;
+
+  while (!inserted && attempts < 5) {
+    try {
+      attempts++;
+      requestId = await nextRequestId();
+      await run(
+        `INSERT INTO appointments
+          (id, request_id, patient_name, phone, email, department_slug, department_name, requested_date, requested_time, concern, consent, otp_verified, ip_address, user_agent, schedule_version)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, 1)`,
+        id,
+        requestId,
+        patientName,
+        phone,
+        email,
+        department.slug,
+        department.name,
+        requestedDate,
+        requestedTime,
+        concern,
+        ip,
+        request.headers.get("user-agent") || "",
+      );
+      inserted = true;
+    } catch (err: any) {
+      if (err?.message?.includes("UNIQUE constraint failed") && attempts < 5) {
+        await new Promise((resolve) => setTimeout(resolve, Math.random() * 50 + 10));
+        continue;
+      }
+      throw err;
+    }
+  }
+
   await audit("system", "APPOINTMENT_CREATED", "Appointment", id, `${requestId} ${department.name} ${requestedDate} ${requestedTime}`);
 
   const responseData = {

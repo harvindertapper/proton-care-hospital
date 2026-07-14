@@ -33,6 +33,7 @@ export type Department = {
   summary: string;
   group: string;
   timing?: { label: string; start: string; end: string; days: string };
+  image?: string;
 };
 
 export const departments: Department[] = [
@@ -43,6 +44,7 @@ export const departments: Department[] = [
     group: "Medicine",
     summary: "Primary medical consultation for fever, infections, chronic illness, and general adult care.",
     timing: { label: "9:00 AM to 6:00 PM", start: "09:00", end: "18:00", days: "Mon-Sat" },
+    image: "/assets/hospital/patient-room-twin.jpg",
   },
   {
     slug: "general-surgery",
@@ -51,6 +53,7 @@ export const departments: Department[] = [
     group: "Surgery",
     summary: "General and laparoscopic surgical consultation with operation theatre support.",
     timing: { label: "12:00 PM to 2:00 PM", start: "12:00", end: "14:00", days: "Mon-Sat" },
+    image: "/assets/hospital/patient-room-single.jpg",
   },
   {
     slug: "anaesthesiology",
@@ -166,6 +169,7 @@ export const departments: Department[] = [
     hindi: "क्रिटिकल केयर और आपातकालीन चिकित्सा",
     group: "Emergency & Critical Care",
     summary: "24x7 immediate emergency medical care and intensive care unit (ICU/NICU) triage support.",
+    image: "/assets/hospital/ward-bed-01.jpg",
   },
 ];
 
@@ -283,8 +287,10 @@ export const tpaPanels = [
 
 export const publicNav = [
   { href: "/", label: "Home" },
+  { href: "/about", label: "About" },
   { href: "/departments", label: "Departments" },
   { href: "/doctors", label: "Doctors" },
+  { href: "/gallery", label: "Gallery" },
   { href: "/tpa-insurance", label: "TPA" },
   { href: "/testimonials", label: "Testimonials" },
   { href: "/blog", label: "Blog" },

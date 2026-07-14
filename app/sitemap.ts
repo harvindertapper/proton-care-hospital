@@ -8,6 +8,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     "/about",
     "/departments",
     "/doctors",
+    "/gallery",
     "/tpa-insurance",
     "/appointment",
     "/feedback",

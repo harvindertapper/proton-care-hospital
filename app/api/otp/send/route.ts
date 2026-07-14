@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     success: true,
     challengeId: challenge.id,
     delivery: challenge.delivery,
-    previewOtp: challenge.code,
+    previewOtp: process.env.NODE_ENV === "production" ? undefined : challenge.code,
     message: challenge.delivery.configured
       ? "OTP sent through SMS91."
       : "OTP preview generated. Configure SMS91 credentials before production launch.",

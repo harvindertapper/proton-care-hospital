@@ -6,8 +6,8 @@ import { PageHero, PageShell, SectionHeader, Breadcrumbs } from "@/app/component
 import { BookingFaqs } from "@/app/components/BookingFaqs";
 
 export const metadata: Metadata = {
-  title: "Request Appointment",
-  description: "Request a department-based appointment at Protone Care Hospital with SMS OTP verification and 15-minute preferred slot selection.",
+  title: "Book OPD Appointment",
+  description: "Request an appointment slot at Protone Care Hospital. Select your department and preferred time for quick confirmation.",
   alternates: { canonical: `${SITE_URL}/appointment` },
 };
 
@@ -19,8 +19,8 @@ export default async function AppointmentPage({ searchParams }: { searchParams: 
     <PageShell>
       <PageHero
         eyebrow="Appointment Request"
-        title="Select a department and preferred 15-minute slot"
-        body="This is a request workflow. Protone Care Hospital staff will confirm final availability by phone or message."
+        title="Schedule Your OPD Consultation"
+        body="Select your required department and preferred timing window below. Our desk will contact you shortly to confirm your booking."
       />
       <Breadcrumbs paths={[{ label: "Appointment" }]} />
 
@@ -30,9 +30,9 @@ export default async function AppointmentPage({ searchParams }: { searchParams: 
             {/* Form Column */}
             <div className="lg:col-span-2 space-y-6">
               <SectionHeader
-                eyebrow="Secure patient request"
-                title="Department-only appointment flow"
-                body="Patients choose department, date, preferred time, verify mobile number with OTP, and provide consent. Doctor selection is intentionally not part of the public flow."
+                eyebrow="OPD Consultation Request"
+                title="Select Department & Timing"
+                body="Please choose the required medical department, preferred date, and available time slot. Verify your phone number to complete the request."
               />
               <AppointmentForm
                 departments={departments}
@@ -72,13 +72,13 @@ export default async function AppointmentPage({ searchParams }: { searchParams: 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="p-6 bg-white border border-slate-100 rounded-2xl shadow-sm">
               <ShieldCheck size={24} className="text-teal-600 mb-3" aria-hidden="true" />
-              <h3 className="font-semibold text-slate-800 text-lg mb-2">Privacy-first request</h3>
-              <p className="text-slate-650 text-sm">Only minimum appointment details are collected. No Aadhaar, reports, prescriptions, payments, or medical-record uploads are requested here.</p>
+              <h3 className="font-semibold text-slate-800 text-lg mb-2">Privacy-First Policy</h3>
+              <p className="text-slate-650 text-sm">We only collect minimal required contact details. No medical records, prescriptions, or payment information are requested online.</p>
             </div>
             <div className="p-6 bg-white border border-slate-100 rounded-2xl shadow-sm">
               <LockKeyhole size={24} className="text-teal-600 mb-3" aria-hidden="true" />
-              <h3 className="font-semibold text-slate-800 text-lg mb-2">Rate-limited and verified</h3>
-              <p className="text-slate-655 text-sm">OTP, appointment submission, and verification endpoints are rate-limited by IP and phone purpose.</p>
+              <h3 className="font-semibold text-slate-800 text-lg mb-2">Secure & Confidential</h3>
+              <p className="text-slate-655 text-sm">Your personal information and OTP verification process are fully encrypted and kept strictly confidential.</p>
             </div>
             <div className="p-6 bg-white border border-slate-100 rounded-2xl shadow-sm">
               <h3 className="font-semibold text-slate-800 text-lg mb-2">Emergency notice</h3>

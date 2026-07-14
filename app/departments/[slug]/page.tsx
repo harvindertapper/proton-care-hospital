@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import Image from "next/image";
 import { CalendarDays, Stethoscope } from "lucide-react";
 import { departmentBySlug, departments, doctorsForDepartment, hospital, SITE_URL } from "@/app/lib/data";
 import { PageHero, PageShell, PrimaryActions, SectionHeader, TimingNote } from "@/app/components/SiteShell";
@@ -42,6 +43,17 @@ export default async function DepartmentDetailPage({ params }: { params: Promise
               title="Department overview"
               body="Schedule your OPD consultation directly under our specialized department."
             />
+            {department.image && (
+              <div className="relative w-full h-80 rounded-2xl overflow-hidden mb-8 border border-slate-100 shadow-sm">
+                <Image
+                  src={department.image}
+                  alt={department.name}
+                  fill
+                  className="object-cover"
+                  unoptimized
+                />
+              </div>
+            )}
             <div className="quick-grid">
               <article className="quick-card">
                 <CalendarDays size={25} aria-hidden="true" />

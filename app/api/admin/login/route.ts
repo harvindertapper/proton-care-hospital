@@ -7,12 +7,21 @@ import {
   setAdminCookie,
 } from "@/app/lib/server";
 
+function safeCompare(a: string, b: string) {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
 function adminAccounts() {
-  const production = process.env.NODE_ENV === "production";
-  const superEmail = process.env.ADMIN_SUPER_EMAIL || (!production ? "super@protonecarehospital.com" : "");
-  const superPassword = process.env.ADMIN_SUPER_PASSWORD || (!production ? "ChangeMeSuper#2026" : "");
-  const staffEmail = process.env.ADMIN_STAFF_EMAIL || (!production ? "staff@protonecarehospital.com" : "");
-  const staffPassword = process.env.ADMIN_STAFF_PASSWORD || (!production ? "ChangeMeStaff#2026" : "");
+  const isDev = process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
+  const superEmail = process.env.ADMIN_SUPER_EMAIL || (isDev ? "super@protonecarehospital.com" : "");
+  const superPassword = process.env.ADMIN_SUPER_PASSWORD || (isDev ? "ChangeMeSuper#2026" : "");
+  const staffEmail = process.env.ADMIN_STAFF_EMAIL || (isDev ? "staff@protonecarehospital.com" : "");
+  const staffPassword = process.env.ADMIN_STAFF_PASSWORD || (isDev ? "ChangeMeStaff#2026" : "");
   return [
     { email: superEmail.toLowerCase(), password: superPassword, role: "SUPER_ADMIN" as const },
     { email: staffEmail.toLowerCase(), password: staffPassword, role: "STAFF" as const },
@@ -35,7 +44,7 @@ export async function POST(request: Request) {
     return json({ error: "Admin session secret is not configured." }, { status: 503 });
   }
 
-  const account = adminAccounts().find((item) => item.email === email && item.password === password);
+  const account = adminAccounts().find((item) => item.email === email && safeCompare(item.password, password));
   if (!account) {
     await audit(email || "unknown", "ADMIN_LOGIN_FAILED", "Admin", email, `Failed login from ${ip}`);
     return json({ error: "Invalid admin credentials." }, { status: 401 });

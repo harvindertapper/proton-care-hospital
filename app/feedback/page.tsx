@@ -5,7 +5,7 @@ import { PageHero, PageShell, SectionHeader } from "@/app/components/SiteShell";
 
 export const metadata: Metadata = {
   title: "Patient Feedback",
-  description: "Submit patient feedback to Protone Care Hospital after SMS OTP phone verification and consent.",
+  description: "Share your experience and feedback with Protone Care Hospital to help us serve you better.",
   alternates: { canonical: `${SITE_URL}/feedback` },
 };
 
@@ -14,16 +14,16 @@ export default function FeedbackPage() {
     <PageShell>
       <PageHero
         eyebrow="Feedback"
-        title="Share patient feedback after phone verification"
-        body="Feedback is reviewed by the hospital before any public display. Patient privacy and consent are required."
+        title="Share your feedback with us"
+        body="Your experience matters to us. Please share your suggestions or thoughts so we can continue to improve our patient care."
       />
       <section className="section">
         <div className="container flow-layout">
           <div>
             <SectionHeader
-              eyebrow="Verified feedback"
-              title="Tell the hospital team about your experience"
-              body="The form uses phone OTP, consent, Turnstile, honeypot, and server-side rate limits."
+              eyebrow="Your Experience"
+              title="Tell us about your visit"
+              body="We value your feedback. Please take a moment to share your suggestions, compliments, or concerns with our care team."
             />
             <FeedbackForm turnstileSiteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY} />
           </div>

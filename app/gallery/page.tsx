@@ -22,6 +22,31 @@ const presetAssets: GalleryAsset[] = [
     title: "Hospital Exterior Campus",
     note: "Campus view of the main hospital entrance and parking.",
   },
+  {
+    url: "/assets/hospital/reception.jpg",
+    title: "Reception & Nursing Station",
+    note: "Our central reception and nursing desk, welcoming patients with professional care.",
+  },
+  {
+    url: "/assets/hospital/corridor.jpg",
+    title: "Outpatient & Inpatient Corridor",
+    note: "Clean, modern, and spacious corridors connecting rooms and speciality consultations.",
+  },
+  {
+    url: "/assets/hospital/ward-bed-01.jpg",
+    title: "Emergency Observation Bed",
+    note: "Fully equipped recovery and observation beds with continuous patient monitoring.",
+  },
+  {
+    url: "/assets/hospital/patient-room-twin.jpg",
+    title: "Semi-Private Patient Room",
+    note: "Comfortable twin-sharing rooms designed for patient comfort, safety, and recovery.",
+  },
+  {
+    url: "/assets/hospital/patient-room-single.jpg",
+    title: "Deluxe Private Suite",
+    note: "Single-bed private room equipped with modern amenities including AC, television, and private storage.",
+  },
 ];
 
 export default function GalleryPage() {
