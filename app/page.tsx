@@ -82,7 +82,7 @@ export default function Home() {
             <article className="quick-card">
               <Stethoscope size={26} aria-hidden="true" />
               <h3>Department OPD</h3>
-              <p>Request preferred department slots in 15-minute intervals. Final confirmation is handled by staff.</p>
+              <p>Request preferred available appointment slots. Final confirmation is handled by our staff.</p>
               <ArrowLink href="/appointment">Request appointment</ArrowLink>
             </article>
             <article className="quick-card">

@@ -668,5 +668,5 @@ export function isHoneypotTriggered(input: Record<string, unknown>) {
 }
 
 export function slotSettingsLaunchNote() {
-  return `Department timings and 15-minute slots are editable in admin. Requests remain manual-confirmation only; ${hospital.name} confirms final availability.`;
+  return `Department OPD schedules and available appointment slots can be updated in the administration panel. Requests remain manual-confirmation only; ${hospital.name} confirms final availability.`;
 }
