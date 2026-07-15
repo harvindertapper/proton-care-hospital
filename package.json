@@ -10,8 +10,13 @@
     "build": "vinext build",
     "start": "vinext start",
     "test": "npm run build && node --experimental-strip-types --test tests/*.test.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern worker-configuration.d.ts",
+    "db:generate": "drizzle-kit generate",
+    "cf:whoami": "wrangler whoami",
+    "cf:types": "wrangler types",
+    "deploy:check-env": "node scripts/validate-cloudflare-deploy-env.mjs",
+    "deploy:dry-run": "npm run build && wrangler deploy --dry-run",
+    "deploy": "npm run deploy:check-env && npm run build && wrangler deploy"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
