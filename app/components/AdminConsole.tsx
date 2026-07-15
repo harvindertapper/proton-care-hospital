@@ -221,6 +221,7 @@ export function AdminConsole({
     const pendingPct = totalAppointments ? Math.round((pendingCount / totalAppointments) * 100) : 0;
     const approvedPct = totalAppointments ? Math.round((approvedCount / totalAppointments) * 100) : 0;
     const rejectedPct = totalAppointments ? Math.round((rejectedCount / totalAppointments) * 100) : 0;
+    const completedPct = totalAppointments ? Math.round((completedCount / totalAppointments) * 100) : 0;
     
     return {
       cards: [
@@ -229,7 +230,7 @@ export function AdminConsole({
         { label: "Total Doctors", value: adminData.doctors.length, icon: Stethoscope },
         { label: "Unread Messages", value: adminData.contacts.filter((item) => item.status === "NEW").length, icon: FileText },
       ],
-      breakdown: { pendingCount, approvedCount, rejectedCount, completedCount, pendingPct, approvedPct, rejectedPct, totalAppointments },
+      breakdown: { pendingCount, approvedCount, rejectedCount, completedCount, pendingPct, approvedPct, rejectedPct, completedPct, totalAppointments },
       recentAudits: adminData.audits.slice(0, 10)
     };
   }, [adminData]);
@@ -542,7 +543,7 @@ export function AdminConsole({
         ) : null}
 
         {active === "Doctors" ? (
-          <DoctorManager rows={adminData.doctors} media={adminData.media} departments={departments} staticDoctors={staticDoctors} busy={busy} onUpload={uploadMedia} onSave={(payload) => mutate({ action: "doctor.save", payload }, "Doctor profile saved or sent for approval.")} />
+          <DoctorManager rows={adminData.doctors} departments={departments} staticDoctors={staticDoctors} busy={busy} onSave={(payload) => mutate({ action: "doctor.save", payload }, "Doctor profile saved or sent for approval.")} />
         ) : null}
 
         {active === "Media" ? <MediaManager busy={busy} rows={adminData.media} onUpload={uploadMedia} onDelete={deleteMedia} /> : null}
@@ -1110,7 +1111,17 @@ function DoctorManager({
   );
 }
 
-function BlogForm({ busy, onSave, rows }: { busy: boolean; onSave: (payload: Record<string, unknown>) => void; rows: AdminData["blogs"] }) {
+function BlogForm({
+  busy,
+  onSave,
+  onVisibility,
+  rows,
+}: {
+  busy: boolean;
+  onSave: (payload: Record<string, unknown>) => void;
+  onVisibility?: (slug: string, isVisible: number) => void;
+  rows: AdminData["blogs"];
+}) {
   const [form, setForm] = useState({ title: "", slug: "", excerpt: "", body: "" });
   return (
     <div className="admin-panel-grid">
@@ -1121,12 +1132,35 @@ function BlogForm({ busy, onSave, rows }: { busy: boolean; onSave: (payload: Rec
         <label>Body<textarea rows={7} value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} /></label>
         <button className="button primary" disabled={busy}><Newspaper size={17} aria-hidden="true" /> Save Blog</button>
       </form>
-      <DataTable rows={rows} columns={["title", "status", "is_visible", "created_at"]} />
+      <DataTable
+        rows={rows}
+        columns={["title", "status", "is_visible", "created_at"]}
+        actions={onVisibility ? (row) => (
+          <div className="table-actions">
+            <button
+              disabled={busy || row.status !== "APPROVED"}
+              onClick={() => onVisibility(String(row.slug), row.is_visible ? 0 : 1)}
+            >
+              {row.is_visible ? "Hide" : "Show"}
+            </button>
+          </div>
+        ) : undefined}
+      />
     </div>
   );
 }
 
-function CareerForm({ busy, onSave, rows }: { busy: boolean; onSave: (payload: Record<string, unknown>) => void; rows: AdminData["jobs"] }) {
+function CareerForm({
+  busy,
+  onSave,
+  onVisibility,
+  rows,
+}: {
+  busy: boolean;
+  onSave: (payload: Record<string, unknown>) => void;
+  onVisibility?: (slug: string, isVisible: number) => void;
+  rows: AdminData["jobs"];
+}) {
   const [form, setForm] = useState({ title: "", slug: "", department: "", employmentType: "Full-time", description: "" });
   return (
     <div className="admin-panel-grid">
@@ -1137,12 +1171,35 @@ function CareerForm({ busy, onSave, rows }: { busy: boolean; onSave: (payload: R
         <label>Description<textarea rows={6} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
         <button className="button primary" disabled={busy}><FileText size={17} aria-hidden="true" /> Save Job</button>
       </form>
-      <DataTable rows={rows} columns={["title", "department", "employment_type", "status", "is_visible", "created_at"]} />
+      <DataTable
+        rows={rows}
+        columns={["title", "department", "employment_type", "status", "is_visible", "created_at"]}
+        actions={onVisibility ? (row) => (
+          <div className="table-actions">
+            <button
+              disabled={busy || row.status !== "APPROVED"}
+              onClick={() => onVisibility(String(row.slug), row.is_visible ? 0 : 1)}
+            >
+              {row.is_visible ? "Hide" : "Show"}
+            </button>
+          </div>
+        ) : undefined}
+      />
     </div>
   );
 }
 
-function VideoForm({ busy, onSave, rows }: { busy: boolean; onSave: (payload: Record<string, unknown>) => void; rows: AdminData["videos"] }) {
+function VideoForm({
+  busy,
+  onSave,
+  onVisibility,
+  rows,
+}: {
+  busy: boolean;
+  onSave: (payload: Record<string, unknown>) => void;
+  onVisibility?: (id: string, isVisible: number) => void;
+  rows: AdminData["videos"];
+}) {
   const [form, setForm] = useState({ title: "", youtubeUrl: "", consentNote: "" });
   return (
     <div className="admin-panel-grid">
@@ -1152,7 +1209,20 @@ function VideoForm({ busy, onSave, rows }: { busy: boolean; onSave: (payload: Re
         <label>Consent/source note<textarea rows={4} value={form.consentNote} onChange={(event) => setForm({ ...form, consentNote: event.target.value })} /></label>
         <button className="button primary" disabled={busy}><Video size={17} aria-hidden="true" /> Save Video</button>
       </form>
-      <DataTable rows={rows} columns={["title", "youtube_url", "status", "is_visible", "created_at"]} />
+      <DataTable
+        rows={rows}
+        columns={["title", "youtube_url", "status", "is_visible", "created_at"]}
+        actions={onVisibility ? (row) => (
+          <div className="table-actions">
+            <button
+              disabled={busy || row.status !== "APPROVED"}
+              onClick={() => onVisibility(String(row.id), row.is_visible ? 0 : 1)}
+            >
+              {row.is_visible ? "Hide" : "Show"}
+            </button>
+          </div>
+        ) : undefined}
+      />
     </div>
   );
 }

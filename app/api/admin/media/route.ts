@@ -1,4 +1,4 @@
-import { audit, checkRateLimit, getClientIp, getR2, json, requireAdmin, run, verifyCsrf } from "@/app/lib/server";
+import { audit, checkRateLimit, getClientIp, getR2, json, requireAdmin, run, verifyCsrf, query } from "@/app/lib/server";
 
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
@@ -20,7 +20,9 @@ export async function POST(request: Request) {
 
   const form = await request.formData();
   const file = form.get("file");
-  const purpose = typeof form.get("purpose") === "string" ? String(form.get("purpose")).slice(0, 80) : "admin-upload";
+  const purpose = typeof form.get("purpose") === "string"
+    ? String(form.get("purpose")).toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "admin-upload"
+    : "admin-upload";
   const consentNote = typeof form.get("consentNote") === "string" ? String(form.get("consentNote")).slice(0, 600) : "";
 
   if (!(file instanceof File)) return json({ error: "Image file is required." }, { status: 400 });

@@ -669,10 +669,11 @@ export async function audit(actorEmail: string, action: string, entityType?: str
 export async function nextRequestId(): Promise<string> {
   const year = new Date().getFullYear();
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let suffix = "";
-  for (let i = 0; i < 6; i++) {
-    suffix += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
+  const array = new Uint8Array(6);
+  crypto.getRandomValues(array);
+  const suffix = Array.from(array)
+    .map((b) => chars[b % chars.length])
+    .join("");
   const id = `PCH-${year}-${suffix}`;
   
   // Check if it already exists (preventing collision)

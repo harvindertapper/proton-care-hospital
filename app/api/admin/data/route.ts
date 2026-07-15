@@ -350,14 +350,19 @@ async function applyAction(action: string, payload: Record<string, unknown>, act
 }
 
 export async function GET(request: Request) {
-  const admin = await requireAdmin();
-  if (!admin.ok) return json({ error: admin.error }, { status: admin.status });
-  const url = new URL(request.url);
-  const action = url.searchParams.get("action");
-  if (action === "REFRESH") {
+  try {
+    const admin = await requireAdmin();
+    if (!admin.ok) return json({ error: admin.error }, { status: admin.status });
+    const url = new URL(request.url);
+    const action = url.searchParams.get("action");
+    if (action === "REFRESH") {
+      return json({ success: true, data: await dashboardData(admin.session) });
+    }
     return json({ success: true, data: await dashboardData(admin.session) });
+  } catch (error) {
+    console.error("Dashboard GET data error:", error);
+    return json({ error: "Failed to load dashboard data." }, { status: 500 });
   }
-  return json({ success: true, data: await dashboardData(admin.session) });
 }
 
 export async function POST(request: Request) {
@@ -511,7 +516,13 @@ export async function POST(request: Request) {
     await applyAction(action, payload, admin.session.email);
     return json({ success: true });
   } catch (error) {
-    return json({ error: error instanceof Error ? error.message : "Admin action failed." }, { status: 400 });
+    console.error("Admin action failed:", error);
+    const msg = error instanceof Error ? error.message : "Admin action failed.";
+    const isInternal = msg.includes("D1") || msg.includes("SQLITE") || msg.includes("prepare") || msg.includes("bind");
+    return json(
+      { error: isInternal ? "An internal database error occurred." : msg },
+      { status: isInternal ? 500 : 400 }
+    );
   }
 }
 

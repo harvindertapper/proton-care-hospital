@@ -112,3 +112,17 @@ export async function verifyFirebaseToken(token, phoneToVerify) {
   }
   return { ok: false };
 }
+
+export async function audit() {
+  return;
+}
+
+export function parseYouTubeId(url) {
+  if (!url) return null;
+  const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([^&]{11})/);
+  return match ? match[1] : null;
+}
+
+export async function hashPassword(pwd) {
+  return `hashed-${pwd}`;
+}

@@ -52,6 +52,7 @@ export default function GalleryClient() {
   const [assets, setAssets] = useState<GalleryAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [triggerEl, setTriggerEl] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     async function fetchGallery() {
@@ -93,11 +94,14 @@ export default function GalleryClient() {
       if (activeIndex === null) return;
       if (e.key === "ArrowLeft") handlePrev();
       if (e.key === "ArrowRight") handleNext();
-      if (e.key === "Escape") setActiveIndex(null);
+      if (e.key === "Escape") {
+        setActiveIndex(null);
+        triggerEl?.focus();
+      }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeIndex, assets.length]);
+  }, [activeIndex, assets.length, triggerEl]);
 
   return (
     <section className="py-12 bg-slate-50 min-h-screen">
@@ -131,7 +135,24 @@ export default function GalleryClient() {
                 key={asset.url + idx}
                 className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between group"
               >
-                <div className="relative overflow-hidden rounded-xl h-56 w-full bg-slate-100 mb-4 cursor-pointer" onClick={() => setActiveIndex(idx)}>
+                <div
+                  id={`thumb-${idx}`}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`Open lightbox zoom view for ${asset.title}`}
+                  onClick={() => {
+                    setTriggerEl(document.getElementById(`thumb-${idx}`));
+                    setActiveIndex(idx);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setTriggerEl(document.getElementById(`thumb-${idx}`));
+                      setActiveIndex(idx);
+                    }
+                  }}
+                  className="relative overflow-hidden rounded-xl h-56 w-full bg-slate-100 mb-4 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+                >
                   <Image
                     src={asset.url}
                     alt={asset.title}
@@ -160,8 +181,16 @@ export default function GalleryClient() {
       {/* Lightbox Modal */}
       {activeIndex !== null && (
         <div
-          className="fixed inset-0 bg-slate-950/95 z-[2000] flex flex-col justify-between p-4 md:p-8 animate-fade-in"
-          onClick={() => setActiveIndex(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label={assets[activeIndex].title}
+          tabIndex={-1}
+          ref={(el) => el?.focus()}
+          className="fixed inset-0 bg-slate-950/95 z-[2000] flex flex-col justify-between p-4 md:p-8 animate-fade-in outline-none"
+          onClick={() => {
+            setActiveIndex(null);
+            triggerEl?.focus();
+          }}
         >
           <div className="flex justify-between items-center text-white w-full max-w-7xl mx-auto z-10">
             <div>
@@ -169,7 +198,10 @@ export default function GalleryClient() {
               <p className="text-slate-400 text-xs md:text-sm mt-0.5">{assets[activeIndex].note}</p>
             </div>
             <button
-              onClick={() => setActiveIndex(null)}
+              onClick={() => {
+                setActiveIndex(null);
+                triggerEl?.focus();
+              }}
               className="p-2 bg-slate-900 hover:bg-slate-800 rounded-full transition-colors text-white cursor-pointer"
               aria-label="Close lightbox"
             >

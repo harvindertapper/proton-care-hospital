@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import test from "node:test";
+import { readFile, writeFile, unlink } from "node:fs/promises";
+import test, { after } from "node:test";
 import {
   resetMockDb,
   addMockAppointment,
@@ -8,8 +8,39 @@ import {
   checkRateLimit,
   verifyFirebaseToken
 } from "./server-mocked.js";
-import { GET as getDashboardData } from "./data-route-mocked.js";
-import { POST as statusPostHandler } from "./status-route-mocked.js";
+
+// 1. Setup dynamic mock for status route
+const statusRouteContent = await readFile(new URL("../app/api/appointments/status/route.ts", import.meta.url), "utf8");
+const mockedStatusRouteContent = statusRouteContent
+  .replace('import { NextResponse } from "next/server";', '')
+  .replace(
+    'import { query, checkRateLimit, getClientIp, json } from "@/app/lib/server";',
+    'import { query, checkRateLimit, getClientIp, json } from "./server-mocked.js";'
+  );
+await writeFile(new URL("./status-route-real-mocked.ts", import.meta.url), mockedStatusRouteContent, "utf8");
+
+// 2. Setup dynamic mock for admin data route
+const dataRouteContent = await readFile(new URL("../app/api/admin/data/route.ts", import.meta.url), "utf8");
+const mockedDataRouteContent = dataRouteContent
+  .replace('from "@/app/lib/server";', 'from "./server-mocked.js";')
+  .replace('from "@/app/lib/data";', 'from "../app/lib/data.ts";');
+await writeFile(new URL("./data-route-real-mocked.ts", import.meta.url), mockedDataRouteContent, "utf8");
+
+// Import the dynamically generated production-logic routes
+const { POST: statusPostHandler } = await import("./status-route-real-mocked.ts");
+const { GET: getDashboardData } = await import("./data-route-real-mocked.ts");
+
+// Cleanup generated mock files on completion
+after(async () => {
+  try {
+    await Promise.all([
+      unlink(new URL("./status-route-real-mocked.ts", import.meta.url)),
+      unlink(new URL("./data-route-real-mocked.ts", import.meta.url))
+    ]);
+  } catch (err) {
+    // Ignore cleanup errors
+  }
+});
 
 test("homepage source contains the Protone public experience", async () => {
   const [page, shell, data] = await Promise.all([
