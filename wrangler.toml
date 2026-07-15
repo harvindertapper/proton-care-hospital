@@ -1,0 +1,24 @@
+name = "protone-care-hospital-sites-app"
+main = "dist/server/index.js"
+compatibility_date = "2026-05-15"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "dist/client"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "site-creator-d1"
+# Replace the value below with your actual D1 Database ID from the Cloudflare Dashboard
+database_id = "b06c58cc-fdc6-4706-9bc6-9786e180c74e"
+
+[[r2_buckets]]
+binding = "MEDIA"
+# This points to the R2 bucket 'pch' you just created
+bucket_name = "pch"
+
+[vars]
+NEXT_PUBLIC_SITE_URL = "https://protonecarehospital.com"
+ADMIN_SUPER_EMAIL = "superadmin@protonecarehospital.com"
+ADMIN_STAFF_EMAIL = "staff@protonecarehospital.com"
+# Add your other public environment variables here
