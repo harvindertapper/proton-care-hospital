@@ -207,10 +207,19 @@ export async function applySuperAdminBootstrap(
   store: SuperAdminBootstrapStore,
   environment: Record<string, string | undefined>,
 ): Promise<SuperAdminBootstrapResult> {
-  const config = readSuperAdminBootstrapConfig(environment);
-  if (!config.ok) return { ok: false, status: "not_configured" };
-
   const accounts = await store.listAccounts();
+  const config = readSuperAdminBootstrapConfig(environment);
+
+  if (!config.ok) {
+    const hasActiveSuperAdmin = accounts.some(
+      (account) => account.role === "SUPER_ADMIN" && account.isActive
+    );
+    if (hasActiveSuperAdmin) {
+      return { ok: true, status: "preserved" };
+    }
+    return { ok: false, status: "not_configured" };
+  }
+
   const decision = decideSuperAdminBootstrap(accounts, config);
   if (decision.kind === "not_configured") return { ok: false, status: "not_configured" };
   if (decision.kind === "conflict") return { ok: false, status: "conflict" };

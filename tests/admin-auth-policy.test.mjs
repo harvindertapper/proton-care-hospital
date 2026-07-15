@@ -224,3 +224,11 @@ test("staff creation always produces an active STAFF account requiring a passwor
     },
   );
 });
+
+test("bootstrap permits config removal if super admin already exists", async () => {
+  const store = bootstrapStore([
+    { id: "owner", email: "owner@example.com", role: "SUPER_ADMIN", isActive: true, passwordHash: "existing-hash" }
+  ]);
+  const result = await applySuperAdminBootstrap(store, {});
+  assert.deepEqual(result, { ok: true, status: "preserved" });
+});
