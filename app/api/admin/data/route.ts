@@ -11,6 +11,7 @@ import {
   hashPassword,
 } from "@/app/lib/server";
 import { departmentBySlug } from "@/app/lib/data";
+import { validateStaffAccountInput } from "@/app/lib/adminAuth";
 
 type AdminSession = { email: string; role: "SUPER_ADMIN" | "STAFF" };
 
@@ -41,7 +42,7 @@ async function dashboardData(session: AdminSession) {
     audits,
     sessionsData,
   ] = await Promise.all([
-    query("SELECT * FROM appointments ORDER BY created_at DESC LIMIT 100"),
+    query<Record<string, unknown>>("SELECT * FROM appointments ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM department_timings ORDER BY department_name"),
     query("SELECT * FROM doctor_profiles ORDER BY name"),
     query("SELECT * FROM content_revisions ORDER BY created_at DESC LIMIT 100"),
@@ -52,21 +53,31 @@ async function dashboardData(session: AdminSession) {
     query("SELECT * FROM patient_videos ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM media_assets ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 120"),
-    query("SELECT token, created_at, expires_at FROM admin_sessions WHERE email = ? AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP", session.email),
+    query(
+      "SELECT id, created_at, expires_at FROM sessions WHERE lower(email) = lower(?) AND revoked = 0 AND expires_at > ?",
+      session.email,
+      Date.now(),
+    ),
   ]);
 
   let rawAppointments = appointments.results || [];
   if (session.role !== "SUPER_ADMIN") {
     const sensitiveSlugs = new Set(["psychiatry", "obstetrics-and-gynecology", "emergency-triage", "emergency-medicine"]);
-    rawAppointments = rawAppointments.map((app: any) => ({
+    rawAppointments = rawAppointments.map((app) => ({
       ...app,
       concern: sensitiveSlugs.has(app.department_slug) ? "[REDACTED - SENSITIVE DEPT]" : app.concern,
     }));
   }
 
-  let staffList: any[] = [];
+  let staffList: Record<string, unknown>[] = [];
   if (session.role === "SUPER_ADMIN") {
-    const staffResult = await query("SELECT id, email, name, role, created_at FROM admin_users ORDER BY name");
+    const staffResult = await query(
+      `SELECT id, email, name, role, is_active, must_change_password,
+              CASE is_active WHEN 1 THEN 'Active' ELSE 'Inactive' END AS status,
+              CASE must_change_password WHEN 1 THEN 'Password change required' ELSE 'Password set' END AS password_status,
+              created_at
+       FROM admin_users WHERE role = 'STAFF' ORDER BY name`,
+    );
     staffList = staffResult.results || [];
   }
 
@@ -352,7 +363,7 @@ async function applyAction(action: string, payload: Record<string, unknown>, act
 export async function GET(request: Request) {
   try {
     const admin = await requireAdmin();
-    if (!admin.ok) return json({ error: admin.error }, { status: admin.status });
+    if (!admin.ok) return json({ error: admin.error, ...(admin.code ? { code: admin.code } : {}) }, { status: admin.status });
     const url = new URL(request.url);
     const action = url.searchParams.get("action");
     if (action === "REFRESH") {
@@ -367,7 +378,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const admin = await requireAdmin();
-  if (!admin.ok) return json({ error: admin.error }, { status: admin.status });
+  if (!admin.ok) return json({ error: admin.error, ...(admin.code ? { code: admin.code } : {}) }, { status: admin.status });
   if (!verifyCsrf(request, admin.session)) return json({ error: "Invalid CSRF token." }, { status: 403 });
 
   const ip = getClientIp(request);
@@ -380,7 +391,7 @@ export async function POST(request: Request) {
 
   try {
     if (action === "revision.review") {
-      const superAdmin = await requireAdmin("SUPER_ADMIN");
+      const superAdmin = await requireAdmin({ role: "SUPER_ADMIN" });
       if (!superAdmin.ok) return json({ error: superAdmin.error }, { status: superAdmin.status });
       const revisionId = clean(body.revisionId, 120);
       const decision = clean(body.decision, 20).toUpperCase();
@@ -436,7 +447,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "REVOKE_ALL_SESSIONS") {
-      const currentSessionId = (admin.session as any).sessionId;
+      const currentSessionId = admin.session.sessionId;
       if (!currentSessionId) throw new Error("Could not identify current session ID");
       await run("UPDATE sessions SET revoked = 1 WHERE email = ? AND id != ?", admin.session.email, currentSessionId);
       await audit(admin.session.email, "ALL_SESSIONS_REVOKED", "Admin", admin.session.email, "Revoked all other sessions");
@@ -444,60 +455,65 @@ export async function POST(request: Request) {
     }
 
     if (action === "staff.add") {
-      const superAdmin = await requireAdmin("SUPER_ADMIN");
+      const superAdmin = await requireAdmin({ role: "SUPER_ADMIN" });
       if (!superAdmin.ok) return json({ error: superAdmin.error }, { status: superAdmin.status });
 
-      const staffEmail = clean(payload.email, 120).toLowerCase();
-      const staffName = clean(payload.name, 120);
-      const staffRole = clean(payload.role, 20);
-      const staffPassword = typeof payload.password === "string" ? payload.password : "";
+      const validation = validateStaffAccountInput(payload);
+      if (!validation.ok) throw new Error(validation.error);
+      const staff = validation.account;
 
-      if (!staffEmail || !staffName || !staffRole || !staffPassword) {
-        throw new Error("All fields (Email, Name, Role, Password) are required.");
-      }
-      if (staffRole !== "SUPER_ADMIN" && staffRole !== "STAFF") {
-        throw new Error("Invalid role.");
-      }
-      if (staffPassword.length < 8) {
-        throw new Error("Password must be at least 8 characters.");
-      }
-
-      const existing = await query("SELECT id FROM admin_users WHERE email = ? LIMIT 1", staffEmail);
+      const existing = await query("SELECT id FROM admin_users WHERE lower(email) = lower(?) LIMIT 1", staff.email);
       if (existing.results?.length) {
         throw new Error("A staff member with this email already exists.");
       }
 
-      const pHash = await hashPassword(staffPassword);
+      const pHash = await hashPassword(staff.password);
       await run(
-        "INSERT INTO admin_users (id, email, name, role, password_hash) VALUES (?, ?, ?, ?, ?)",
+        `INSERT INTO admin_users
+          (id, email, name, role, password_hash, is_active, must_change_password)
+         VALUES (?, ?, ?, 'STAFF', ?, 1, 1)`,
         crypto.randomUUID(),
-        staffEmail,
-        staffName,
-        staffRole,
-        pHash
+        staff.email,
+        staff.name,
+        pHash,
       );
-      await audit(admin.session.email, "STAFF_ADDED", "AdminUser", staffEmail, `Added as ${staffRole}`);
+      await audit(admin.session.email, "STAFF_CREATED", "AdminUser", staff.email, "Created active staff account requiring password change");
       return json({ success: true });
     }
 
-    if (action === "staff.delete") {
-      const superAdmin = await requireAdmin("SUPER_ADMIN");
+    if (action === "staff.setActive") {
+      const superAdmin = await requireAdmin({ role: "SUPER_ADMIN" });
       if (!superAdmin.ok) return json({ error: superAdmin.error }, { status: superAdmin.status });
 
       const staffId = clean(payload.id, 120);
+      const active = payload.active;
       if (!staffId) throw new Error("Staff ID required.");
+      if (typeof active !== "boolean") throw new Error("Active state is required.");
 
-      const rows = await query<{ email: string }>("SELECT email FROM admin_users WHERE id = ? LIMIT 1", staffId);
+      const rows = await query<{ email: string; role: string; is_active: number }>(
+        "SELECT email, role, is_active FROM admin_users WHERE id = ? LIMIT 1",
+        staffId,
+      );
       const staff = rows.results?.[0];
       if (!staff) throw new Error("Staff member not found.");
+      if (staff.role !== "STAFF") throw new Error("Only staff accounts can be activated or deactivated.");
+      if ((staff.is_active === 1) === active) return json({ success: true });
 
-      if (staff.email === admin.session.email) {
-        throw new Error("You cannot delete your own account.");
+      await run(
+        "UPDATE admin_users SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND role = 'STAFF'",
+        active ? 1 : 0,
+        staffId,
+      );
+      if (!active) {
+        await run("UPDATE sessions SET revoked = 1 WHERE lower(email) = lower(?)", staff.email);
       }
-
-      await run("DELETE FROM admin_users WHERE id = ?", staffId);
-      await run("UPDATE sessions SET revoked = 1 WHERE email = ?", staff.email);
-      await audit(admin.session.email, "STAFF_DELETED", "AdminUser", staff.email, `Removed staff member`);
+      await audit(
+        admin.session.email,
+        active ? "STAFF_REACTIVATED" : "STAFF_DEACTIVATED",
+        "AdminUser",
+        staff.email,
+        active ? "Reactivated staff account" : "Deactivated staff account and revoked sessions",
+      );
       return json({ success: true });
     }
 

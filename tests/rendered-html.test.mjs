@@ -5,6 +5,7 @@ import {
   resetMockDb,
   addMockAppointment,
   setMockAdminSession,
+  getMockAdminState,
   checkRateLimit,
   verifyFirebaseToken
 } from "./server-mocked.js";
@@ -23,12 +24,13 @@ await writeFile(new URL("./status-route-real-mocked.ts", import.meta.url), mocke
 const dataRouteContent = await readFile(new URL("../app/api/admin/data/route.ts", import.meta.url), "utf8");
 const mockedDataRouteContent = dataRouteContent
   .replace('from "@/app/lib/server";', 'from "./server-mocked.js";')
-  .replace('from "@/app/lib/data";', 'from "../app/lib/data.ts";');
+  .replace('from "@/app/lib/data";', 'from "../app/lib/data.ts";')
+  .replace('from "@/app/lib/adminAuth";', 'from "../app/lib/adminAuth.ts";');
 await writeFile(new URL("./data-route-real-mocked.ts", import.meta.url), mockedDataRouteContent, "utf8");
 
 // Import the dynamically generated production-logic routes
 const { POST: statusPostHandler } = await import("./status-route-real-mocked.ts");
-const { GET: getDashboardData } = await import("./data-route-real-mocked.ts");
+const { GET: getDashboardData, POST: postDashboardData } = await import("./data-route-real-mocked.ts");
 
 // Cleanup generated mock files on completion
 after(async () => {
@@ -37,7 +39,7 @@ after(async () => {
       unlink(new URL("./status-route-real-mocked.ts", import.meta.url)),
       unlink(new URL("./data-route-real-mocked.ts", import.meta.url))
     ]);
-  } catch (err) {
+  } catch {
     // Ignore cleanup errors
   }
 });
@@ -147,6 +149,43 @@ test("rate-limiting test: permits within limit, restricts above limit", async ()
   // The 6th call should be blocked
   const blockedRes = await checkRateLimit("test-action", "127.0.0.1", 5, 60);
   assert.equal(blockedRes.ok, false);
+});
+
+test("super admin creates STAFF only and deactivation revokes its sessions", async () => {
+  resetMockDb();
+  setMockAdminSession({
+    ok: true,
+    session: { email: "owner@example.com", role: "SUPER_ADMIN", csrf: "csrf-token", sessionId: "super-session" },
+  });
+  const createResponse = await postDashboardData(new Request("http://localhost/api/admin/data", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-csrf-token": "csrf-token" },
+    body: JSON.stringify({
+      action: "staff.add",
+      name: "Reception Team",
+      email: "staff@example.com",
+      password: "temporary staff passphrase",
+      role: "SUPER_ADMIN",
+    }),
+  }));
+  assert.equal(createResponse.status, 200);
+  let state = getMockAdminState();
+  assert.equal(state.adminUsers.length, 1);
+  assert.equal(state.adminUsers[0].role, "STAFF");
+  assert.equal(state.adminUsers[0].is_active, 1);
+  assert.equal(state.adminUsers[0].must_change_password, 1);
+  assert.equal(state.audits.at(-1).action, "STAFF_CREATED");
+
+  const deactivateResponse = await postDashboardData(new Request("http://localhost/api/admin/data", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-csrf-token": "csrf-token" },
+    body: JSON.stringify({ action: "staff.setActive", id: state.adminUsers[0].id, active: false }),
+  }));
+  assert.equal(deactivateResponse.status, 200);
+  state = getMockAdminState();
+  assert.equal(state.adminUsers[0].is_active, 0);
+  assert.deepEqual(state.revokedEmails, ["staff@example.com"]);
+  assert.equal(state.audits.at(-1).action, "STAFF_DEACTIVATED");
 });
 
 test("status lookup IDOR check: rejects guess only, requires matching last-4 digits", async () => {

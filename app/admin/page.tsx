@@ -43,7 +43,13 @@ async function loadData(session: { email: string; role: string }) {
     rows("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 120"),
     rows("SELECT id, created_at, expires_at FROM sessions WHERE email = ? AND revoked = 0 AND expires_at > ?", session.email, Date.now()),
     session.role === "SUPER_ADMIN"
-      ? rows("SELECT id, email, name, role, created_at FROM admin_users ORDER BY name")
+      ? rows(
+          `SELECT id, email, name, role, is_active, must_change_password,
+                  CASE is_active WHEN 1 THEN 'Active' ELSE 'Inactive' END AS status,
+                  CASE must_change_password WHEN 1 THEN 'Password change required' ELSE 'Password set' END AS password_status,
+                  created_at
+           FROM admin_users WHERE role = 'STAFF' ORDER BY name`,
+        )
       : Promise.resolve([]),
   ]);
   return {
@@ -66,11 +72,12 @@ async function loadData(session: { email: string; role: string }) {
 export default async function AdminPage() {
   const session = await verifyAdminSession();
   if (!session) redirect("/admin/login");
+  if (session.mustChangePassword) redirect("/admin/change-password");
 
   const data = await loadData(session);
   if (session.role !== "SUPER_ADMIN") {
     const sensitiveSlugs = new Set(["psychiatry", "obstetrics-and-gynecology", "emergency-triage", "emergency-medicine"]);
-    data.appointments = data.appointments.map((app: any) => ({
+    data.appointments = data.appointments.map((app) => ({
       ...app,
       concern: sensitiveSlugs.has(app.department_slug) ? "[REDACTED - SENSITIVE DEPT]" : app.concern,
     }));

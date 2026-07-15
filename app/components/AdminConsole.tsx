@@ -2,11 +2,9 @@
 
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
-  CheckCircle2,
   Clock3,
   EyeOff,
   FileText,
-  ImagePlus,
   LogOut,
   Newspaper,
   ShieldCheck,
@@ -14,11 +12,16 @@ import {
   Upload,
   UserCog,
   Video,
-  XCircle,
 } from "lucide-react";
 import type { Department, Doctor } from "@/app/lib/data";
 
-type AdminSession = { email: string; role: "SUPER_ADMIN" | "STAFF"; csrf: string; sessionId: string };
+type AdminSession = {
+  email: string;
+  role: "SUPER_ADMIN" | "STAFF";
+  csrf: string;
+  sessionId: string;
+  mustChangePassword: boolean;
+};
 
 type AdminData = {
   appointments: Record<string, string | number | null>[];
@@ -115,7 +118,7 @@ export function AdminLoginForm() {
       });
       const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (!response.ok) throw new Error(String(data.error || "Login failed."));
-      window.location.href = "/admin";
+      window.location.href = data.passwordChangeRequired ? "/admin/change-password" : "/admin";
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Login failed.");
     } finally {
@@ -144,6 +147,87 @@ export function AdminLoginForm() {
   );
 }
 
+export function AdminPasswordChangeForm({
+  csrf,
+  mandatory = false,
+  onMessage,
+}: {
+  csrf: string;
+  mandatory?: boolean;
+  onMessage?: (message: string) => void;
+}) {
+  const [form, setForm] = useState({ oldPassword: "", newPassword: "", confirmPassword: "" });
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  function showMessage(value: string) {
+    setMessage(value);
+    onMessage?.(value);
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (form.newPassword !== form.confirmPassword) {
+      showMessage("New passwords do not match.");
+      return;
+    }
+    if (form.newPassword.length < 15 || form.newPassword.length > 128) {
+      showMessage("New password must be between 15 and 128 characters.");
+      return;
+    }
+    setBusy(true);
+    showMessage("");
+    try {
+      const response = await fetch("/api/admin/change-password", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-csrf-token": csrf },
+        body: JSON.stringify({ oldPassword: form.oldPassword, newPassword: form.newPassword }),
+      });
+      const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) throw new Error(String(data.error || "Failed to change password."));
+      showMessage("Password changed. All sessions were revoked; please sign in again.");
+      window.setTimeout(() => { window.location.href = "/admin/login"; }, 1200);
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : "Password change failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 420 }}>
+      {mandatory ? <p>You must replace the temporary password before using the admin console.</p> : null}
+      <label>
+        Current Password
+        <input type="password" autoComplete="current-password" required value={form.oldPassword} onChange={(event) => setForm({ ...form, oldPassword: event.target.value })} />
+      </label>
+      <label>
+        New Password
+        <input type="password" autoComplete="new-password" required minLength={15} maxLength={128} value={form.newPassword} onChange={(event) => setForm({ ...form, newPassword: event.target.value })} />
+      </label>
+      <label>
+        Confirm New Password
+        <input type="password" autoComplete="new-password" required minLength={15} maxLength={128} value={form.confirmPassword} onChange={(event) => setForm({ ...form, confirmPassword: event.target.value })} />
+      </label>
+      <button type="submit" className="button primary" disabled={busy}>Update Password</button>
+      {mandatory ? (
+        <button
+          type="button"
+          className="button secondary"
+          disabled={busy}
+          onClick={async () => {
+            await fetch("/api/admin/logout", { method: "POST", headers: { "x-csrf-token": csrf } });
+            window.location.href = "/admin/login";
+          }}
+        >
+          Sign out
+        </button>
+      ) : null}
+      {message ? <p className={message.startsWith("Password changed") ? "admin-success" : "admin-error"}>{message}</p> : null}
+    </form>
+  );
+}
+
 export function AdminConsole({
   session,
   data,
@@ -161,14 +245,13 @@ export function AdminConsole({
   const [busy, setBusy] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<Record<string, string | number | null> | null>(null);
   const [editForm, setEditForm] = useState({ requestedDate: "", requestedTime: "", internalNotes: "" });
-  const [passwordForm, setPasswordForm] = useState({ oldPassword: "", newPassword: "", confirmPassword: "" });
   const [appointmentsView, setAppointmentsView] = useState<"LIST" | "DAY">("LIST");
   const [appointmentsDate, setAppointmentsDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [appointmentsDept, setAppointmentsDept] = useState("ALL");
   const [selectedRevision, setSelectedRevision] = useState<Record<string, string | number | null> | null>(null);
   const [revisionEditPayload, setRevisionEditPayload] = useState("");
   const [revisionError, setRevisionError] = useState("");
-  const [staffForm, setStaffForm] = useState({ email: "", name: "", role: "STAFF", password: "" });
+  const [staffForm, setStaffForm] = useState({ email: "", name: "", password: "", confirmPassword: "" });
 
   function openTriage(row: Record<string, string | number | null>) {
     setSelectedAppointment(row);
@@ -285,38 +368,6 @@ export function AdminConsole({
     window.location.href = "/admin/login";
   }
 
-  async function changePassword(e: React.FormEvent) {
-    e.preventDefault();
-    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-      setNotice("New passwords do not match.");
-      return;
-    }
-    if (passwordForm.newPassword.length < 8) {
-      setNotice("New password must be at least 8 characters.");
-      return;
-    }
-    setBusy(true);
-    setNotice("");
-    try {
-      const response = await fetch("/api/admin/change-password", {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-csrf-token": session.csrf },
-        body: JSON.stringify({
-          oldPassword: passwordForm.oldPassword,
-          newPassword: passwordForm.newPassword,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Failed to change password.");
-      setNotice("Password changed successfully. All sessions revoked. Please sign in again.");
-      setTimeout(() => logout(), 2000);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Action failed.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <section className="admin-shell">
       <aside className="admin-sidebar">
@@ -416,17 +467,18 @@ export function AdminConsole({
               <div style={{ padding: 24, background: "white", borderRadius: 12, border: "1px solid var(--border)" }}>
                 <h3 style={{ margin: "0 0 20px 0", fontSize: 18 }}>Recent Activity</h3>
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {stats.recentAudits.length ? stats.recentAudits.map((audit: any) => (
+                  {stats.recentAudits.length ? stats.recentAudits.map((audit) => (
                     <div key={audit.id} style={{ display: "flex", gap: 12, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}>
                       <div style={{ padding: 8, background: "var(--soft)", borderRadius: 8, height: "fit-content" }}>
                         <ShieldCheck size={16} color="var(--muted)" />
                       </div>
                       <div>
                         <p style={{ margin: "0 0 4px 0", fontSize: 14 }}>
-                          <strong>{audit.admin_email}</strong> {audit.action.toLowerCase().replace(/_/g, " ")} on {audit.table_name}
+                          <strong>{String(audit.actor_email || audit.admin_email || "system")}</strong>{" "}
+                          {String(audit.action || "activity").toLowerCase().replace(/_/g, " ")} on {String(audit.entity_type || audit.table_name || "record")}
                         </p>
                         <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                          {new Date(audit.created_at).toLocaleString()}
+                          {new Date(String(audit.created_at)).toLocaleString()}
                         </span>
                       </div>
                     </div>
@@ -443,7 +495,7 @@ export function AdminConsole({
           <div style={{ display: "flex", flexDirection: "column", gap: 15 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "white", padding: 16, borderRadius: 12, border: "1px solid var(--border)" }}>
               <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                <select value={appointmentsView} onChange={(e) => setAppointmentsView(e.target.value as any)} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)" }}>
+                <select value={appointmentsView} onChange={(e) => setAppointmentsView(e.target.value === "DAY" ? "DAY" : "LIST")} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)" }}>
                   <option value="LIST">List View</option>
                   <option value="DAY">Day View</option>
                 </select>
@@ -570,7 +622,7 @@ export function AdminConsole({
                     const parsed = JSON.parse(String(row.payload_json || "{}"));
                     setRevisionEditPayload(JSON.stringify(parsed.payload || {}, null, 2));
                     setRevisionError("");
-                  } catch (e) {
+                  } catch {
                     setRevisionEditPayload(String(row.payload_json || ""));
                   }
                 }}
@@ -600,7 +652,7 @@ export function AdminConsole({
                           try {
                             JSON.parse(e.target.value);
                             setRevisionError("");
-                          } catch (err) {
+                          } catch {
                             setRevisionError("Invalid JSON structure");
                           }
                         }}
@@ -628,7 +680,7 @@ export function AdminConsole({
                               modifiedPayload: parsedPayload,
                             }, "Revision approved with changes.");
                             setSelectedRevision(null);
-                          } catch (err) {
+                          } catch {
                             setRevisionError("Failed to parse JSON for submission");
                           }
                         }}
@@ -702,23 +754,7 @@ export function AdminConsole({
           <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
             <div style={{ background: "white", padding: 32, borderRadius: 12, border: "1px solid var(--border)" }}>
               <h3 style={{ margin: "0 0 20px 0", fontSize: 20 }}>Change Password</h3>
-              <form onSubmit={changePassword} style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 400 }}>
-                <label>
-                  Current Password
-                  <input type="password" required value={passwordForm.oldPassword} onChange={(e) => setPasswordForm({ ...passwordForm, oldPassword: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, marginTop: 4 }} />
-                </label>
-                <label>
-                  New Password
-                  <input type="password" required value={passwordForm.newPassword} onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, marginTop: 4 }} />
-                </label>
-                <label>
-                  Confirm New Password
-                  <input type="password" required value={passwordForm.confirmPassword} onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, marginTop: 4 }} />
-                </label>
-                <button type="submit" className="button primary" disabled={busy} style={{ width: "fit-content" }}>
-                  Update Password
-                </button>
-              </form>
+              <AdminPasswordChangeForm csrf={session.csrf} onMessage={setNotice} />
             </div>
 
             <div style={{ background: "white", padding: 32, borderRadius: 12, border: "1px solid var(--border)" }}>
@@ -737,14 +773,14 @@ export function AdminConsole({
                 </button>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {adminData.sessions.map((sess: any) => (
+                {adminData.sessions.map((sess) => (
                   <div key={sess.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 16, background: "var(--soft)", borderRadius: 8, border: "1px solid var(--border)" }}>
                     <div>
                       <p style={{ margin: "0 0 4px 0", fontWeight: 500 }}>
                         Session {sess.id === session.sessionId ? "(Current Session)" : ""}
                       </p>
                       <span style={{ fontSize: 13, color: "var(--muted)" }}>
-                        Created: {new Date(sess.created_at).toLocaleString()} | Expires: {new Date(sess.expires_at).toLocaleString()}
+                        Created: {new Date(String(sess.created_at)).toLocaleString()} | Expires: {new Date(Number(sess.expires_at)).toLocaleString()}
                       </span>
                     </div>
                     {sess.id !== session.sessionId && (
@@ -769,19 +805,23 @@ export function AdminConsole({
               <h3 style={{ margin: "0 0 20px 0", fontSize: 20 }}>Staff Directory</h3>
               <DataTable
                 rows={adminData.staff}
-                columns={["name", "email", "role", "created_at"]}
+                columns={["name", "email", "status", "password_status", "created_at"]}
                 actions={(row) => (
                   <div className="table-actions">
                     <button
                       className="button secondary small"
-                      disabled={busy || row.email === session.email}
+                      disabled={busy}
                       onClick={() => {
-                        if (window.confirm(`Are you sure you want to remove staff member ${row.name}?`)) {
-                          mutate({ action: "staff.delete", id: row.id }, "Staff member removed.");
+                        const isActive = row.is_active === 1 || row.is_active === "1";
+                        if (window.confirm(`${isActive ? "Deactivate" : "Reactivate"} staff member ${row.name}?`)) {
+                          mutate(
+                            { action: "staff.setActive", id: row.id, active: !isActive },
+                            `Staff member ${isActive ? "deactivated" : "reactivated"}.`,
+                          );
                         }
                       }}
                     >
-                      Delete Account
+                      {row.is_active === 1 || row.is_active === "1" ? "Deactivate" : "Reactivate"}
                     </button>
                   </div>
                 )}
@@ -793,14 +833,17 @@ export function AdminConsole({
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
+                  if (staffForm.password !== staffForm.confirmPassword) {
+                    setNotice("Temporary passwords do not match.");
+                    return;
+                  }
                   mutate({
                     action: "staff.add",
                     email: staffForm.email,
                     name: staffForm.name,
-                    role: staffForm.role,
                     password: staffForm.password
                   }, "New staff account created.");
-                  setStaffForm({ email: "", name: "", role: "STAFF", password: "" });
+                  setStaffForm({ email: "", name: "", password: "", confirmPassword: "" });
                 }}
                 style={{ display: "flex", flexDirection: "column", gap: 16 }}
               >
@@ -813,17 +856,14 @@ export function AdminConsole({
                   <input type="email" required value={staffForm.email} onChange={(e) => setStaffForm({ ...staffForm, email: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, marginTop: 4 }} />
                 </label>
                 <label>
-                  Role
-                  <select value={staffForm.role} onChange={(e) => setStaffForm({ ...staffForm, role: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, marginTop: 4 }}>
-                    <option value="STAFF">Staff / Receptionist</option>
-                    <option value="SUPER_ADMIN">Super Admin</option>
-                  </select>
+                  Temporary Password
+                  <input type="password" required minLength={15} maxLength={128} value={staffForm.password} onChange={(e) => setStaffForm({ ...staffForm, password: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, marginTop: 4 }} />
                 </label>
                 <label>
-                  Temporary Password
-                  <input type="password" required minLength={8} value={staffForm.password} onChange={(e) => setStaffForm({ ...staffForm, password: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, marginTop: 4 }} />
+                  Confirm Temporary Password
+                  <input type="password" required minLength={15} maxLength={128} value={staffForm.confirmPassword} onChange={(e) => setStaffForm({ ...staffForm, confirmPassword: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, marginTop: 4 }} />
                 </label>
-                <button type="submit" className="button primary full" disabled={busy} style={{ marginTop: 8 }}>
+                <button type="submit" className="button primary full" disabled={busy || staffForm.password !== staffForm.confirmPassword} style={{ marginTop: 8 }}>
                   Create Staff Account
                 </button>
               </form>
@@ -1353,5 +1393,3 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
   }
   return { ok: true };
 }
-
-
