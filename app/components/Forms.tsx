@@ -130,37 +130,40 @@ export function AppointmentForm({
 
   useEffect(() => {
     if (mounted) {
-      const savedKey = localStorage.getItem("pch_appointment_idempotency");
-      if (savedKey) {
-        setIdempotencyKey(savedKey);
-      } else {
-        const newKey = crypto.randomUUID();
-        setIdempotencyKey(newKey);
-        localStorage.setItem("pch_appointment_idempotency", newKey);
-      }
+      import("@/app/lib/cryptoStorage").then((m) => {
+        m.getAndDecrypt("pch_appointment_idempotency").then((savedKey) => {
+          if (savedKey) {
+            setIdempotencyKey(savedKey);
+          } else {
+            const newKey = crypto.randomUUID();
+            setIdempotencyKey(newKey);
+            m.encryptAndSave("pch_appointment_idempotency", newKey);
+          }
+        });
+      });
     }
   }, [mounted, success]);
 
   useEffect(() => {
     setMounted(true);
-    const savedForm = localStorage.getItem("pch_appointment_draft");
-    if (savedForm) {
-      try {
-        const parsed = JSON.parse(savedForm);
-        setForm((current) => ({ ...current, ...parsed, otpCode: "" }));
-      } catch {}
-    }
-    const savedDept = localStorage.getItem("pch_appointment_dept");
-    if (savedDept) {
-      setDepartmentSlug(savedDept);
-    }
+    import("@/app/lib/cryptoStorage").then((m) => {
+      m.getAndDecrypt("pch_appointment_draft").then((savedForm) => {
+        if (savedForm) {
+          setForm((current) => ({ ...current, ...savedForm, otpCode: "" }));
+        }
+      });
+      m.getAndDecrypt("pch_appointment_dept").then((savedDept) => {
+        if (savedDept) {
+          setDepartmentSlug(savedDept);
+        }
+      });
+    });
   }, []);
 
   useEffect(() => {
     if (mounted) {
-      localStorage.setItem(
-        "pch_appointment_draft",
-        JSON.stringify({
+      import("@/app/lib/cryptoStorage").then((m) => {
+        m.encryptAndSave("pch_appointment_draft", {
           patientName: form.patientName,
           phone: form.phone,
           email: form.email,
@@ -168,14 +171,16 @@ export function AppointmentForm({
           requestedTime: form.requestedTime,
           concern: form.concern,
           consent: form.consent,
-        })
-      );
+        });
+      });
     }
   }, [form, mounted]);
 
   useEffect(() => {
     if (mounted) {
-      localStorage.setItem("pch_appointment_dept", departmentSlug);
+      import("@/app/lib/cryptoStorage").then((m) => {
+        m.encryptAndSave("pch_appointment_dept", departmentSlug);
+      });
     }
   }, [departmentSlug, mounted]);
 
@@ -527,40 +532,42 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
 
   useEffect(() => {
     if (mounted) {
-      const savedKey = localStorage.getItem("pch_feedback_idempotency");
-      if (savedKey) {
-        setIdempotencyKey(savedKey);
-      } else {
-        const newKey = crypto.randomUUID();
-        setIdempotencyKey(newKey);
-        localStorage.setItem("pch_feedback_idempotency", newKey);
-      }
+      import("@/app/lib/cryptoStorage").then((m) => {
+        m.getAndDecrypt("pch_feedback_idempotency").then((savedKey) => {
+          if (savedKey) {
+            setIdempotencyKey(savedKey);
+          } else {
+            const newKey = crypto.randomUUID();
+            setIdempotencyKey(newKey);
+            m.encryptAndSave("pch_feedback_idempotency", newKey);
+          }
+        });
+      });
     }
   }, [mounted, success]);
 
   useEffect(() => {
     setMounted(true);
-    const saved = localStorage.getItem("pch_feedback_draft");
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setForm((current) => ({ ...current, ...parsed, otpCode: "" }));
-      } catch {}
-    }
+    import("@/app/lib/cryptoStorage").then((m) => {
+      m.getAndDecrypt("pch_feedback_draft").then((saved) => {
+        if (saved) {
+          setForm((current) => ({ ...current, ...saved, otpCode: "" }));
+        }
+      });
+    });
   }, []);
 
   useEffect(() => {
     if (mounted) {
-      localStorage.setItem(
-        "pch_feedback_draft",
-        JSON.stringify({
+      import("@/app/lib/cryptoStorage").then((m) => {
+        m.encryptAndSave("pch_feedback_draft", {
           patientName: form.patientName,
           phone: form.phone,
           rating: form.rating,
           message: form.message,
           consent: form.consent,
-        })
-      );
+        });
+      });
     }
   }, [form, mounted]);
 
@@ -699,31 +706,36 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
 
   useEffect(() => {
     if (mounted) {
-      const savedKey = localStorage.getItem("pch_contact_idempotency");
-      if (savedKey) {
-        setIdempotencyKey(savedKey);
-      } else {
-        const newKey = crypto.randomUUID();
-        setIdempotencyKey(newKey);
-        localStorage.setItem("pch_contact_idempotency", newKey);
-      }
+      import("@/app/lib/cryptoStorage").then((m) => {
+        m.getAndDecrypt("pch_contact_idempotency").then((savedKey) => {
+          if (savedKey) {
+            setIdempotencyKey(savedKey);
+          } else {
+            const newKey = crypto.randomUUID();
+            setIdempotencyKey(newKey);
+            m.encryptAndSave("pch_contact_idempotency", newKey);
+          }
+        });
+      });
     }
   }, [mounted, success]);
 
   useEffect(() => {
     setMounted(true);
-    const saved = localStorage.getItem("pch_contact_draft");
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setForm((current) => ({ ...current, ...parsed }));
-      } catch {}
-    }
+    import("@/app/lib/cryptoStorage").then((m) => {
+      m.getAndDecrypt("pch_contact_draft").then((saved) => {
+        if (saved) {
+          setForm((current) => ({ ...current, ...saved }));
+        }
+      });
+    });
   }, []);
 
   useEffect(() => {
     if (mounted) {
-      localStorage.setItem("pch_contact_draft", JSON.stringify(form));
+      import("@/app/lib/cryptoStorage").then((m) => {
+        m.encryptAndSave("pch_contact_draft", form);
+      });
     }
   }, [form, mounted]);
 
