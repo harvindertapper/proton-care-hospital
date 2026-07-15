@@ -6,8 +6,9 @@ import {
   json,
   normalizePhone,
   run,
+  sanitizeHtml,
   validatePhone,
-  verifyStoredOtp,
+  verifyFirebaseToken,
   verifyTurnstile,
 } from "@/app/lib/server";
 
@@ -27,10 +28,10 @@ export async function POST(request: Request) {
   const turnstile = await verifyTurnstile(clean(body.turnstileToken, 2000), ip);
   if (!turnstile.ok) return json({ error: "Security verification failed." }, { status: 403 });
 
-  const patientName = clean(body.patientName, 100);
+  const patientName = sanitizeHtml(clean(body.patientName, 100));
   const phone = normalizePhone(clean(body.phone, 20));
   const rating = Number(body.rating || 0);
-  const message = clean(body.message, 1500);
+  const message = sanitizeHtml(clean(body.message, 1500));
   const otpCode = clean(body.otpCode, 8);
   const consent = body.consent === true;
 
@@ -38,7 +39,8 @@ export async function POST(request: Request) {
     return json({ error: "Please complete feedback, rating, phone, OTP, and consent." }, { status: 400 });
   }
 
-  const otp = await verifyStoredOtp("feedback", phone, otpCode);
+  const firebaseIdToken = clean(body.firebaseIdToken, 2000);
+  const otp = await verifyFirebaseToken(firebaseIdToken, phone);
   if (!otp.ok) return json({ error: "Please verify the mobile number with OTP before submitting feedback." }, { status: 400 });
 
   const id = crypto.randomUUID();

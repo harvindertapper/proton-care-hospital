@@ -8,6 +8,7 @@ import {
   requireAdmin,
   run,
   verifyCsrf,
+  hashPassword,
 } from "@/app/lib/server";
 import { departmentBySlug } from "@/app/lib/data";
 
@@ -25,7 +26,7 @@ function slugify(value: string) {
     .slice(0, 90);
 }
 
-async function dashboardData(role: "SUPER_ADMIN" | "STAFF") {
+async function dashboardData(session: AdminSession) {
   const [
     appointments,
     timings,
@@ -38,6 +39,7 @@ async function dashboardData(role: "SUPER_ADMIN" | "STAFF") {
     videos,
     media,
     audits,
+    sessionsData,
   ] = await Promise.all([
     query("SELECT * FROM appointments ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM department_timings ORDER BY department_name"),
@@ -50,14 +52,22 @@ async function dashboardData(role: "SUPER_ADMIN" | "STAFF") {
     query("SELECT * FROM patient_videos ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM media_assets ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 120"),
+    query("SELECT token, created_at, expires_at FROM admin_sessions WHERE email = ? AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP", session.email),
   ]);
 
   let rawAppointments = appointments.results || [];
-  if (role !== "SUPER_ADMIN") {
+  if (session.role !== "SUPER_ADMIN") {
+    const sensitiveSlugs = new Set(["psychiatry", "obstetrics-and-gynecology", "emergency-triage", "emergency-medicine"]);
     rawAppointments = rawAppointments.map((app: any) => ({
       ...app,
-      concern: "[REDACTED - SUPER ADMIN ONLY]",
+      concern: sensitiveSlugs.has(app.department_slug) ? "[REDACTED - SENSITIVE DEPT]" : app.concern,
     }));
+  }
+
+  let staffList: any[] = [];
+  if (session.role === "SUPER_ADMIN") {
+    const staffResult = await query("SELECT id, email, name, role, created_at FROM admin_users ORDER BY name");
+    staffList = staffResult.results || [];
   }
 
   return {
@@ -72,6 +82,8 @@ async function dashboardData(role: "SUPER_ADMIN" | "STAFF") {
     videos: videos.results || [],
     media: media.results || [],
     audits: audits.results || [],
+    sessions: sessionsData.results || [],
+    staff: staffList,
   };
 }
 
@@ -337,10 +349,15 @@ async function applyAction(action: string, payload: Record<string, unknown>, act
   throw new Error("Unknown admin action.");
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const admin = await requireAdmin();
   if (!admin.ok) return json({ error: admin.error }, { status: admin.status });
-  return json({ success: true, data: await dashboardData(admin.session.role) });
+  const url = new URL(request.url);
+  const action = url.searchParams.get("action");
+  if (action === "REFRESH") {
+    return json({ success: true, data: await dashboardData(admin.session) });
+  }
+  return json({ success: true, data: await dashboardData(admin.session) });
 }
 
 export async function POST(request: Request) {
@@ -352,7 +369,7 @@ export async function POST(request: Request) {
   const limit = await checkRateLimit("admin-mutation", `${admin.session.email}:${ip}`, 80, 15 * 60);
   if (!limit.ok) return json({ error: "Too many admin actions. Please wait and try again." }, { status: 429 });
 
-  const body = (await request.json().catch(() => ({}))) as { action?: string; payload?: Record<string, unknown>; [key: string]: unknown };
+  const body = (await request.json().catch(() => ({}))) as { action?: string; payload?: Record<string, unknown>; revisionId?: string; decision?: string; reviewNote?: string; modifiedPayload?: Record<string, unknown>; [key: string]: unknown };
   const action = clean(body.action, 80);
   const payload = (body.payload || body) as Record<string, unknown>;
 
@@ -372,7 +389,22 @@ export async function POST(request: Request) {
       }
       if (decision === "APPROVED") {
         const parsed = JSON.parse(revision.payload_json) as { action: string; payload: Record<string, unknown> };
-        await applyAction(parsed.action, parsed.payload, admin.session.email);
+        const finalPayload = body.modifiedPayload ? body.modifiedPayload : parsed.payload;
+
+        const valResult = validatePayload(parsed.action, finalPayload);
+        if (!valResult.ok) {
+          return json({ error: valResult.error || "Invalid payload structure." }, { status: 400 });
+        }
+
+        await applyAction(parsed.action, finalPayload, admin.session.email);
+
+        if (body.modifiedPayload) {
+          await run(
+            "UPDATE content_revisions SET payload_json = ? WHERE id = ?",
+            JSON.stringify({ action: parsed.action, payload: finalPayload }),
+            revisionId
+          );
+        }
       }
       await run(
         "UPDATE content_revisions SET status = ?, reviewed_by = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -387,6 +419,80 @@ export async function POST(request: Request) {
 
     if (action === "appointment.status") {
       await applyAppointmentStatus(payload, admin.session.email);
+      return json({ success: true });
+    }
+
+    if (action === "REVOKE_SESSION") {
+      const id = clean(payload.id, 200);
+      if (!id) throw new Error("Session ID required");
+      await run("UPDATE sessions SET revoked = 1 WHERE id = ? AND email = ?", id, admin.session.email);
+      await audit(admin.session.email, "SESSION_REVOKED", "Admin", admin.session.email, "Revoked specific session");
+      return json({ success: true });
+    }
+
+    if (action === "REVOKE_ALL_SESSIONS") {
+      const currentSessionId = (admin.session as any).sessionId;
+      if (!currentSessionId) throw new Error("Could not identify current session ID");
+      await run("UPDATE sessions SET revoked = 1 WHERE email = ? AND id != ?", admin.session.email, currentSessionId);
+      await audit(admin.session.email, "ALL_SESSIONS_REVOKED", "Admin", admin.session.email, "Revoked all other sessions");
+      return json({ success: true });
+    }
+
+    if (action === "staff.add") {
+      const superAdmin = await requireAdmin("SUPER_ADMIN");
+      if (!superAdmin.ok) return json({ error: superAdmin.error }, { status: superAdmin.status });
+
+      const staffEmail = clean(payload.email, 120).toLowerCase();
+      const staffName = clean(payload.name, 120);
+      const staffRole = clean(payload.role, 20);
+      const staffPassword = typeof payload.password === "string" ? payload.password : "";
+
+      if (!staffEmail || !staffName || !staffRole || !staffPassword) {
+        throw new Error("All fields (Email, Name, Role, Password) are required.");
+      }
+      if (staffRole !== "SUPER_ADMIN" && staffRole !== "STAFF") {
+        throw new Error("Invalid role.");
+      }
+      if (staffPassword.length < 8) {
+        throw new Error("Password must be at least 8 characters.");
+      }
+
+      const existing = await query("SELECT id FROM admin_users WHERE email = ? LIMIT 1", staffEmail);
+      if (existing.results?.length) {
+        throw new Error("A staff member with this email already exists.");
+      }
+
+      const pHash = await hashPassword(staffPassword);
+      await run(
+        "INSERT INTO admin_users (id, email, name, role, password_hash) VALUES (?, ?, ?, ?, ?)",
+        crypto.randomUUID(),
+        staffEmail,
+        staffName,
+        staffRole,
+        pHash
+      );
+      await audit(admin.session.email, "STAFF_ADDED", "AdminUser", staffEmail, `Added as ${staffRole}`);
+      return json({ success: true });
+    }
+
+    if (action === "staff.delete") {
+      const superAdmin = await requireAdmin("SUPER_ADMIN");
+      if (!superAdmin.ok) return json({ error: superAdmin.error }, { status: superAdmin.status });
+
+      const staffId = clean(payload.id, 120);
+      if (!staffId) throw new Error("Staff ID required.");
+
+      const rows = await query<{ email: string }>("SELECT email FROM admin_users WHERE id = ? LIMIT 1", staffId);
+      const staff = rows.results?.[0];
+      if (!staff) throw new Error("Staff member not found.");
+
+      if (staff.email === admin.session.email) {
+        throw new Error("You cannot delete your own account.");
+      }
+
+      await run("DELETE FROM admin_users WHERE id = ?", staffId);
+      await run("UPDATE sessions SET revoked = 1 WHERE email = ?", staff.email);
+      await audit(admin.session.email, "STAFF_DELETED", "AdminUser", staff.email, `Removed staff member`);
       return json({ success: true });
     }
 
@@ -407,4 +513,35 @@ export async function POST(request: Request) {
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : "Admin action failed." }, { status: 400 });
   }
+}
+
+function validatePayload(action: string, payload: unknown): { ok: boolean; error?: string } {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return { ok: false, error: "Payload must be a valid JSON object." };
+  }
+  const obj = payload as Record<string, unknown>;
+
+  if (action === "doctor.save") {
+    if (typeof obj.name !== "string" || !obj.name.trim()) return { ok: false, error: "Doctor name is required." };
+    if (typeof obj.speciality !== "string" || !obj.speciality.trim()) return { ok: false, error: "Speciality is required." };
+    if (typeof obj.departmentSlug !== "string" || !obj.departmentSlug.trim()) return { ok: false, error: "Department slug is required." };
+    if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Doctor slug is required." };
+  } else if (action === "timing.upsert") {
+    if (typeof obj.departmentSlug !== "string" || !obj.departmentSlug.trim()) return { ok: false, error: "Department slug is required." };
+    if (typeof obj.startTime !== "string" || !obj.startTime.trim()) return { ok: false, error: "Start time is required." };
+    if (typeof obj.endTime !== "string" || !obj.endTime.trim()) return { ok: false, error: "End time is required." };
+    if (typeof obj.days !== "string" || !obj.days.trim()) return { ok: false, error: "Days parameter is required." };
+  } else if (action === "blog.save") {
+    if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Blog title is required." };
+    if (typeof obj.body !== "string" || !obj.body.trim()) return { ok: false, error: "Blog body is required." };
+    if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Blog slug is required." };
+  } else if (action === "career.save") {
+    if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Job title is required." };
+    if (typeof obj.description !== "string" || !obj.description.trim()) return { ok: false, error: "Job description is required." };
+    if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Job slug is required." };
+  } else if (action === "video.save") {
+    if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Video title is required." };
+    if (typeof obj.youtubeUrl !== "string" || !obj.youtubeUrl.trim()) return { ok: false, error: "YouTube URL is required." };
+  }
+  return { ok: true };
 }

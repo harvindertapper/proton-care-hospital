@@ -86,10 +86,14 @@ export function Footer() {
           <a href={hospital.emailHref}>{hospital.email}</a>
         </div>
         <div>
-          <h3>Care</h3>
+          <h3>Care & Info</h3>
+          <Link href="/about">About Us</Link>
           <Link href="/departments">Departments</Link>
           <Link href="/doctors">Doctors</Link>
+          <Link href="/gallery">Gallery</Link>
           <Link href="/tpa-insurance">TPA / Insurance</Link>
+          <Link href="/faqs">FAQs</Link>
+          <Link href="/appointment/status">Track Appointment</Link>
           <Link href="/privacy-policy">Privacy Policy</Link>
           <Link href="/terms-disclaimer">Terms & Medical Disclaimer</Link>
         </div>
@@ -128,6 +132,15 @@ export function PageShell({ children }: { children: React.ReactNode }) {
       <main>{children}</main>
       <Footer />
       <MobileActionBar />
+      <a
+        href={formatWhatsApp("Hi, I would like to enquire about services at Protone Care Hospital.")}
+        className="whatsapp-float"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Chat on WhatsApp"
+      >
+        <MessageCircle size={24} color="white" aria-hidden="true" />
+      </a>
     </>
   );
 }

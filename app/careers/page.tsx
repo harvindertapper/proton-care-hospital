@@ -3,6 +3,7 @@ import { BriefcaseBusiness, Mail } from "lucide-react";
 import { hospital, SITE_URL } from "@/app/lib/data";
 import { getPublishedJobs } from "@/app/lib/public-data";
 import { PageHero, PageShell, SectionHeader } from "@/app/components/SiteShell";
+import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
@@ -27,12 +28,18 @@ export default async function CareersPage() {
           {jobs.length ? (
             <div className="career-grid">
               {jobs.map((job) => (
-                <article className="career-card" key={job.slug}>
-                  <BriefcaseBusiness size={24} aria-hidden="true" />
-                  <h3>{job.title}</h3>
-                  <p>{job.department || "Hospital"} · {job.employment_type || "Role"}</p>
-                  <p>{job.description || "Please contact the hospital for role details."}</p>
-                  <a href={hospital.emailHref} className="small-button"><Mail size={16} aria-hidden="true" /> Apply by Email</a>
+                <article className="career-card" key={job.slug} style={{ display: "flex", flexDirection: "column" }}>
+                  <BriefcaseBusiness size={24} aria-hidden="true" style={{ marginBottom: 16 }} />
+                  <Link href={`/careers/${job.slug}`} style={{ flex: 1 }}>
+                    <h3 className="transition-colors duration-300 hover:text-teal-600">{job.title}</h3>
+                    <p style={{ marginTop: 8 }}>{job.department || "Hospital"} · {job.employment_type || "Role"}</p>
+                    <p style={{ marginTop: 12, opacity: 0.8, fontSize: "0.9em" }}>{job.description ? job.description.slice(0, 150) + "..." : "View role details."}</p>
+                  </Link>
+                  <div style={{ marginTop: 24, display: "flex", gap: 12 }}>
+                    <Link href={`/careers/${job.slug}`} className="small-button">
+                      View Details
+                    </Link>
+                  </div>
                 </article>
               ))}
             </div>

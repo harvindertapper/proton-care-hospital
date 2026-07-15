@@ -56,7 +56,7 @@ export function DoctorDirectory({
           const dept = departmentMap.get(doctor.departmentSlug);
           return (
             <article className="doctor-card transition-all duration-300 hover:-translate-y-1.5 hover:shadow-md hover:border-teal-500/40 group cursor-pointer" key={doctor.slug}>
-              <div className="doctor-photo overflow-hidden">
+              <Link href={`/doctors/${doctor.slug}`} className="doctor-photo overflow-hidden block">
                 {doctor.photo ? (
                   <img src={doctor.photo} alt={`${doctor.name}, ${doctor.speciality} at Protone Care Hospital`} className="transition-transform duration-500 group-hover:scale-105" />
                 ) : (
@@ -65,12 +65,14 @@ export function DoctorDirectory({
                     <span>{initials(doctor.name)}</span>
                   </div>
                 )}
-              </div>
+              </Link>
               <div className="doctor-body transition-colors duration-300 group-hover:bg-slate-50/50">
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-teal-50 text-teal-700 transition-all duration-300 group-hover:bg-teal-100 group-hover:text-teal-800 shadow-sm border border-teal-100/50">
                   {dept?.name || "Department"}
                 </span>
-                <h3 className="transition-colors duration-300 group-hover:text-teal-600">{doctor.name}</h3>
+                <Link href={`/doctors/${doctor.slug}`}>
+                  <h3 className="transition-colors duration-300 group-hover:text-teal-600">{doctor.name}</h3>
+                </Link>
                 <p>{doctor.speciality}</p>
                 {doctor.qualification ? <strong>{doctor.qualification}</strong> : null}
                 <Link href={`/appointment?dept=${doctor.departmentSlug}`} className="small-button transition-transform duration-300 hover:scale-105">

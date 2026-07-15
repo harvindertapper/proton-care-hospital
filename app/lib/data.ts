@@ -295,6 +295,8 @@ export const publicNav = [
   { href: "/testimonials", label: "Testimonials" },
   { href: "/blog", label: "Blog" },
   { href: "/careers", label: "Careers" },
+  { href: "/faqs", label: "FAQs" },
+  { href: "/appointment/status", label: "Track Status" },
   { href: "/contact", label: "Contact" },
 ];
 

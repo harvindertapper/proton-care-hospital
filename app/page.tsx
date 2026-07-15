@@ -11,6 +11,7 @@ import {
 } from "@/app/lib/data";
 import { ArrowLink, EmergencyBand, InfoBadge, PageShell, PrimaryActions, SectionHeader, TimingNote } from "@/app/components/SiteShell";
 import { HeroCarousel } from "@/app/components/HeroCarousel";
+import { ScrollReveal } from "@/app/components/ScrollReveal";
 
 export const metadata: Metadata = {
   title: "Protone Care Hospital | 24x7 Emergency & Multispeciality Care",
@@ -72,26 +73,28 @@ export default function Home() {
             title="Care pathways built around emergency, OPD, diagnostics, and recovery"
             body="The public website is structured around the way patients actually need help: urgent care, department consultation, diagnostics, insurance support, and follow-up contact."
           />
-          <div className="quick-grid">
-            <article className="quick-card">
-              <HeartPulse size={26} aria-hidden="true" />
-              <h3>Emergency & Critical Care</h3>
-              <p>24x7 emergency support with ICU, NICU, and HDU capabilities.</p>
-              <ArrowLink href="/contact">Reach emergency desk</ArrowLink>
-            </article>
-            <article className="quick-card">
-              <Stethoscope size={26} aria-hidden="true" />
-              <h3>Department OPD</h3>
-              <p>Request preferred available appointment slots. Final confirmation is handled by our staff.</p>
-              <ArrowLink href="/appointment">Request appointment</ArrowLink>
-            </article>
-            <article className="quick-card">
-              <FlaskConical size={26} aria-hidden="true" />
-              <h3>Diagnostics & Support</h3>
-              <p>Advanced lab, digital X-ray, ultrasound, pharmacy, dental, and health checkup support.</p>
-              <ArrowLink href="/departments">View departments</ArrowLink>
-            </article>
-          </div>
+          <ScrollReveal>
+            <div className="quick-grid">
+              <article className="quick-card">
+                <HeartPulse size={26} aria-hidden="true" />
+                <h3>Emergency & Critical Care</h3>
+                <p>24x7 emergency support with ICU, NICU, and HDU capabilities.</p>
+                <ArrowLink href="/contact">Reach emergency desk</ArrowLink>
+              </article>
+              <article className="quick-card">
+                <Stethoscope size={26} aria-hidden="true" />
+                <h3>Department OPD</h3>
+                <p>Request preferred available appointment slots. Final confirmation is handled by our staff.</p>
+                <ArrowLink href="/appointment">Request appointment</ArrowLink>
+              </article>
+              <article className="quick-card">
+                <FlaskConical size={26} aria-hidden="true" />
+                <h3>Diagnostics & Support</h3>
+                <p>Advanced lab, digital X-ray, ultrasound, pharmacy, dental, and health checkup support.</p>
+                <ArrowLink href="/departments">View departments</ArrowLink>
+              </article>
+            </div>
+          </ScrollReveal>
         </div>
       </section>
 
@@ -102,41 +105,45 @@ export default function Home() {
             title="Our Medical Specialities & Services"
             body="Please select your required medical department below. Select your preferred timing window to request an OPD consultation slot."
           />
-          <div className="department-grid">
-            {featuredDepartments.map((department) => (
-              <article className="department-card" key={department.slug}>
-                <span className="hindi-label">{department.hindi}</span>
-                <h3>{department.name}</h3>
-                <p>{department.summary}</p>
-                {department.timing ? <InfoBadge>{department.timing.label}</InfoBadge> : <InfoBadge>Call for availability</InfoBadge>}
-                <ArrowLink href={`/departments/${department.slug}`}>Department details</ArrowLink>
-              </article>
-            ))}
-          </div>
-          <div className="action-row">
-            <Link href="/departments" className="button subtle">View all departments</Link>
-          </div>
+          <ScrollReveal>
+            <div className="department-grid">
+              {featuredDepartments.map((department) => (
+                <article className="department-card" key={department.slug}>
+                  <span className="hindi-label">{department.hindi}</span>
+                  <h3>{department.name}</h3>
+                  <p>{department.summary}</p>
+                  {department.timing ? <InfoBadge>{department.timing.label}</InfoBadge> : <InfoBadge>Call for availability</InfoBadge>}
+                  <ArrowLink href={`/departments/${department.slug}`}>Department details</ArrowLink>
+                </article>
+              ))}
+            </div>
+            <div className="action-row">
+              <Link href="/departments" className="button subtle">View all departments</Link>
+            </div>
+          </ScrollReveal>
         </div>
       </section>
 
       <section className="section">
         <div className="container">
           <SectionHeader eyebrow="Facilities" title="Hospital facilities grouped for quick patient decisions" />
-          <div className="facility-grid">
-            {facilityGroups.map((group) => (
-              <article className="facility-card" key={group.title}>
-                <Building2 size={24} aria-hidden="true" />
-                <h3>{group.title}</h3>
-                <ul>
-                  {group.items.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-              </article>
-            ))}
-          </div>
-          <div className="safety-note" style={{ marginTop: 18 }}>
-            <ShieldCheck size={20} aria-hidden="true" />
-            <p>{facilities.join(" · ")}</p>
-          </div>
+          <ScrollReveal>
+            <div className="facility-grid">
+              {facilityGroups.map((group) => (
+                <article className="facility-card" key={group.title}>
+                  <Building2 size={24} aria-hidden="true" />
+                  <h3>{group.title}</h3>
+                  <ul>
+                    {group.items.map((item) => <li key={item}>{item}</li>)}
+                  </ul>
+                </article>
+              ))}
+            </div>
+            <div className="safety-note" style={{ marginTop: 18 }}>
+              <ShieldCheck size={20} aria-hidden="true" />
+              <p>{facilities.join(" · ")}</p>
+            </div>
+          </ScrollReveal>
           <div className="action-row" style={{ marginTop: 24 }}>
             <Link href="/about" className="button subtle">Learn more about us</Link>
             <Link href="/gallery" className="button subtle">View hospital gallery</Link>
@@ -151,16 +158,18 @@ export default function Home() {
             title="OPD Consultation & Timing Schedules"
             body="Select an available time slot to coordinate your primary check-in with our consultants."
           />
-          <div className="quick-grid">
-            {departments.filter((item) => item.timing).map((department) => (
-              <article className="quick-card" key={department.slug}>
-                <Activity size={25} aria-hidden="true" />
-                <h3>{department.name}</h3>
-                <p>{department.timing?.days} · {department.timing?.label}</p>
-                <ArrowLink href={`/appointment?dept=${department.slug}`}>Request slot</ArrowLink>
-              </article>
-            ))}
-          </div>
+          <ScrollReveal>
+            <div className="quick-grid">
+              {departments.filter((item) => item.timing).map((department) => (
+                <article className="quick-card" key={department.slug}>
+                  <Activity size={25} aria-hidden="true" />
+                  <h3>{department.name}</h3>
+                  <p>{department.timing?.days} · {department.timing?.label}</p>
+                  <ArrowLink href={`/appointment?dept=${department.slug}`}>Request slot</ArrowLink>
+                </article>
+              ))}
+            </div>
+          </ScrollReveal>
           <div style={{ marginTop: 18 }}>
             <TimingNote />
           </div>

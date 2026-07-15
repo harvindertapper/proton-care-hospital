@@ -103,3 +103,33 @@ export async function getPublishedVideos() {
     return [];
   }
 }
+
+export async function getBlogBySlug(slug: string): Promise<PublicBlog | null> {
+  try {
+    const rows = await query<PublicBlog>(
+      "SELECT id, slug, title, excerpt, body, created_at FROM blog_posts WHERE slug = ? AND status = 'APPROVED' AND is_visible = 1",
+      [slug]
+    );
+    if (rows.results?.length) return rows.results[0];
+  } catch {
+    // fallback
+    const fallback = defaultBlogs.find((item) => item.slug === slug && item.status === "approved");
+    if (fallback) return { ...fallback, body: fallback.excerpt };
+  }
+  return null;
+}
+
+export async function getJobBySlug(slug: string): Promise<PublicJob | null> {
+  try {
+    const rows = await query<PublicJob>(
+      "SELECT id, slug, title, department, employment_type, description FROM career_jobs WHERE slug = ? AND status = 'APPROVED' AND is_visible = 1",
+      [slug]
+    );
+    if (rows.results?.length) return rows.results[0];
+  } catch {
+    // fallback
+    const fallback = defaultJobs.find((item) => item.slug === slug && item.status === "approved");
+    if (fallback) return { ...fallback, employment_type: fallback.type, description: fallback.title };
+  }
+  return null;
+}

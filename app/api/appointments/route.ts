@@ -3,15 +3,18 @@ import {
   checkIdempotency,
   checkRateLimit,
   getClientIp,
+  getD1,
   getDepartment,
   isHoneypotTriggered,
   json,
   nextRequestId,
   normalizePhone,
   run,
+  sanitizeHtml,
   saveIdempotency,
+  validateEmail,
   validatePhone,
-  verifyStoredOtp,
+  verifyFirebaseToken,
   verifyTurnstile,
 } from "@/app/lib/server";
 
@@ -47,13 +50,13 @@ export async function POST(request: Request) {
     return json({ error: "Security verification failed. Please refresh and try again." }, { status: 403 });
   }
 
-  const patientName = cleanText(body.patientName, 120);
+  const patientName = sanitizeHtml(cleanText(body.patientName, 120));
   const phone = normalizePhone(cleanText(body.phone, 20));
-  const email = cleanText(body.email, 160).toLowerCase();
+  const email = sanitizeHtml(cleanText(body.email, 160).toLowerCase());
   const departmentSlug = cleanText(body.departmentSlug, 120);
   const requestedDate = cleanText(body.requestedDate, 20);
   const requestedTime = cleanText(body.requestedTime, 20);
-  const concern = cleanText(body.concern, 1200);
+  const concern = sanitizeHtml(cleanText(body.concern, 1200));
   const otpCode = cleanText(body.otpCode, 8);
   const consent = body.consent === true;
 
@@ -65,7 +68,7 @@ export async function POST(request: Request) {
   const isUntimed = department && !department.timing;
   const timeValid = isUntimed ? (requestedTime === "Manual Allocation") : requestedTime;
 
-  if (patientName.length < 2 || !validatePhone(phone) || !email.includes("@") || !department || !requestedDate || !timeValid || concern.length < 5 || !consent) {
+  if (patientName.length < 2 || !validatePhone(phone) || !validateEmail(email) || !department || !requestedDate || !timeValid || concern.length < 5 || !consent) {
     return json({ error: "Please complete all required appointment fields and consent." }, { status: 400 });
   }
 
@@ -94,24 +97,28 @@ export async function POST(request: Request) {
     return json({ error: "A recent request already exists for these contact details. Our team will contact you shortly." }, { status: 429 });
   }
 
-  const otp = await verifyStoredOtp("appointment", phone, otpCode);
+  const firebaseIdToken = cleanText(body.firebaseIdToken, 2000);
+  const otp = await verifyFirebaseToken(firebaseIdToken, phone);
   if (!otp.ok) {
     return json({ error: "Please verify the mobile number with OTP before submitting." }, { status: 400 });
   }
 
-  let requestId = "";
   const id = crypto.randomUUID();
-  let inserted = false;
-  let attempts = 0;
+  const requestId = await nextRequestId();
+  const db = await getD1();
 
-  while (!inserted && attempts < 5) {
-    try {
-      attempts++;
-      requestId = await nextRequestId();
-      await run(
+  try {
+    await db.batch([
+      db.prepare(
+        `SELECT 1 FROM appointments 
+         WHERE department_slug = ? AND requested_date = ? AND requested_time = ? AND phone != ?
+         AND status != 'CANCELLED' LIMIT 1`
+      ).bind(department.slug, requestedDate, requestedTime, phone),
+      db.prepare(
         `INSERT INTO appointments
           (id, request_id, patient_name, phone, email, department_slug, department_name, requested_date, requested_time, concern, consent, otp_verified, ip_address, user_agent, schedule_version)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, 1)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, 1)`
+      ).bind(
         id,
         requestId,
         patientName,
@@ -123,16 +130,14 @@ export async function POST(request: Request) {
         requestedTime,
         concern,
         ip,
-        request.headers.get("user-agent") || "",
-      );
-      inserted = true;
-    } catch (err: any) {
-      if (err?.message?.includes("UNIQUE constraint failed") && attempts < 5) {
-        await new Promise((resolve) => setTimeout(resolve, Math.random() * 50 + 10));
-        continue;
-      }
-      throw err;
+        request.headers.get("user-agent") || ""
+      )
+    ]);
+  } catch (err: any) {
+    if (err?.message?.includes("UNIQUE constraint failed")) {
+      return json({ error: "This time slot has just been booked. Please select another slot." }, { status: 409 });
     }
+    throw err;
   }
 
   await audit("system", "APPOINTMENT_CREATED", "Appointment", id, `${requestId} ${department.name} ${requestedDate} ${requestedTime}`);

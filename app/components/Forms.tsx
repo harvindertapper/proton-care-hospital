@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { AlertCircle, CheckCircle2, LockKeyhole, MessageCircle, PhoneCall, Send, Sunrise, Sun } from "lucide-react";
 import type { Department } from "@/app/lib/data";
 import { consentText, emergencyNotice, hospital } from "@/app/lib/data";
+import { auth, RecaptchaVerifier, signInWithPhoneNumber, type ConfirmationResult } from "@/app/lib/firebaseClient";
 
 type SlotsResponse = {
   departmentName?: string;
@@ -105,6 +106,8 @@ export function AppointmentForm({
   const [busy, setBusy] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
   const [otpVerified, setOtpVerified] = useState(false);
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
+  const [firebaseIdToken, setFirebaseIdToken] = useState("");
   const [idempotencyKey, setIdempotencyKey] = useState("");
   const department = useMemo(
     () => selectableDepartments.find((item) => item.slug === departmentSlug),
@@ -223,11 +226,19 @@ export function AppointmentForm({
     setBusy(true);
     setMessage("");
     try {
-      const data = await postJson("/api/otp/send", { phone: form.phone, purpose: "appointment" });
+      if (!(window as any).appointmentRecaptchaVerifier) {
+        (window as any).appointmentRecaptchaVerifier = new RecaptchaVerifier(auth, "recaptcha-container", {
+          size: "invisible",
+        });
+      }
+      const digits = form.phone.replace(/\D/g, "");
+      const formattedPhone = digits.length === 10 ? `+91${digits}` : `+${digits}`;
+      const result = await signInWithPhoneNumber(auth, formattedPhone, (window as any).appointmentRecaptchaVerifier);
+      setConfirmationResult(result);
       setOtpSent(true);
-      setMessage(String(data.previewOtp ? `Preview OTP: ${data.previewOtp}` : data.message || "OTP sent."));
+      setMessage("OTP sent to your mobile number.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not send OTP.");
+      setMessage(error instanceof Error ? error.message : "Could not send OTP. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -237,12 +248,15 @@ export function AppointmentForm({
     setBusy(true);
     setMessage("");
     try {
-      await postJson("/api/otp/verify", { phone: form.phone, code: form.otpCode, purpose: "appointment" });
+      if (!confirmationResult) throw new Error("No active OTP request.");
+      const userCredential = await confirmationResult.confirm(form.otpCode);
+      const idToken = await userCredential.user.getIdToken();
+      setFirebaseIdToken(idToken);
       setOtpVerified(true);
       setStep(3);
       setMessage("Mobile number verified.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "OTP verification failed.");
+      setMessage("OTP verification failed. Please check the code and try again.");
     } finally {
       setBusy(false);
     }
@@ -259,6 +273,7 @@ export function AppointmentForm({
         departmentSlug,
         turnstileToken,
         idempotencyKey,
+        firebaseIdToken,
       });
       setSuccess(true);
       setMessage(`${data.message || "Your appointment request has been registered securely."} Reference ID: ${data.requestId || ""}`);
@@ -502,6 +517,8 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
   const [busy, setBusy] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
   const [otpVerified, setOtpVerified] = useState(false);
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
+  const [firebaseIdToken, setFirebaseIdToken] = useState("");
   const [message, setMessage] = useState("");
   const [success, setSuccess] = useState(false);
 
@@ -555,11 +572,19 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
     setBusy(true);
     setMessage("");
     try {
-      const data = await postJson("/api/otp/send", { phone: form.phone, purpose: "feedback" });
+      if (!(window as any).feedbackRecaptchaVerifier) {
+        (window as any).feedbackRecaptchaVerifier = new RecaptchaVerifier(auth, "feedback-recaptcha-container", {
+          size: "invisible",
+        });
+      }
+      const digits = form.phone.replace(/\D/g, "");
+      const formattedPhone = digits.length === 10 ? `+91${digits}` : `+${digits}`;
+      const result = await signInWithPhoneNumber(auth, formattedPhone, (window as any).feedbackRecaptchaVerifier);
+      setConfirmationResult(result);
       setOtpSent(true);
-      setMessage(String(data.previewOtp ? `Preview OTP: ${data.previewOtp}` : data.message || "OTP sent."));
+      setMessage("OTP sent to your mobile number.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not send OTP.");
+      setMessage(error instanceof Error ? error.message : "Could not send OTP. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -569,11 +594,14 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
     setBusy(true);
     setMessage("");
     try {
-      await postJson("/api/otp/verify", { phone: form.phone, code: form.otpCode, purpose: "feedback" });
+      if (!confirmationResult) throw new Error("No active OTP request.");
+      const userCredential = await confirmationResult.confirm(form.otpCode);
+      const idToken = await userCredential.user.getIdToken();
+      setFirebaseIdToken(idToken);
       setOtpVerified(true);
       setMessage("Mobile number verified.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "OTP verification failed.");
+      setMessage("OTP verification failed. Please check the code and try again.");
     } finally {
       setBusy(false);
     }
@@ -590,6 +618,7 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
         rating: Number(form.rating),
         turnstileToken,
         idempotencyKey,
+        firebaseIdToken,
       });
       setSuccess(true);
       setMessage(String(data.message || "Feedback submitted for review."));
@@ -644,6 +673,7 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
           Verify
         </button>
       </div>
+      <div id="feedback-recaptcha-container"></div>
       <TurnstileBox siteKey={turnstileSiteKey} onToken={setTurnstileToken} />
       <label className="checkbox-field">
         <input type="checkbox" checked={form.consent} onChange={(event) => update("consent", event.target.checked)} required />

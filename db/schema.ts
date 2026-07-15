@@ -11,6 +11,16 @@ export const adminUsers = sqliteTable("admin_users", {
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const sessions = sqliteTable("sessions", {
+  id: text("id").primaryKey(),
+  email: text("email").notNull(),
+  role: text("role", { enum: ["SUPER_ADMIN", "STAFF"] }).notNull().default("STAFF"),
+  csrf: text("csrf").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  expiresAt: text("expires_at").notNull(),
+  revoked: integer("revoked").notNull().default(0),
+});
+
 export const appointments = sqliteTable("appointments", {
   id: text("id").primaryKey(),
   requestId: text("request_id").notNull().unique(),

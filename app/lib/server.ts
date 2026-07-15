@@ -17,6 +17,15 @@ const tableStatements = [
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'STAFF',
+    csrf TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at INTEGER NOT NULL,
+    revoked INTEGER NOT NULL DEFAULT 0
+  )`,
   `CREATE TABLE IF NOT EXISTS appointments (
     id TEXT PRIMARY KEY,
     request_id TEXT NOT NULL UNIQUE,
@@ -184,11 +193,18 @@ const tableStatements = [
   `CREATE INDEX IF NOT EXISTS revisions_status_idx ON content_revisions(status, created_at)`,
   `CREATE INDEX IF NOT EXISTS doctors_department_idx ON doctor_profiles(department_slug, is_visible)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS rate_limits_action_identifier_idx ON rate_limits(action, identifier)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS admin_users_email_idx ON admin_users(email)`,
+  `CREATE INDEX IF NOT EXISTS sessions_id_idx ON sessions(id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_slot ON appointments(department_slug, requested_date, requested_time, phone) WHERE status != 'CANCELLED'`,
   `CREATE TABLE IF NOT EXISTS idempotent_requests (
     id TEXT PRIMARY KEY,
     payload_hash TEXT NOT NULL,
     response_body TEXT NOT NULL,
     created_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS verified_tokens (
+    signature TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL
   )`,
 ];
 
@@ -219,6 +235,7 @@ export async function getD1() {
     }
     await seedDepartmentTimings(db);
     await seedDoctorProfiles(db);
+    await seedAdminUsers(db);
     initialized = true;
   }
 
@@ -247,6 +264,66 @@ async function seedDepartmentTimings(db: D1Database) {
         ),
     ),
   );
+}
+
+export async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    { name: "PBKDF2" },
+    false,
+    ["deriveBits"]
+  );
+  const hash = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
+    keyMaterial,
+    256
+  );
+  const saltHex = Array.from(salt).map(b => b.toString(16).padStart(2, "0")).join("");
+  const hashHex = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
+  return `${saltHex}:${hashHex}`;
+}
+
+export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  const [saltHex, hashHex] = storedHash.split(":");
+  if (!saltHex || !hashHex) return false;
+  const salt = new Uint8Array(saltHex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    { name: "PBKDF2" },
+    false,
+    ["deriveBits"]
+  );
+  const hash = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
+    keyMaterial,
+    256
+  );
+  const computedHashHex = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
+  
+  const encoder = new TextEncoder();
+  const a = encoder.encode(computedHashHex);
+  const b = encoder.encode(hashHex);
+  if (a.byteLength !== b.byteLength) return false;
+  let result = 0;
+  for (let i = 0; i < a.byteLength; i++) {
+    result |= a[i] ^ b[i];
+  }
+  return result === 0;
+}
+
+async function seedAdminUsers(db: D1Database) {
+  const adminEmail = process.env.ADMIN_EMAIL || "admin@protoncare.in";
+  const adminPassword = process.env.ADMIN_PASSWORD || "ProtonCare@2024!";
+  const rows = await db.prepare("SELECT id FROM admin_users WHERE email = ? LIMIT 1").bind(adminEmail).all();
+  if (rows.results && rows.results.length === 0) {
+    const hash = await hashPassword(adminPassword);
+    await db.prepare(
+      `INSERT OR IGNORE INTO admin_users (id, email, name, role, password_hash) VALUES (?, ?, ?, ?, ?)`
+    ).bind(crypto.randomUUID(), adminEmail, "Super Admin", "SUPER_ADMIN", hash).run();
+  }
 }
 
 async function seedDoctorProfiles(db: D1Database) {
@@ -460,90 +537,93 @@ export function validatePhone(phone: string) {
   return /^[6-9]\d{9}$/.test(normalizePhone(phone));
 }
 
-export async function sendSms91Otp(phone: string, code: string) {
-  const authKey = process.env.SMS91_AUTH_KEY || process.env.MSG91_AUTH_KEY;
-  const templateId = process.env.SMS91_OTP_TEMPLATE_ID || process.env.MSG91_OTP_TEMPLATE_ID;
-  const senderId = process.env.SMS91_SENDER_ID || process.env.MSG91_SENDER_ID;
-
-  if (!authKey || !templateId) {
-    return {
-      ok: process.env.NODE_ENV !== "production",
-      configured: false,
-      launchBlocked: true,
-      message: "SMS91 credentials/templates are not configured. OTP is stored for preview verification only.",
-    };
-  }
-
-  const url = new URL("https://control.msg91.com/api/v5/otp");
-  url.searchParams.set("template_id", templateId);
-  url.searchParams.set("mobile", `91${phone}`);
-  url.searchParams.set("otp", code);
-  if (senderId) url.searchParams.set("sender", senderId);
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      authkey: authKey,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({}),
-  });
-
-  return { ok: response.ok, configured: true, providerStatus: response.status };
+export function validateEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) && email.length <= 254;
 }
 
-export async function verifySms91Otp(phone: string, code: string) {
-  const authKey = process.env.SMS91_AUTH_KEY || process.env.MSG91_AUTH_KEY;
-  if (!authKey) return { ok: process.env.NODE_ENV !== "production", configured: false, launchBlocked: true };
-
-  const url = new URL("https://control.msg91.com/api/v5/otp/verify");
-  url.searchParams.set("mobile", `91${phone}`);
-  url.searchParams.set("otp", code);
-
-  const response = await fetch(url, { headers: { authkey: authKey } });
-  const payload = (await response.json().catch(() => ({}))) as { type?: string };
-  return { ok: response.ok && payload.type !== "error", configured: true };
+export function sanitizeHtml(input: string): string {
+  return input
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
 }
 
-export async function createOtpChallenge(purpose: string, phone: string, ip: string) {
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const id = crypto.randomUUID();
-  const expiresAt = Date.now() + 10 * 60 * 1000;
-  await run(
-    "INSERT INTO otp_challenges (id, purpose, phone, code_hash, ip_address, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
-    id,
-    purpose,
-    phone,
-    await hashOtp(code, phone),
-    ip,
-    expiresAt,
-  );
-  const delivery = await sendSms91Otp(phone, code);
-  await audit("system", "OTP_SENT", "OtpChallenge", id, `${purpose} OTP requested for ${phone}; configured=${delivery.configured}`);
-  return { id, code: (delivery.configured || process.env.NODE_ENV === "production") ? undefined : code, delivery };
+
+
+function decodeBase64Url(str: string) {
+  str = str.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = str.length % 4;
+  if (pad) str += "=".repeat(4 - pad);
+  return atob(str);
 }
 
-export async function verifyStoredOtp(purpose: string, phone: string, code: string) {
-  const rows = await query<{ id: string; code_hash: string; attempts: number; expires_at: number; status: string }>(
-    "SELECT id, code_hash, attempts, expires_at, status FROM otp_challenges WHERE phone = ? AND purpose = ? AND status IN ('PENDING', 'VERIFIED') ORDER BY created_at DESC LIMIT 1",
-    phone,
-    purpose,
-  );
-  const challenge = rows.results?.[0];
-  if (!challenge || challenge.expires_at < Date.now()) return { ok: false };
-
-  const providerCheck = await verifySms91Otp(phone, code);
-  const localOk = challenge.code_hash === (await hashOtp(code, phone));
-  if (challenge.status === "VERIFIED" && localOk) {
-    return { ok: true };
-  }
-  if (providerCheck.ok && localOk) {
-    await run("UPDATE otp_challenges SET status = 'VERIFIED', verified_at = CURRENT_TIMESTAMP WHERE id = ?", challenge.id);
-    return { ok: true };
+export async function verifyFirebaseToken(token: string, phoneToVerify?: string) {
+  const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+  if (!projectId) {
+    if (process.env.NODE_ENV !== "production") return { ok: true, phone: phoneToVerify };
+    return { ok: false };
   }
 
-  await run("UPDATE otp_challenges SET attempts = attempts + 1 WHERE id = ?", challenge.id);
-  return { ok: false };
+  const parts = token.split(".");
+  if (parts.length !== 3) return { ok: false };
+
+  try {
+    const header = JSON.parse(decodeBase64Url(parts[0]));
+    const payload = JSON.parse(decodeBase64Url(parts[1]));
+
+    if (payload.aud !== projectId || payload.iss !== `https://securetoken.google.com/${projectId}`) {
+      return { ok: false };
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    // Allow clock skew of up to 5 minutes (300 seconds)
+    if (payload.exp < now - 300) return { ok: false };
+    if (payload.iat > now + 300) return { ok: false };
+
+    // Replay attack prevention check
+    const signatureHash = parts[2];
+    const existing = await query("SELECT signature FROM verified_tokens WHERE signature = ? LIMIT 1", signatureHash);
+    if (existing.results?.length) {
+      return { ok: false };
+    }
+
+    if (phoneToVerify) {
+      const tokenPhone = String(payload.phone_number || "").replace(/\D/g, "");
+      const expectedPhone = String(phoneToVerify).replace(/\D/g, "");
+      if (tokenPhone.slice(-10) !== expectedPhone.slice(-10)) return { ok: false };
+    }
+
+    const res = await fetch("https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com");
+    const jwks = await res.json() as { keys: any[] };
+    const jwk = jwks.keys.find((k: any) => k.kid === header.kid);
+    if (!jwk) return { ok: false };
+
+    const key = await crypto.subtle.importKey(
+      "jwk",
+      jwk,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["verify"]
+    );
+
+    const encoder = new TextEncoder();
+    const data = encoder.encode(parts[0] + "." + parts[1]);
+    const signature = Uint8Array.from(decodeBase64Url(parts[2]), c => c.charCodeAt(0));
+
+    const isValid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, signature, data);
+    if (isValid) {
+      // Record this signature so it cannot be replayed
+      await run("INSERT OR IGNORE INTO verified_tokens (signature, expires_at) VALUES (?, ?)", signatureHash, payload.exp * 1000);
+      // Clean up expired verified tokens in the background
+      run("DELETE FROM verified_tokens WHERE expires_at < ?", Date.now()).catch(() => {});
+    }
+
+    return { ok: isValid, phone: payload.phone_number };
+  } catch {
+    return { ok: false };
+  }
 }
 
 export async function audit(actorEmail: string, action: string, entityType?: string, entityId?: string, details = "") {
@@ -601,8 +681,16 @@ export function parseYouTubeId(value: string) {
 export async function createAdminSession(email: string, role: "SUPER_ADMIN" | "STAFF") {
   const secret = sessionSecret();
   if (!secret) throw new Error("Admin session secret is not configured.");
+  const sessionId = crypto.randomUUID();
   const csrf = crypto.randomUUID();
-  const payload = JSON.stringify({ email, role, csrf, exp: Date.now() + SESSION_MAX_AGE_SECONDS * 1000 });
+  const exp = Date.now() + SESSION_MAX_AGE_SECONDS * 1000;
+  
+  await run(
+    "INSERT INTO sessions (id, email, role, csrf, expires_at) VALUES (?, ?, ?, ?, ?)",
+    sessionId, email, role, csrf, exp
+  );
+  
+  const payload = JSON.stringify({ sessionId });
   const encoded = btoa(payload);
   return { token: `${encoded}.${await hmac(encoded, secret)}`, csrf };
 }
@@ -615,12 +703,29 @@ export async function verifyAdminSession() {
   const token = cookieStore.get(name)?.value;
   if (!token) return null;
   const [encoded, signature] = token.split(".");
-  if (!encoded || !signature || (await hmac(encoded, secret)) !== signature) return null;
+  if (!encoded || !signature) return null;
+  
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"]
+  );
+  
+  const signatureBytes = new Uint8Array(signature.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || []);
+  const isValid = await crypto.subtle.verify("HMAC", key, signatureBytes, new TextEncoder().encode(encoded));
+  if (!isValid) return null;
 
   try {
-    const payload = JSON.parse(atob(encoded)) as { email: string; role: "SUPER_ADMIN" | "STAFF"; csrf: string; exp: number };
-    if (payload.exp < Date.now()) return null;
-    return payload;
+    const payload = JSON.parse(atob(encoded)) as { sessionId: string };
+    const rows = await query<{ email: string; role: "SUPER_ADMIN" | "STAFF"; csrf: string; expires_at: number; revoked: number }>(
+      "SELECT email, role, csrf, expires_at, revoked FROM sessions WHERE id = ? LIMIT 1",
+      payload.sessionId
+    );
+    const session = rows.results?.[0];
+    if (!session || session.revoked || session.expires_at < Date.now()) return null;
+    return { email: session.email, role: session.role, csrf: session.csrf, sessionId: payload.sessionId };
   } catch {
     return null;
   }
@@ -646,7 +751,17 @@ export async function setAdminCookie(token: string) {
 export async function clearAdminCookie() {
   const cookieStore = await cookies();
   const name = process.env.NODE_ENV === "production" ? `__Host-${SESSION_COOKIE}` : SESSION_COOKIE;
+  const token = cookieStore.get(name)?.value;
   cookieStore.delete(name);
+  if (token) {
+    try {
+      const [encoded] = token.split(".");
+      if (encoded) {
+        const payload = JSON.parse(atob(encoded)) as { sessionId: string };
+        await run("UPDATE sessions SET revoked = 1 WHERE id = ?", payload.sessionId);
+      }
+    } catch {}
+  }
 }
 
 export async function requireAdmin(requiredRole?: "SUPER_ADMIN") {

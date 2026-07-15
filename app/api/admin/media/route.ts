@@ -48,3 +48,31 @@ export async function POST(request: Request) {
   await audit(admin.session.email, "MEDIA_UPLOADED", "MediaAsset", id, key);
   return json({ success: true, id, url: `/api/media/${key}`, key });
 }
+
+export async function DELETE(request: Request) {
+  const admin = await requireAdmin();
+  if (!admin.ok) return json({ error: admin.error }, { status: admin.status });
+  if (!verifyCsrf(request, admin.session)) return json({ error: "Invalid CSRF token." }, { status: 403 });
+
+  const bucket = getR2();
+  if (!bucket) return json({ error: "R2 media binding is not configured." }, { status: 503 });
+
+  const url = new URL(request.url);
+  const id = url.searchParams.get("id") || "";
+  if (!id) return json({ error: "Media asset ID is required." }, { status: 400 });
+
+  const rows = await query<{ r2_key: string }>("SELECT r2_key FROM media_assets WHERE id = ? LIMIT 1", id);
+  const asset = rows.results?.[0];
+  if (!asset) return json({ error: "Media asset not found." }, { status: 404 });
+
+  try {
+    await bucket.delete(asset.r2_key);
+  } catch (err) {
+    console.error("Failed to delete R2 object", err);
+  }
+
+  await run("DELETE FROM media_assets WHERE id = ?", id);
+  await audit(admin.session.email, "MEDIA_DELETED", "MediaAsset", id, asset.r2_key);
+
+  return json({ success: true });
+}

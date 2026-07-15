@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Newspaper } from "lucide-react";
 import { SITE_URL } from "@/app/lib/data";
 import { getPublishedBlogs } from "@/app/lib/public-data";
+import Link from "next/link";
 import { PageHero, PageShell, SectionHeader } from "@/app/components/SiteShell";
 
 export const dynamic = "force-dynamic";
@@ -27,11 +28,18 @@ export default async function BlogPage() {
           {blogs.length ? (
             <div className="blog-grid">
               {blogs.map((blog) => (
-                <article className="blog-card" key={blog.slug}>
-                  <Newspaper size={24} aria-hidden="true" />
-                  <h3>{blog.title}</h3>
-                  <p>{blog.excerpt}</p>
-                  {blog.body ? <p>{blog.body.slice(0, 260)}{blog.body.length > 260 ? "..." : ""}</p> : null}
+                <article className="blog-card" key={blog.slug} style={{ display: "flex", flexDirection: "column" }}>
+                  <Newspaper size={24} aria-hidden="true" style={{ marginBottom: 16 }} />
+                  <Link href={`/blog/${blog.slug}`} style={{ flex: 1 }}>
+                    <h3 className="transition-colors duration-300 hover:text-teal-600">{blog.title}</h3>
+                    <p style={{ marginTop: 8 }}>{blog.excerpt}</p>
+                    {blog.body && <p style={{ marginTop: 12, opacity: 0.8, fontSize: "0.9em" }}>{blog.body.slice(0, 160)}...</p>}
+                  </Link>
+                  <div style={{ marginTop: 24 }}>
+                    <Link href={`/blog/${blog.slug}`} className="small-button">
+                      Read Article
+                    </Link>
+                  </div>
                 </article>
               ))}
             </div>

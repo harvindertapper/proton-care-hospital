@@ -8,6 +8,8 @@ import {
   normalizePhone,
   run,
   saveIdempotency,
+  sanitizeHtml,
+  validateEmail,
   validatePhone,
   verifyTurnstile,
 } from "@/app/lib/server";
@@ -37,13 +39,13 @@ export async function POST(request: Request) {
     return json({ error: "Security verification failed." }, { status: 403 });
   }
 
-  const name = clean(body.name, 100);
+  const name = sanitizeHtml(clean(body.name, 100));
   const phone = normalizePhone(clean(body.phone, 20));
-  const email = clean(body.email, 160).toLowerCase();
-  const subject = clean(body.subject, 160);
-  const message = clean(body.message, 1400);
+  const email = sanitizeHtml(clean(body.email, 160).toLowerCase());
+  const subject = sanitizeHtml(clean(body.subject, 160));
+  const message = sanitizeHtml(clean(body.message, 1400));
 
-  if (name.length < 2 || !email.includes("@") || message.length < 8) {
+  if (name.length < 2 || !validateEmail(email) || message.length < 8) {
     return json({ error: "Please enter name, valid email, and message." }, { status: 400 });
   }
   if (phone && !validatePhone(phone)) {
