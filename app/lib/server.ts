@@ -559,6 +559,31 @@ function decodeBase64Url(str: string) {
   return atob(str);
 }
 
+let cachedJwks: { keys: any[] } | null = null;
+let cachedJwksExpiry = 0;
+
+async function getFirebaseJwks(forceRefetch = false): Promise<{ keys: any[] }> {
+  const now = Date.now();
+  if (!forceRefetch && cachedJwks && now < cachedJwksExpiry) {
+    return cachedJwks;
+  }
+
+  const res = await fetch("https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com");
+  if (!res.ok) {
+    throw new Error("Failed to fetch JWKS from Google service account.");
+  }
+  const data = await res.json() as { keys: any[] };
+
+  const cacheControl = res.headers.get("cache-control") || "";
+  const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
+  const maxAgeSeconds = maxAgeMatch ? parseInt(maxAgeMatch[1], 10) : 3600;
+
+  cachedJwks = data;
+  cachedJwksExpiry = now + maxAgeSeconds * 1000;
+
+  return data;
+}
+
 export async function verifyFirebaseToken(token: string, phoneToVerify?: string) {
   const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
   if (!projectId) {
@@ -595,9 +620,12 @@ export async function verifyFirebaseToken(token: string, phoneToVerify?: string)
       if (tokenPhone.slice(-10) !== expectedPhone.slice(-10)) return { ok: false };
     }
 
-    const res = await fetch("https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com");
-    const jwks = await res.json() as { keys: any[] };
-    const jwk = jwks.keys.find((k: any) => k.kid === header.kid);
+    let jwks = await getFirebaseJwks();
+    let jwk = jwks.keys.find((k: any) => k.kid === header.kid);
+    if (!jwk) {
+      jwks = await getFirebaseJwks(true);
+      jwk = jwks.keys.find((k: any) => k.kid === header.kid);
+    }
     if (!jwk) return { ok: false };
 
     const key = await crypto.subtle.importKey(
@@ -638,22 +666,21 @@ export async function audit(actorEmail: string, action: string, entityType?: str
   );
 }
 
-export async function nextRequestId() {
+export async function nextRequestId(): Promise<string> {
   const year = new Date().getFullYear();
-  const rows = await query<{ request_id: string }>(
-    "SELECT request_id FROM appointments WHERE request_id LIKE ? ORDER BY request_id DESC LIMIT 1",
-    `PCH-${year}-%`,
-  );
-  const lastId = rows.results?.[0]?.request_id;
-  let next = 1;
-  if (lastId) {
-    const parts = lastId.split("-");
-    const numPart = parseInt(parts[parts.length - 1], 10);
-    if (!isNaN(numPart)) {
-      next = numPart + 1;
-    }
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let suffix = "";
+  for (let i = 0; i < 6; i++) {
+    suffix += chars.charAt(Math.floor(Math.random() * chars.length));
   }
-  return `PCH-${year}-${String(next).padStart(4, "0")}`;
+  const id = `PCH-${year}-${suffix}`;
+  
+  // Check if it already exists (preventing collision)
+  const rows = await query("SELECT 1 FROM appointments WHERE request_id = ? LIMIT 1", id);
+  if (rows.results && rows.results.length > 0) {
+    return nextRequestId();
+  }
+  return id;
 }
 
 export function getDepartment(slug: string) {

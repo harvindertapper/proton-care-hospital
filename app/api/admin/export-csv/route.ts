@@ -79,8 +79,9 @@ export async function GET() {
       },
     });
   } catch (error) {
+    console.error("Export CSV error:", error);
     return Response.json(
-      { error: error instanceof Error ? error.message : "Failed to export CSV." },
+      { error: "Failed to export CSV." },
       { status: 500 }
     );
   }

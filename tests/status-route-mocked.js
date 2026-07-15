@@ -1,7 +1,6 @@
-import { NextResponse } from "next/server";
-import { query, checkRateLimit, getClientIp, json } from "@/app/lib/server";
+import { query, checkRateLimit, getClientIp, json } from "./server-mocked.js";
 
-export async function POST(request: Request) {
+export async function POST(request) {
   try {
     const ip = getClientIp(request);
     const limit = await checkRateLimit("appointment-status-check", ip, 5, 10 * 60);
@@ -20,7 +19,7 @@ export async function POST(request: Request) {
       return json({ error: "Invalid phone number verification. Please provide the last 4 digits." }, { status: 400 });
     }
 
-    const rows = await query<{ status: string; department_name: string; requested_date: string; requested_time: string; created_at: string; phone: string }>(
+    const rows = await query(
       "SELECT status, department_name, requested_date, requested_time, created_at, phone FROM appointments WHERE request_id = ?",
       [requestId]
     );
@@ -35,7 +34,6 @@ export async function POST(request: Request) {
       return json({ error: "Appointment request not found or verification failed." }, { status: 404 });
     }
 
-    // Exclude the raw phone number from the returned data
     const { phone, ...publicData } = appointment;
     return json({ data: publicData });
   } catch (err) {

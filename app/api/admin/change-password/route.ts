@@ -2,14 +2,17 @@ import {
   audit,
   json,
   query,
+  run,
   requireAdmin,
+  verifyCsrf,
   hashPassword,
   verifyPassword
 } from "@/app/lib/server";
 
 export async function POST(request: Request) {
-  const session = await requireAdmin(request);
-  if (session instanceof Response) return session;
+  const admin = await requireAdmin();
+  if (!admin.ok) return json({ error: admin.error }, { status: admin.status });
+  if (!verifyCsrf(request, admin.session)) return json({ error: "Invalid CSRF token." }, { status: 403 });
 
   const body = (await request.json().catch(() => ({}))) as { oldPassword?: string; newPassword?: string };
   const oldPassword = body.oldPassword || "";
@@ -21,22 +24,24 @@ export async function POST(request: Request) {
 
   const rows = await query<{ email: string; password_hash: string }>(
     "SELECT email, password_hash FROM admin_users WHERE email = ? LIMIT 1",
-    session.email
+    admin.session.email
   );
   const account = rows.results?.[0];
 
   if (!account || !(await verifyPassword(oldPassword, account.password_hash))) {
-    await audit(session.email, "ADMIN_PASSWORD_CHANGE_FAILED", "Admin", session.email, "Incorrect old password");
+    await audit(admin.session.email, "ADMIN_PASSWORD_CHANGE_FAILED", "Admin", admin.session.email, "Incorrect old password");
     return json({ error: "Incorrect current password." }, { status: 401 });
   }
 
   const newHash = await hashPassword(newPassword);
 
-  // Use a transaction to update password and revoke all sessions (including current one, to force re-login, or we just let them stay logged in? The plan says "Revoke all existing sessions for this email")
-  await query("UPDATE admin_users SET password_hash = ? WHERE email = ?", [newHash, session.email]);
-  await query("UPDATE admin_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE email = ?", session.email);
-
-  await audit(session.email, "ADMIN_PASSWORD_CHANGED", "Admin", session.email, "Password changed and sessions revoked");
-
-  return json({ success: true });
+  try {
+    await run("UPDATE admin_users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?", newHash, admin.session.email);
+    await run("UPDATE sessions SET revoked = 1 WHERE email = ?", admin.session.email);
+    await audit(admin.session.email, "ADMIN_PASSWORD_CHANGED", "Admin", admin.session.email, "Password changed and sessions revoked");
+    return json({ success: true });
+  } catch (error) {
+    console.error("Change password error:", error);
+    return json({ error: "Failed to update password." }, { status: 500 });
+  }
 }

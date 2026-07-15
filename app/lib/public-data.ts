@@ -133,3 +133,16 @@ export async function getJobBySlug(slug: string): Promise<PublicJob | null> {
   }
   return null;
 }
+
+export async function getDoctorBySlug(slug: string): Promise<Doctor | null> {
+  try {
+    const rows = await query<Record<string, unknown>>(
+      "SELECT slug, name, speciality, qualification, department_slug, photo_url FROM doctor_profiles WHERE slug = ? AND status = 'APPROVED' AND is_visible = 1 LIMIT 1",
+      [slug]
+    );
+    if (rows.results?.length) return dbDoctorToPublic(rows.results[0]);
+  } catch {
+    // fallback
+  }
+  return doctors.find((item) => item.slug === slug) || null;
+}

@@ -7,8 +7,9 @@ export async function GET() {
     );
     return json({ success: true, assets: result.results || [] });
   } catch (error) {
+    console.error("Gallery GET error:", error);
     return json(
-      { error: error instanceof Error ? error.message : "Failed to load gallery assets." },
+      { error: "Failed to load gallery assets." },
       { status: 500 }
     );
   }

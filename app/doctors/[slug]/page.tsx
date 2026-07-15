@@ -1,24 +1,21 @@
 import { notFound } from "next/navigation";
 import { type Metadata } from "next";
-import { doctors, departments, SITE_URL, hospital } from "@/app/lib/data";
-import { PageShell, SectionHeader, ArrowLink } from "@/app/components/SiteShell";
+import { departments, SITE_URL, hospital } from "@/app/lib/data";
+import { PageShell } from "@/app/components/SiteShell";
 import { User, GraduationCap, BriefcaseMedical } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
+import { getDoctorBySlug } from "@/app/lib/public-data";
+
+export const dynamic = "force-dynamic";
 
 type Props = {
   params: Promise<{ slug: string }>;
 };
 
-export async function generateStaticParams() {
-  return doctors.map((doctor) => ({
-    slug: doctor.slug,
-  }));
-}
-
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const p = await params;
-  const doctor = doctors.find((d) => d.slug === p.slug);
+  const doctor = await getDoctorBySlug(p.slug);
   if (!doctor) return {};
 
   return {
@@ -32,7 +29,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function DoctorPage({ params }: Props) {
   const p = await params;
-  const doctor = doctors.find((d) => d.slug === p.slug);
+  const doctor = await getDoctorBySlug(p.slug);
   
   if (!doctor) {
     notFound();
