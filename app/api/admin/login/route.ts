@@ -2,11 +2,14 @@ import {
   audit,
   checkRateLimit,
   createAdminSession,
+  getAdminBootstrapStatus,
   getClientIp,
+  hashPassword,
   json,
+  run,
   setAdminCookie,
   query,
-  verifyPassword
+  verifyPasswordWithUpgrade,
 } from "@/app/lib/server";
 
 export async function POST(request: Request) {
@@ -25,19 +28,46 @@ export async function POST(request: Request) {
     return json({ error: "Admin session secret is not configured." }, { status: 503 });
   }
 
-  const rows = await query<{ email: string; role: "SUPER_ADMIN" | "STAFF"; password_hash: string }>(
-    "SELECT email, role, password_hash FROM admin_users WHERE email = ? LIMIT 1",
+  const rows = await query<{
+    email: string;
+    role: "SUPER_ADMIN" | "STAFF";
+    password_hash: string;
+    is_active: number;
+    must_change_password: number;
+  }>(
+    `SELECT email, role, password_hash, is_active, must_change_password
+     FROM admin_users WHERE lower(email) = lower(?) LIMIT 1`,
     email
   );
+  const bootstrap = getAdminBootstrapStatus();
+  if (!bootstrap.ok) {
+    return json({ error: "Admin configuration requires review." }, { status: 503 });
+  }
   const account = rows.results?.[0];
 
-  if (!account || !(await verifyPassword(password, account.password_hash))) {
+  const verification = account
+    ? await verifyPasswordWithUpgrade(password, account.password_hash)
+    : { valid: false, needsRehash: false };
+  if (!account || account.is_active !== 1 || !verification.valid) {
     await audit(email || "unknown", "ADMIN_LOGIN_FAILED", "Admin", email, `Failed login from ${ip}`);
     return json({ error: "Invalid admin credentials." }, { status: 401 });
+  }
+
+  if (verification.needsRehash) {
+    await run(
+      "UPDATE admin_users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE lower(email) = lower(?)",
+      await hashPassword(password),
+      account.email,
+    );
   }
 
   const session = await createAdminSession(account.email, account.role);
   await setAdminCookie(session.token);
   await audit(account.email, "ADMIN_LOGIN_SUCCESS", "Admin", account.email, `Role ${account.role}`);
-  return json({ success: true, role: account.role, csrf: session.csrf });
+  return json({
+    success: true,
+    role: account.role,
+    csrf: session.csrf,
+    passwordChangeRequired: account.must_change_password === 1,
+  });
 }

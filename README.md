@@ -26,13 +26,14 @@ npm run db:generate
 Set the values in `.env.example` before launch:
 
 - `ADMIN_SESSION_SECRET` or `AUTH_SECRET`
-- `ADMIN_SUPER_EMAIL` / `ADMIN_SUPER_PASSWORD`
-- `ADMIN_STAFF_EMAIL` / `ADMIN_STAFF_PASSWORD`
+- `ADMIN_SUPER_EMAIL` and the Cloudflare secret `ADMIN_SUPER_PASSWORD` (15-128 characters)
 - `NEXT_PUBLIC_TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY`
 - `SMS91_AUTH_KEY`, approved OTP template ID, and sender ID
 - `OTP_HASH_SECRET`
 
 SMS91/MSG91 and Turnstile are production-ready adapters, but live launch proof is blocked until credentials, DLT/template approval, and test delivery are configured.
+
+`ADMIN_SUPER_PASSWORD` is used only when the first super admin is created (or when the one known legacy fallback account is migrated). Later password changes are stored in D1 and are never overwritten by the environment value. Staff accounts are created by the super admin in the admin console; no `ADMIN_STAFF_*`, `ADMIN_EMAIL`, or `ADMIN_PASSWORD` variables are used.
 
 ## Appointment Rule
 

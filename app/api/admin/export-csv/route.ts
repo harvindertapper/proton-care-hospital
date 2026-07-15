@@ -14,9 +14,12 @@ function escapeCsv(str: string): string {
 }
 
 export async function GET() {
-  const admin = await requireAdmin("SUPER_ADMIN");
+  const admin = await requireAdmin({ role: "SUPER_ADMIN" });
   if (!admin.ok) {
-    return Response.json({ error: admin.error }, { status: admin.status });
+    return Response.json(
+      { error: admin.error, ...(admin.code ? { code: admin.code } : {}) },
+      { status: admin.status },
+    );
   }
 
   try {

@@ -8,7 +8,7 @@ function safeName(value: string) {
 
 export async function POST(request: Request) {
   const admin = await requireAdmin();
-  if (!admin.ok) return json({ error: admin.error }, { status: admin.status });
+  if (!admin.ok) return json({ error: admin.error, ...(admin.code ? { code: admin.code } : {}) }, { status: admin.status });
   if (!verifyCsrf(request, admin.session)) return json({ error: "Invalid CSRF token." }, { status: 403 });
 
   const ip = getClientIp(request);
@@ -53,7 +53,7 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   const admin = await requireAdmin();
-  if (!admin.ok) return json({ error: admin.error }, { status: admin.status });
+  if (!admin.ok) return json({ error: admin.error, ...(admin.code ? { code: admin.code } : {}) }, { status: admin.status });
   if (!verifyCsrf(request, admin.session)) return json({ error: "Invalid CSRF token." }, { status: 403 });
 
   const bucket = getR2();

@@ -1,6 +1,13 @@
 import { cookies, headers } from "next/headers";
 import { env } from "cloudflare:workers";
 import { departments, doctors, hospital, approvedTimingDepartments } from "./data";
+import {
+  applySuperAdminBootstrap,
+  hashAdminPassword,
+  resolveAdminSessionAccess,
+  verifyAdminPassword,
+  type SuperAdminBootstrapResult,
+} from "./adminAuth";
 
 type D1Result<T = unknown> = { results?: T[]; success?: boolean };
 
@@ -14,6 +21,8 @@ const tableStatements = [
     name TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'STAFF',
     password_hash TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    must_change_password INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
@@ -209,6 +218,12 @@ const tableStatements = [
 ];
 
 let initialized = false;
+let adminBootstrapStatus: SuperAdminBootstrapResult = { ok: false, status: "not_configured" };
+
+const adminUserMigrationStatements = [
+  "ALTER TABLE admin_users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
+  "ALTER TABLE admin_users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
+];
 
 export async function getD1() {
   const db = env.DB as D1Database | undefined;
@@ -218,6 +233,13 @@ export async function getD1() {
 
   if (!initialized) {
     await db.batch(tableStatements.map((statement) => db.prepare(statement)));
+    for (const statement of adminUserMigrationStatements) {
+      try {
+        await db.prepare(statement).run();
+      } catch {
+        // Existing databases already have the column after the first successful migration.
+      }
+    }
     try {
       await db.prepare("SELECT schedule_version FROM appointments LIMIT 1").all();
     } catch {
@@ -267,63 +289,94 @@ async function seedDepartmentTimings(db: D1Database) {
 }
 
 export async function hashPassword(password: string): Promise<string> {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(password),
-    { name: "PBKDF2" },
-    false,
-    ["deriveBits"]
-  );
-  const hash = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
-    keyMaterial,
-    256
-  );
-  const saltHex = Array.from(salt).map(b => b.toString(16).padStart(2, "0")).join("");
-  const hashHex = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
-  return `${saltHex}:${hashHex}`;
+  return hashAdminPassword(password);
 }
 
 export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
-  const [saltHex, hashHex] = storedHash.split(":");
-  if (!saltHex || !hashHex) return false;
-  const salt = new Uint8Array(saltHex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(password),
-    { name: "PBKDF2" },
-    false,
-    ["deriveBits"]
-  );
-  const hash = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
-    keyMaterial,
-    256
-  );
-  const computedHashHex = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
-  
-  const encoder = new TextEncoder();
-  const a = encoder.encode(computedHashHex);
-  const b = encoder.encode(hashHex);
-  if (a.byteLength !== b.byteLength) return false;
-  let result = 0;
-  for (let i = 0; i < a.byteLength; i++) {
-    result |= a[i] ^ b[i];
-  }
-  return result === 0;
+  return (await verifyAdminPassword(password, storedHash)).valid;
+}
+
+export async function verifyPasswordWithUpgrade(password: string, storedHash: string) {
+  return verifyAdminPassword(password, storedHash);
 }
 
 async function seedAdminUsers(db: D1Database) {
-  const adminEmail = process.env.ADMIN_EMAIL || "admin@protoncare.in";
-  const adminPassword = process.env.ADMIN_PASSWORD || "ProtonCare@2024!";
-  const rows = await db.prepare("SELECT id FROM admin_users WHERE email = ? LIMIT 1").bind(adminEmail).all();
-  if (rows.results && rows.results.length === 0) {
-    const hash = await hashPassword(adminPassword);
-    await db.prepare(
-      `INSERT OR IGNORE INTO admin_users (id, email, name, role, password_hash) VALUES (?, ?, ?, ?, ?)`
-    ).bind(crypto.randomUUID(), adminEmail, "Super Admin", "SUPER_ADMIN", hash).run();
-  }
+  adminBootstrapStatus = await applySuperAdminBootstrap(
+    {
+      async listAccounts() {
+        const rows = await db
+          .prepare("SELECT id, email, role, is_active FROM admin_users ORDER BY created_at")
+          .all<{ id: string; email: string; role: "SUPER_ADMIN" | "STAFF"; is_active: number }>();
+        return (rows.results || []).map((account) => ({
+          id: account.id,
+          email: account.email,
+          role: account.role,
+          isActive: account.is_active === 1,
+        }));
+      },
+      async createSuperAdmin(input) {
+        await db
+          .prepare(
+            `INSERT INTO admin_users
+              (id, email, name, role, password_hash, is_active, must_change_password)
+             VALUES (?, ?, 'Super Admin', 'SUPER_ADMIN', ?, 1, 0)`,
+          )
+          .bind(crypto.randomUUID(), input.email, input.passwordHash)
+          .run();
+      },
+      async migrateLegacySuperAdmin(input) {
+        await db
+          .prepare(
+            `UPDATE admin_users
+             SET email = ?, name = 'Super Admin', role = 'SUPER_ADMIN', password_hash = ?,
+                 is_active = 1, must_change_password = 0, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+          )
+          .bind(input.email, input.passwordHash, input.id)
+          .run();
+      },
+      async deactivateAccounts(ids) {
+        if (ids.length === 0) return;
+        await db.batch(
+          ids.map((id) =>
+            db
+              .prepare("UPDATE admin_users SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+              .bind(id),
+          ),
+        );
+      },
+      async revokeSessionsForEmails(emails) {
+        if (emails.length === 0) return;
+        await db.batch(
+          emails.map((email) =>
+            db.prepare("UPDATE sessions SET revoked = 1 WHERE lower(email) = lower(?)").bind(email),
+          ),
+        );
+      },
+      async recordAudit(event) {
+        await db
+          .prepare(
+            `INSERT INTO audit_logs
+              (id, actor_email, action, entity_type, entity_id, details)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(
+            crypto.randomUUID(),
+            event.actorEmail,
+            event.action,
+            event.entityType,
+            event.entityId,
+            event.details,
+          )
+          .run();
+      },
+    },
+    process.env,
+  );
+}
+
+export function getAdminBootstrapStatus() {
+  return adminBootstrapStatus;
 }
 
 async function seedDoctorProfiles(db: D1Database) {
@@ -559,10 +612,10 @@ function decodeBase64Url(str: string) {
   return atob(str);
 }
 
-let cachedJwks: { keys: any[] } | null = null;
+let cachedJwks: { keys: JsonWebKey[] } | null = null;
 let cachedJwksExpiry = 0;
 
-async function getFirebaseJwks(forceRefetch = false): Promise<{ keys: any[] }> {
+async function getFirebaseJwks(forceRefetch = false): Promise<{ keys: JsonWebKey[] }> {
   const now = Date.now();
   if (!forceRefetch && cachedJwks && now < cachedJwksExpiry) {
     return cachedJwks;
@@ -572,7 +625,7 @@ async function getFirebaseJwks(forceRefetch = false): Promise<{ keys: any[] }> {
   if (!res.ok) {
     throw new Error("Failed to fetch JWKS from Google service account.");
   }
-  const data = await res.json() as { keys: any[] };
+  const data = await res.json() as { keys: JsonWebKey[] };
 
   const cacheControl = res.headers.get("cache-control") || "";
   const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
@@ -621,10 +674,10 @@ export async function verifyFirebaseToken(token: string, phoneToVerify?: string)
     }
 
     let jwks = await getFirebaseJwks();
-    let jwk = jwks.keys.find((k: any) => k.kid === header.kid);
+    let jwk = jwks.keys.find((key) => key.kid === header.kid);
     if (!jwk) {
       jwks = await getFirebaseJwks(true);
-      jwk = jwks.keys.find((k: any) => k.kid === header.kid);
+      jwk = jwks.keys.find((key) => key.kid === header.kid);
     }
     if (!jwk) return { ok: false };
 
@@ -747,13 +800,38 @@ export async function verifyAdminSession() {
 
   try {
     const payload = JSON.parse(atob(encoded)) as { sessionId: string };
-    const rows = await query<{ email: string; role: "SUPER_ADMIN" | "STAFF"; csrf: string; expires_at: number; revoked: number }>(
-      "SELECT email, role, csrf, expires_at, revoked FROM sessions WHERE id = ? LIMIT 1",
+    const rows = await query<{
+      email: string;
+      role: "SUPER_ADMIN" | "STAFF";
+      csrf: string;
+      expires_at: number;
+      revoked: number;
+      is_active: number;
+      must_change_password: number;
+    }>(
+      `SELECT s.email, u.role, s.csrf, s.expires_at, s.revoked,
+              u.is_active, u.must_change_password
+       FROM sessions s
+       INNER JOIN admin_users u ON lower(u.email) = lower(s.email)
+       WHERE s.id = ?
+       LIMIT 1`,
       payload.sessionId
     );
     const session = rows.results?.[0];
     if (!session || session.revoked || session.expires_at < Date.now()) return null;
-    return { email: session.email, role: session.role, csrf: session.csrf, sessionId: payload.sessionId };
+    const access = resolveAdminSessionAccess({
+      role: session.role,
+      isActive: session.is_active === 1,
+      mustChangePassword: session.must_change_password === 1,
+    });
+    if (!access.allowed) return null;
+    return {
+      email: session.email,
+      role: access.role,
+      csrf: session.csrf,
+      sessionId: payload.sessionId,
+      mustChangePassword: access.mustChangePassword,
+    };
   } catch {
     return null;
   }
@@ -792,10 +870,21 @@ export async function clearAdminCookie() {
   }
 }
 
-export async function requireAdmin(requiredRole?: "SUPER_ADMIN") {
+export async function requireAdmin(requirement: {
+  role?: "SUPER_ADMIN";
+  allowPasswordChangeRequired?: boolean;
+} = {}) {
   const session = await verifyAdminSession();
   if (!session) return { ok: false as const, status: 401, error: "Admin login required." };
-  if (requiredRole && session.role !== requiredRole) {
+  if (session.mustChangePassword && !requirement.allowPasswordChangeRequired) {
+    return {
+      ok: false as const,
+      status: 403,
+      code: "PASSWORD_CHANGE_REQUIRED" as const,
+      error: "Password change required before continuing.",
+    };
+  }
+  if (requirement.role && session.role !== requirement.role) {
     return { ok: false as const, status: 403, error: "Super admin approval is required for this action." };
   }
   return { ok: true as const, session };

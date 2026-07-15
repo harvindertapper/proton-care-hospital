@@ -4,6 +4,7 @@ import { verifyAdminSession } from "@/app/lib/server";
 
 export default async function AdminLoginPage() {
   const session = await verifyAdminSession();
+  if (session?.mustChangePassword) redirect("/admin/change-password");
   if (session) redirect("/admin");
 
   return (
