@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import {
   audit,
   checkIdempotency,
@@ -16,7 +17,7 @@ import {
 
 // Assert production environment secrets on route load
 if (process.env.NODE_ENV === "production") {
-  if (!process.env.ADMIN_SESSION_SECRET && !process.env.AUTH_SECRET) {
+  if (!env.ADMIN_SESSION_SECRET && !env.AUTH_SECRET) {
     throw new Error("Initialization assertion failed: ADMIN_SESSION_SECRET or AUTH_SECRET environment variable is missing.");
   }
 }

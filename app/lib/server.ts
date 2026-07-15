@@ -371,7 +371,7 @@ async function seedAdminUsers(db: D1Database) {
           .run();
       },
     },
-    process.env,
+    env,
   );
 }
 
@@ -518,7 +518,7 @@ export async function checkRateLimit(action: string, identifier: string, limit: 
 }
 
 export async function verifyTurnstile(token: string | undefined, ip: string) {
-  const secret = process.env.TURNSTILE_SECRET_KEY;
+  const secret = env.TURNSTILE_SECRET_KEY;
   if (!secret) {
     return { ok: process.env.NODE_ENV !== "production", configured: false, launchBlocked: true };
   }
@@ -560,7 +560,7 @@ async function hmac(value: string, secret: string) {
 }
 
 function sessionSecret() {
-  const configured = process.env.ADMIN_SESSION_SECRET || process.env.AUTH_SECRET;
+  const configured = env.ADMIN_SESSION_SECRET || env.AUTH_SECRET;
   if (configured) return configured;
   const isDev = process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
   if (isDev) return "pch-local-preview-session-secret";
@@ -568,7 +568,7 @@ function sessionSecret() {
 }
 
 export async function hashOtp(code: string, phone: string) {
-  const secret = process.env.OTP_HASH_SECRET;
+  const secret = env.OTP_HASH_SECRET;
   if (!secret) {
     const isDev = process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
     if (!isDev) {
@@ -638,7 +638,7 @@ async function getFirebaseJwks(forceRefetch = false): Promise<{ keys: JsonWebKey
 }
 
 export async function verifyFirebaseToken(token: string, phoneToVerify?: string) {
-  const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+  const projectId = env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
   if (!projectId) {
     if (process.env.NODE_ENV !== "production") return { ok: true, phone: phoneToVerify };
     return { ok: false };
