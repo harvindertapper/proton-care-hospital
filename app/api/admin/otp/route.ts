@@ -64,7 +64,8 @@ export async function POST(request: Request) {
   const otpHash = await hashOtp(otp);
   const expiresAt = Math.floor(Date.now() / 1000) + 10 * 60; // 10 mins
 
-  const targetEmail = purpose === "change_email" ? newEmail : session.email;
+  // Always send the verification OTP to the CURRENT admin email to prevent hijacks
+  const targetEmail = session.email;
 
   // Save OTP challenge
   const metaJson = purpose === "change_email" ? JSON.stringify({ newEmail }) : null;
@@ -83,13 +84,20 @@ export async function POST(request: Request) {
   const emailRes = await sendEmail({
     to: targetEmail,
     subject: "Your Admin Security Verification Code",
-    html: getOtpEmailTemplate(otp, purpose),
+    html: getOtpEmailTemplate(otp, purpose, purpose === "change_email" ? { newEmail } : undefined),
   });
 
   if (!emailRes.success) {
     return json({ error: "Failed to send verification code. Please try again." }, { status: 500 });
   }
 
-  await audit(session.email, "ADMIN_OTP_REQUESTED", "AdminUser", session.email, `Requested verification OTP for ${purpose} sent to ${targetEmail}`);
+  await audit(
+    session.email,
+    "ADMIN_OTP_REQUESTED",
+    "AdminUser",
+    session.email,
+    `Requested verification OTP for ${purpose} sent to current email ${targetEmail}` +
+      (purpose === "change_email" ? ` (proposed new email: ${newEmail})` : "")
+  );
   return json({ success: true, message: "Verification code sent successfully." });
 }

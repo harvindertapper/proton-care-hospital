@@ -443,7 +443,7 @@ export function AdminEmailChangeForm({
       });
       const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (!response.ok) throw new Error(String(data.error || "Failed to send verification code."));
-      setInfoMessage(`Verification code sent to ${newEmail}.`);
+      setInfoMessage("Verification code sent to your current email address.");
       setOtpSent(true);
     } catch (error) {
       showMessage(error instanceof Error ? error.message : "Failed to send code.");
@@ -487,7 +487,7 @@ export function AdminEmailChangeForm({
       </label>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12, marginBottom: 8 }}>
         <label style={{ flex: 1, margin: 0 }}>
-          Verification Code (sent to new email)
+          Verification Code (sent to current email)
           <input type="text" placeholder="6-digit code" required maxLength={6} value={otp} onChange={(event) => setOtp(event.target.value)} />
         </label>
         <button type="button" className="button secondary" style={{ height: "42px" }} disabled={busy} onClick={sendOtp}>

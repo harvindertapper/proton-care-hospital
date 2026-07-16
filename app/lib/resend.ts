@@ -56,11 +56,14 @@ export async function sendEmail({ to, subject, html }: SendEmailParams) {
 /**
  * Renders HTML template for OTP verification.
  */
-export function getOtpEmailTemplate(otp: string, purpose: string) {
+export function getOtpEmailTemplate(otp: string, purpose: string, meta?: { newEmail?: string }) {
   let actionText = "authorize this action";
   if (purpose === "forgot_password") actionText = "reset your admin password";
   if (purpose === "change_password") actionText = "change your password";
-  if (purpose === "change_email") actionText = "update your admin email address";
+  if (purpose === "change_email") {
+    const emailStr = meta?.newEmail ? ` to <strong>${meta.newEmail}</strong>` : "";
+    actionText = `update your admin email address${emailStr}`;
+  }
 
   return `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
