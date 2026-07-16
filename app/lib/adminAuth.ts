@@ -1,6 +1,6 @@
 export const ADMIN_PASSWORD_MIN_LENGTH = 15;
 export const ADMIN_PASSWORD_MAX_LENGTH = 128;
-export const ADMIN_PASSWORD_ITERATIONS = 600_000;
+export const ADMIN_PASSWORD_ITERATIONS = 100_000;
 export const LEGACY_SUPER_ADMIN_EMAIL = "admin@protoncare.in";
 
 const encoder = new TextEncoder();

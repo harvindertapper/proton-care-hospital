@@ -86,7 +86,7 @@ test("admin password policy accepts 15-128 character passphrases", () => {
 test("new password hashes are versioned and verify without rehash", async () => {
   const password = "correct horse battery staple";
   const stored = await hashAdminPassword(password);
-  assert.match(stored, /^pbkdf2-sha256\$600000\$[0-9a-f]+\$[0-9a-f]+$/);
+  assert.match(stored, /^pbkdf2-sha256\$100000\$[0-9a-f]+\$[0-9a-f]+$/);
   assert.deepEqual(await verifyAdminPassword(password, stored), { valid: true, needsRehash: false });
   assert.deepEqual(await verifyAdminPassword("incorrect password", stored), { valid: false, needsRehash: false });
 });
