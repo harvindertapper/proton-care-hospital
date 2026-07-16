@@ -477,6 +477,7 @@ export function AppointmentForm({
             <button type="button" className="button subtle" onClick={verifyOtp} disabled={busy || !otpSent || !form.otpCode}>
               Verify
             </button>
+            <div id="recaptcha-container"></div>
           </div>
           <button className="button primary" type="button" onClick={() => setStep(3)} disabled={!otpVerified}>
             Continue
