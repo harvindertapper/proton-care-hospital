@@ -601,7 +601,7 @@ export function AdminConsole({
     return {
       cards: [
         { label: "Today's Appointments", value: todayAppointments.length, icon: Clock3 },
-        { label: "Pending Appointments", value: pendingAppointments.length, icon: ShieldCheck },
+        { label: "Pending Appointments", value: pendingCount, icon: ShieldCheck },
         { label: "Total Doctors", value: adminData.doctors.length, icon: Stethoscope },
         { label: "Unread Messages", value: adminData.contacts.filter((item) => item.status === "NEW").length, icon: FileText },
       ],
@@ -1462,7 +1462,11 @@ function DoctorManager({
         </label>
         <button className="button primary" disabled={busy}><UserCog size={17} aria-hidden="true" /> Save Doctor</button>
       </form>
-      <DataTable rows={rows} columns={["name", "speciality", "qualification", "department_slug", "status", "is_visible", "blocked_dates"]} />
+      <DataTable 
+        rows={rows} 
+        columns={["name", "speciality", "qualification", "department_slug", "status", "is_visible", "blocked_dates"]} 
+        onRowClick={(row) => choose(String(row.slug))}
+      />
     </div>
   );
 }
@@ -1491,6 +1495,12 @@ function BlogForm({
       <DataTable
         rows={rows}
         columns={["title", "status", "is_visible", "created_at"]}
+        onRowClick={(row) => setForm({
+          title: String(row.title || ""),
+          slug: String(row.slug || ""),
+          excerpt: String(row.excerpt || ""),
+          body: String(row.body || ""),
+        })}
         actions={onVisibility ? (row) => (
           <div className="table-actions">
             <button
@@ -1530,6 +1540,13 @@ function CareerForm({
       <DataTable
         rows={rows}
         columns={["title", "department", "employment_type", "status", "is_visible", "created_at"]}
+        onRowClick={(row) => setForm({
+          title: String(row.title || ""),
+          slug: String(row.slug || ""),
+          department: String(row.department || ""),
+          employmentType: String(row.employment_type || "Full-time"),
+          description: String(row.description || ""),
+        })}
         actions={onVisibility ? (row) => (
           <div className="table-actions">
             <button
@@ -1568,6 +1585,11 @@ function VideoForm({
       <DataTable
         rows={rows}
         columns={["title", "youtube_url", "status", "is_visible", "created_at"]}
+        onRowClick={(row) => setForm({
+          title: String(row.title || ""),
+          youtubeUrl: String(row.youtube_url || ""),
+          consentNote: String(row.consent_note || ""),
+        })}
         actions={onVisibility ? (row) => (
           <div className="table-actions">
             <button
