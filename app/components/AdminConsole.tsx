@@ -128,8 +128,17 @@ export function AdminLoginForm() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
-      const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!response.ok) throw new Error(String(data.error || "Login failed."));
+      const text = await response.text().catch(() => "");
+      if (!response.ok) {
+        console.error(`Login failed with status ${response.status}. Response: ${text}`);
+        let errMsg = `Login failed (Status ${response.status}).`;
+        try {
+          const data = JSON.parse(text);
+          if (data.error) errMsg = data.error;
+        } catch {}
+        throw new Error(errMsg);
+      }
+      const data = JSON.parse(text) as Record<string, unknown>;
       window.location.href = data.passwordChangeRequired ? "/admin/change-password" : "/admin";
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Login failed.");
