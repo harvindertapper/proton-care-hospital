@@ -167,3 +167,7 @@ export function parseYouTubeId(url) {
 export async function hashPassword(pwd) {
   return `hashed-${pwd}`;
 }
+
+export async function nextRequestId() {
+  return "PCH-MOCK-0001";
+}

@@ -9,6 +9,7 @@ import {
   run,
   verifyCsrf,
   hashPassword,
+  nextRequestId,
 } from "@/app/lib/server";
 import { departmentBySlug } from "@/app/lib/data";
 import { validateStaffAccountInput } from "@/app/lib/adminAuth";
@@ -42,6 +43,7 @@ async function dashboardData(session: AdminSession) {
     media,
     audits,
     sessionsData,
+    closures,
   ] = await Promise.all([
     query<Record<string, unknown>>("SELECT * FROM appointments ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM department_timings ORDER BY department_name"),
@@ -59,6 +61,7 @@ async function dashboardData(session: AdminSession) {
       session.email,
       Date.now(),
     ),
+    query("SELECT * FROM department_closures ORDER BY closed_date DESC LIMIT 200"),
   ]);
 
   let rawAppointments = appointments.results || [];
@@ -96,6 +99,7 @@ async function dashboardData(session: AdminSession) {
     audits: audits.results || [],
     sessions: sessionsData.results || [],
     staff: staffList,
+    closures: closures.results || [],
   };
 }
 
@@ -369,7 +373,10 @@ async function applyAction(action: string, payload: Record<string, unknown>, act
   if (action === "video.visibility") return applyVideoVisibility(payload, actorEmail);
   if (action === "contact.status") return applyContactStatus(payload, actorEmail);
   if (action === "appointment.status") return applyAppointmentStatus(payload, actorEmail);
-  throw new Error("Unknown admin action.");
+  if (action === "appointment.create") return applyCreateAppointment(payload, actorEmail);
+  if (action === "closure.add") return applyAddClosure(payload, actorEmail);
+  if (action === "closure.delete") return applyDeleteClosure(payload, actorEmail);
+  throw new Error(`Unsupported admin action: ${action}`);
 }
 
 export async function GET(request: Request) {
@@ -537,6 +544,24 @@ export async function POST(request: Request) {
       return json({ success: true });
     }
 
+    if (action === "staff.resetPassword") {
+      const superAdmin = await requireAdmin({ role: "SUPER_ADMIN" });
+      if (!superAdmin.ok) return json({ error: superAdmin.error }, { status: superAdmin.status });
+
+      const staffId = clean(payload.id, 120);
+      const newPassword = clean(payload.newPassword, 120);
+      if (!staffId || !newPassword) throw new Error("Staff ID and new temporary password are required.");
+
+      const pHash = await hashPassword(newPassword);
+      await run(
+        "UPDATE admin_users SET password_hash = ?, must_change_password = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND role = 'STAFF'",
+        pHash,
+        staffId
+      );
+      await audit(admin.session.email, "STAFF_PASSWORD_RESET", "AdminUser", staffId, "Reset staff password to temporary password");
+      return json({ success: true });
+    }
+
     if (action === "account.changeEmail") {
       const otpInput = clean(payload.otp, 6);
       if (!otpInput) {
@@ -669,4 +694,75 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (typeof obj.youtubeUrl !== "string" || !obj.youtubeUrl.trim()) return { ok: false, error: "YouTube URL is required." };
   }
   return { ok: true };
+}
+
+async function applyCreateAppointment(payload: Record<string, unknown>, actorEmail: string) {
+  const patientName = clean(payload.patientName, 120);
+  const phone = clean(payload.phone, 20);
+  const email = clean(payload.email, 160).toLowerCase();
+  const departmentSlug = clean(payload.departmentSlug, 120);
+  const requestedDate = clean(payload.requestedDate, 20);
+  const requestedTime = clean(payload.requestedTime, 20);
+  const concern = clean(payload.concern, 1200) || "Walk-in appointment registration by staff.";
+  const status = clean(payload.status, 40) || "CONFIRMED";
+
+  if (!patientName || !phone || !departmentSlug || !requestedDate || !requestedTime) {
+    throw new Error("Missing required appointment registration fields.");
+  }
+
+  const department = departmentBySlug(departmentSlug);
+  if (!department) throw new Error("Selected department not found.");
+
+  const id = crypto.randomUUID();
+  const requestId = await nextRequestId();
+
+  await run(
+    `INSERT INTO appointments
+      (id, request_id, patient_name, phone, email, department_slug, department_name, requested_date, requested_time, concern, consent, otp_verified, status, ip_address, user_agent, schedule_version)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, 'admin-panel', 'admin-console', 1)`,
+    id,
+    requestId,
+    patientName,
+    phone,
+    email,
+    department.slug,
+    department.name,
+    requestedDate,
+    requestedTime,
+    concern,
+    status
+  );
+
+  await audit(actorEmail, "APPOINTMENT_CREATED", "Appointment", id, `Walk-in ${requestId} ${status}`);
+}
+
+async function applyAddClosure(payload: Record<string, unknown>, actorEmail: string) {
+  const departmentSlug = clean(payload.departmentSlug, 120);
+  const closedDate = clean(payload.closedDate, 20);
+  const reason = clean(payload.reason, 300);
+
+  if (!departmentSlug || !closedDate) {
+    throw new Error("Department slug and closed date are required.");
+  }
+
+  const department = departmentBySlug(departmentSlug);
+  if (!department) throw new Error("Department not found.");
+
+  const id = crypto.randomUUID();
+  await run(
+    "INSERT INTO department_closures (id, department_slug, closed_date, reason) VALUES (?, ?, ?, ?)",
+    id,
+    department.slug,
+    closedDate,
+    reason
+  );
+  await audit(actorEmail, "CLOSURE_ADDED", "DepartmentClosure", id, `${department.slug} on ${closedDate}`);
+}
+
+async function applyDeleteClosure(payload: Record<string, unknown>, actorEmail: string) {
+  const id = clean(payload.id, 120);
+  if (!id) throw new Error("Closure ID is required.");
+
+  await run("DELETE FROM department_closures WHERE id = ?", id);
+  await audit(actorEmail, "CLOSURE_DELETED", "DepartmentClosure", id, `Deleted closure`);
 }

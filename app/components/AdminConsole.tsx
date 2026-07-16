@@ -544,6 +544,38 @@ export function AdminConsole({
   const [revisionError, setRevisionError] = useState("");
   const [staffForm, setStaffForm] = useState({ email: "", name: "", password: "", confirmPassword: "" });
 
+  const [apptSearch, setApptSearch] = useState("");
+  const [apptDeptFilter, setApptDeptFilter] = useState("ALL");
+  const [apptStatusFilter, setApptStatusFilter] = useState("ALL");
+  const [apptDateFilter, setApptDateFilter] = useState("");
+  const [showWalkInModal, setShowWalkInModal] = useState(false);
+  const [walkInForm, setWalkInForm] = useState({
+    patientName: "",
+    phone: "",
+    email: "",
+    departmentSlug: departments[0]?.slug || "",
+    requestedDate: new Date().toISOString().split("T")[0],
+    requestedTime: "09:00",
+    concern: "",
+    status: "CONFIRMED"
+  });
+
+  const [showReplyModal, setShowReplyModal] = useState(false);
+  const [replyForm, setReplyForm] = useState({
+    contactId: "",
+    recipientEmail: "",
+    subject: "Reply from Protone Care Hospital",
+    replyText: "",
+  });
+
+  const [closureForm, setClosureForm] = useState({
+    departmentSlug: departments[0]?.slug || "",
+    closedDate: new Date().toISOString().split("T")[0],
+    reason: ""
+  });
+
+  const [auditSearch, setAuditSearch] = useState("");
+
   function openTriage(row: Record<string, string | number | null>) {
     setSelectedAppointment(row);
     setEditForm({
@@ -575,6 +607,38 @@ export function AdminConsole({
     }, 30000);
     return () => clearInterval(timer);
   }, []);
+
+  const filteredAppointments = useMemo(() => {
+    return adminData.appointments.filter((app) => {
+      const q = apptSearch.toLowerCase().trim();
+      const nameMatch = String(app.patient_name || "").toLowerCase().includes(q);
+      const phoneMatch = String(app.phone || "").toLowerCase().includes(q);
+      const idMatch = String(app.request_id || "").toLowerCase().includes(q);
+      const queryMatch = q ? (nameMatch || phoneMatch || idMatch) : true;
+
+      const deptMatch = apptDeptFilter === "ALL" ? true : String(app.department_name) === apptDeptFilter;
+      
+      const s = String(app.status || "").toUpperCase();
+      let matchesStatus = true;
+      if (apptStatusFilter !== "ALL") {
+        if (apptStatusFilter === "PENDING") {
+          matchesStatus = (s === "PENDING" || s === "NEW");
+        } else if (apptStatusFilter === "CONFIRMED") {
+          matchesStatus = (s === "CONFIRMED" || s === "APPROVED");
+        } else if (apptStatusFilter === "CANCELLED") {
+          matchesStatus = (s === "CANCELLED" || s === "REJECTED");
+        } else if (apptStatusFilter === "CLOSED") {
+          matchesStatus = (s === "CLOSED" || s === "COMPLETED");
+        } else {
+          matchesStatus = (s === apptStatusFilter);
+        }
+      }
+
+      const dateMatch = apptDateFilter ? String(app.requested_date) === apptDateFilter : true;
+
+      return queryMatch && deptMatch && matchesStatus && dateMatch;
+    });
+  }, [adminData.appointments, apptSearch, apptDeptFilter, apptStatusFilter, apptDateFilter]);
 
   const stats = useMemo(() => {
     const todayStr = new Date().toISOString().split("T")[0];
@@ -785,34 +849,78 @@ export function AdminConsole({
 
         {active === "Appointments" ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 15 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "white", padding: 16, borderRadius: 12, border: "1px solid var(--border)" }}>
-              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                <select value={appointmentsView} onChange={(e) => setAppointmentsView(e.target.value === "DAY" ? "DAY" : "LIST")} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)" }}>
-                  <option value="LIST">List View</option>
-                  <option value="DAY">Day View</option>
-                </select>
-                
-                {appointmentsView === "DAY" && (
-                  <>
-                    <input type="date" value={appointmentsDate} onChange={(e) => setAppointmentsDate(e.target.value)} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)" }} />
-                    <select value={appointmentsDept} onChange={(e) => setAppointmentsDept(e.target.value)} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)" }}>
-                      <option value="ALL">All Departments</option>
-                      {departments.map(d => <option key={d.slug} value={d.name}>{d.name}</option>)}
-                    </select>
-                  </>
-                )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, background: "white", padding: 16, borderRadius: 12, border: "1px solid var(--border)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+                <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                  <select value={appointmentsView} onChange={(e) => setAppointmentsView(e.target.value === "DAY" ? "DAY" : "LIST")} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)" }}>
+                    <option value="LIST">List View</option>
+                    <option value="DAY">Day View</option>
+                  </select>
+                  <button className="button primary" onClick={() => {
+                    setWalkInForm({
+                      patientName: "",
+                      phone: "",
+                      email: "",
+                      departmentSlug: departments[0]?.slug || "",
+                      requestedDate: new Date().toISOString().split("T")[0],
+                      requestedTime: "09:00",
+                      concern: "",
+                      status: "CONFIRMED"
+                    });
+                    setShowWalkInModal(true);
+                  }}>
+                    Book Walk-In
+                  </button>
+                </div>
+
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  {session.role === "SUPER_ADMIN" ? (
+                    <a href="/api/admin/export-csv" className="button secondary" style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      Export CSV
+                    </a>
+                  ) : null}
+                </div>
               </div>
 
-              {session.role === "SUPER_ADMIN" ? (
-                <a href="/api/admin/export-csv" className="button secondary" style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  Export CSV
-                </a>
-              ) : null}
+              {appointmentsView === "LIST" ? (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 12, borderTop: "1px solid var(--border)", marginTop: 8, paddingTop: 12 }}>
+                  <input type="text" placeholder="Search by name, phone, or ID..." value={apptSearch} onChange={(e) => setApptSearch(e.target.value)} style={{ flex: 2, minWidth: 200, padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)" }} />
+                  <select value={apptDeptFilter} onChange={(e) => setApptDeptFilter(e.target.value)} style={{ flex: 1, minWidth: 150, padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)" }}>
+                    <option value="ALL">All Departments</option>
+                    {departments.map(d => <option key={d.slug} value={d.name}>{d.name}</option>)}
+                  </select>
+                  <select value={apptStatusFilter} onChange={(e) => setApptStatusFilter(e.target.value)} style={{ flex: 1, minWidth: 150, padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)" }}>
+                    <option value="ALL">All Statuses</option>
+                    <option value="PENDING">Pending / New</option>
+                    <option value="CONTACTED">Contacted</option>
+                    <option value="CONFIRMED">Confirmed / Approved</option>
+                    <option value="CANCELLED">Cancelled</option>
+                    <option value="CLOSED">Completed / Closed</option>
+                  </select>
+                  <input type="date" value={apptDateFilter} onChange={(e) => setApptDateFilter(e.target.value)} style={{ flex: 1, minWidth: 150, padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)" }} />
+                  { (apptSearch || apptDeptFilter !== "ALL" || apptStatusFilter !== "ALL" || apptDateFilter) && (
+                    <button className="button subtle" onClick={() => {
+                      setApptSearch("");
+                      setApptDeptFilter("ALL");
+                      setApptStatusFilter("ALL");
+                      setApptDateFilter("");
+                    }}>Clear Filters</button>
+                  )}
+                </div>
+              ) : (
+                <div style={{ display: "flex", gap: 12, alignItems: "center", borderTop: "1px solid var(--border)", marginTop: 8, paddingTop: 12 }}>
+                  <input type="date" value={appointmentsDate} onChange={(e) => setAppointmentsDate(e.target.value)} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)" }} />
+                  <select value={appointmentsDept} onChange={(e) => setAppointmentsDept(e.target.value)} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)" }}>
+                    <option value="ALL">All Departments</option>
+                    {departments.map(d => <option key={d.slug} value={d.name}>{d.name}</option>)}
+                  </select>
+                </div>
+              )}
             </div>
 
             {appointmentsView === "LIST" ? (
               <DataTable
-                rows={adminData.appointments}
+                rows={filteredAppointments}
                 columns={["request_id", "patient_name", "phone", "department_name", "requested_date", "requested_time", "status", "created_at"]}
                 actions={(row) => (
                   <div className="table-actions">
@@ -887,7 +995,56 @@ export function AdminConsole({
         ) : null}
 
         {active === "Department Timings" ? (
-          <TimingManager rows={adminData.timings} departments={departments} busy={busy} onSave={(payload) => mutate({ action: "timing.upsert", payload }, "Timing saved or sent for approval.")} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
+            <div>
+              <h2 style={{ margin: "0 0 16px 0", fontSize: 20 }}>Department Weekly Timings</h2>
+              <TimingManager rows={adminData.timings} departments={departments} busy={busy} onSave={(payload) => mutate({ action: "timing.upsert", payload }, "Timing saved or sent for approval.")} />
+            </div>
+
+            <hr style={{ border: 0, borderTop: "1px solid var(--border)", margin: "16px 0" }} />
+
+            <div style={{ background: "white", padding: 24, borderRadius: 12, border: "1px solid var(--border)" }}>
+              <h2 style={{ margin: "0 0 20px 0", fontSize: 20 }}>Department Holiday Closures</h2>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 24 }}>
+                <form className="admin-form" onSubmit={(e) => {
+                  e.preventDefault();
+                  mutate({ action: "closure.add", departmentSlug: closureForm.departmentSlug, closedDate: closureForm.closedDate, reason: closureForm.reason }, "Holiday closure added.");
+                  setClosureForm(curr => ({ ...curr, reason: "" }));
+                }}>
+                  <label>
+                    Department
+                    <select value={closureForm.departmentSlug} onChange={(e) => setClosureForm({ ...closureForm, departmentSlug: e.target.value })}>
+                      {departments.map(d => <option key={d.slug} value={d.slug}>{d.name}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    Date
+                    <input type="date" value={closureForm.closedDate} onChange={(e) => setClosureForm({ ...closureForm, closedDate: e.target.value })} required />
+                  </label>
+                  <label>
+                    Reason / Occasion (e.g. Diwali, Independence Day)
+                    <input type="text" placeholder="e.g. Diwali Holiday" value={closureForm.reason} onChange={(e) => setClosureForm({ ...closureForm, reason: e.target.value })} />
+                  </label>
+                  <button className="button primary" type="submit" disabled={busy}>Add Closure</button>
+                </form>
+
+                <div>
+                  <h3 style={{ margin: "0 0 12px 0", fontSize: 16 }}>Registered Closures</h3>
+                  <DataTable
+                    rows={adminData.closures || []}
+                    columns={["department_slug", "closed_date", "reason"]}
+                    actions={(row) => (
+                      <div className="table-actions">
+                        <button className="button secondary small" disabled={busy} onClick={() => mutate({ action: "closure.delete", id: row.id }, "Closure deleted.")}>
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
         ) : null}
 
         {active === "Doctors" ? (
@@ -938,10 +1095,38 @@ export function AdminConsole({
                 </div>
                 {selectedRevision.status === "NEEDS_REVIEW" && session.role === "SUPER_ADMIN" ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div>
+                      <span style={{ fontWeight: 500, fontSize: 13, color: "var(--muted)" }}>Parsed Changes:</span>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: 12, background: "#f8fafc", border: "1px solid var(--border)", borderRadius: 6, maxHeight: 180, overflowY: "auto", marginTop: 4, marginBottom: 12 }}>
+                        {(() => {
+                          try {
+                            const parsed = JSON.parse(revisionEditPayload);
+                            const action = parsed.action || "";
+                            const payloadObj = parsed.payload || parsed;
+                            return (
+                              <>
+                                <div style={{ fontSize: 12, borderBottom: "1px solid var(--border)", paddingBottom: 4, marginBottom: 4 }}>
+                                  <strong>Action:</strong> <code style={{ background: "#eaeaea", padding: "2px 4px", borderRadius: 4 }}>{String(action)}</code>
+                                </div>
+                                {Object.entries(payloadObj).map(([key, val]) => (
+                                  <div key={key} style={{ fontSize: 12, display: "flex", justifyContent: "space-between", gap: 8, paddingBottom: 4 }}>
+                                    <span style={{ fontWeight: 600, color: "var(--muted)" }}>{key}:</span>
+                                    <span style={{ color: "#334155", textAlign: "right", wordBreak: "break-all" }}>{String(val)}</span>
+                                  </div>
+                                ))}
+                              </>
+                            );
+                          } catch {
+                            return <span style={{ color: "red", fontSize: 12 }}>Could not parse payload for diff preview.</span>;
+                          }
+                        })()}
+                      </div>
+                    </div>
+
                     <label style={{ fontWeight: 500, fontSize: 14 }}>
-                      Edit Payload JSON
+                      Edit Raw Payload JSON
                       <textarea
-                        rows={12}
+                        rows={8}
                         value={revisionEditPayload}
                         onChange={(e) => {
                           setRevisionEditPayload(e.target.value);
@@ -1040,6 +1225,17 @@ export function AdminConsole({
             columns={["name", "phone", "email", "subject", "message", "status", "created_at"]}
             actions={(row) => (
               <div className="table-actions">
+                <button disabled={busy} onClick={() => {
+                  setReplyForm({
+                    contactId: String(row.id),
+                    recipientEmail: String(row.email),
+                    subject: `Re: ${String(row.subject || "Your inquiry to Protone Care Hospital")}`,
+                    replyText: "",
+                  });
+                  setShowReplyModal(true);
+                }}>
+                  Reply Email
+                </button>
                 <button disabled={busy} onClick={() => mutate({ action: "contact.status", id: row.id, status: "CONTACTED" }, "Message marked contacted.")}>Contacted</button>
                 <button disabled={busy} onClick={() => mutate({ action: "contact.status", id: row.id, status: "CLOSED" }, "Message closed.")}>Closed</button>
               </div>
@@ -1124,6 +1320,23 @@ export function AdminConsole({
                     >
                       {row.is_active === 1 || row.is_active === "1" ? "Deactivate" : "Reactivate"}
                     </button>
+                    <button
+                      className="button secondary small"
+                      disabled={busy}
+                      onClick={() => {
+                        const tempPass = window.prompt(`Enter a new temporary password for ${row.name}:`);
+                        if (tempPass && tempPass.trim().length >= 15) {
+                          mutate(
+                            { action: "staff.resetPassword", id: row.id, newPassword: tempPass.trim() },
+                            `Temporary password set for ${row.name}. They will be prompted to change it at login.`
+                          );
+                        } else if (tempPass) {
+                          alert("Security Policy Error: Temporary password must be at least 15 characters long.");
+                        }
+                      }}
+                    >
+                      Reset Password
+                    </button>
                   </div>
                 )}
               />
@@ -1172,7 +1385,36 @@ export function AdminConsole({
           </div>
         ) : null}
 
-        {active === "Audit Logs" ? <DataTable rows={adminData.audits} columns={["actor_email", "action", "entity_type", "entity_id", "details", "created_at"]} /> : null}
+        {active === "Audit Logs" ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 15 }}>
+            <div style={{ background: "white", padding: 16, borderRadius: 12, border: "1px solid var(--border)", display: "flex", gap: 12 }}>
+              <input 
+                type="text" 
+                placeholder="Filter logs by actor email, action, entity type, ID..." 
+                value={auditSearch} 
+                onChange={(e) => setAuditSearch(e.target.value)} 
+                style={{ flex: 1, padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)" }} 
+              />
+              {auditSearch && (
+                <button className="button subtle" onClick={() => setAuditSearch("")}>Clear</button>
+              )}
+            </div>
+            <DataTable 
+              rows={adminData.audits.filter(log => {
+                const q = auditSearch.toLowerCase().trim();
+                if (!q) return true;
+                return (
+                  String(log.actor_email || "").toLowerCase().includes(q) ||
+                  String(log.action || "").toLowerCase().includes(q) ||
+                  String(log.entity_type || "").toLowerCase().includes(q) ||
+                  String(log.entity_id || "").toLowerCase().includes(q) ||
+                  String(log.details || "").toLowerCase().includes(q)
+                );
+              })} 
+              columns={["actor_email", "action", "entity_type", "entity_id", "details", "created_at"]} 
+            />
+          </div>
+        ) : null}
       </div>
 
       {selectedAppointment ? (
@@ -1255,6 +1497,125 @@ export function AdminConsole({
           </div>
         </div>
       ) : null}
+
+      {showWalkInModal && (
+        <div className="admin-drawer-overlay" onClick={() => setShowWalkInModal(false)} style={{ position: "fixed", top: 0, right: 0, bottom: 0, left: 0, background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000 }}>
+          <div className="admin-drawer" onClick={(e) => e.stopPropagation()} style={{ width: "min(500px, 90%)", background: "#fff", padding: 24, borderRadius: 12, boxShadow: "0 4px 24px rgba(0,0,0,0.15)", display: "flex", flexDirection: "column", gap: 18, maxHeight: "90vh", overflowY: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h2 style={{ margin: 0, fontSize: 20 }}>Book Walk-In Appointment</h2>
+              <button className="button subtle" onClick={() => setShowWalkInModal(false)}>Close</button>
+            </div>
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              await mutate({
+                action: "appointment.create",
+                patientName: walkInForm.patientName,
+                phone: walkInForm.phone,
+                email: walkInForm.email,
+                departmentSlug: walkInForm.departmentSlug,
+                requestedDate: walkInForm.requestedDate,
+                requestedTime: walkInForm.requestedTime,
+                concern: walkInForm.concern,
+                status: walkInForm.status
+              }, "Walk-in appointment booked successfully.");
+              setShowWalkInModal(false);
+            }} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <label>
+                Patient Full Name *
+                <input type="text" value={walkInForm.patientName} onChange={(e) => setWalkInForm({ ...walkInForm, patientName: e.target.value })} required style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }} />
+              </label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <label>
+                  Phone Number *
+                  <input type="text" placeholder="e.g. 9876543210" value={walkInForm.phone} onChange={(e) => setWalkInForm({ ...walkInForm, phone: e.target.value })} required style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }} />
+                </label>
+                <label>
+                  Email Address
+                  <input type="email" placeholder="Optional" value={walkInForm.email} onChange={(e) => setWalkInForm({ ...walkInForm, email: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }} />
+                </label>
+              </div>
+              <label>
+                Department *
+                <select value={walkInForm.departmentSlug} onChange={(e) => setWalkInForm({ ...walkInForm, departmentSlug: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }}>
+                  {departments.map(d => <option key={d.slug} value={d.slug}>{d.name}</option>)}
+                </select>
+              </label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <label>
+                  Booking Date *
+                  <input type="date" value={walkInForm.requestedDate} onChange={(e) => setWalkInForm({ ...walkInForm, requestedDate: e.target.value })} required style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }} />
+                </label>
+                <label>
+                  Time Slot *
+                  <input type="text" placeholder="e.g. 10:30 AM" value={walkInForm.requestedTime} onChange={(e) => setWalkInForm({ ...walkInForm, requestedTime: e.target.value })} required style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }} />
+                </label>
+              </div>
+              <label>
+                Patient Concern / Notes
+                <textarea rows={3} placeholder="Reason for walk-in consultation..." value={walkInForm.concern} onChange={(e) => setWalkInForm({ ...walkInForm, concern: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }} />
+              </label>
+              <label>
+                Initial Status
+                <select value={walkInForm.status} onChange={(e) => setWalkInForm({ ...walkInForm, status: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }}>
+                  <option value="CONFIRMED">Confirmed / Scheduled</option>
+                  <option value="CONTACTED">Contacted / Pending Confirmation</option>
+                </select>
+              </label>
+              <button className="button primary full" type="submit" disabled={busy} style={{ marginTop: 8 }}>
+                Create Appointment
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showReplyModal && (
+        <div className="admin-drawer-overlay" onClick={() => setShowReplyModal(false)} style={{ position: "fixed", top: 0, right: 0, bottom: 0, left: 0, background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000 }}>
+          <div className="admin-drawer" onClick={(e) => e.stopPropagation()} style={{ width: "min(550px, 90%)", background: "#fff", padding: 24, borderRadius: 12, boxShadow: "0 4px 24px rgba(0,0,0,0.15)", display: "flex", flexDirection: "column", gap: 18 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h2 style={{ margin: 0, fontSize: 20 }}>Send Email Response</h2>
+              <button className="button subtle" onClick={() => setShowReplyModal(false)}>Close</button>
+            </div>
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              setBusy(true);
+              setNotice("");
+              try {
+                const response = await fetch("/api/admin/reply-email", {
+                  method: "POST",
+                  headers: { "content-type": "application/json", "x-csrf-token": session.csrf },
+                  body: JSON.stringify(replyForm),
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || "Failed to send reply email.");
+                setNotice("Reply email sent successfully and message status updated.");
+                setShowReplyModal(false);
+                await refreshData(true);
+              } catch (err) {
+                alert(err instanceof Error ? err.message : "Failed to send reply email.");
+              } finally {
+                setBusy(false);
+              }
+            }} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <label>
+                To
+                <input type="text" value={replyForm.recipientEmail} readOnly style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, background: "#f3f4f6" }} />
+              </label>
+              <label>
+                Subject
+                <input type="text" value={replyForm.subject} onChange={(e) => setReplyForm({ ...replyForm, subject: e.target.value })} required style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }} />
+              </label>
+              <label>
+                Email Message Body
+                <textarea rows={8} placeholder="Type your response to the patient here..." value={replyForm.replyText} onChange={(e) => setReplyForm({ ...replyForm, replyText: e.target.value })} required style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }} />
+              </label>
+              <button className="button primary full" type="submit" disabled={busy}>
+                Send Email Reply
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -1434,6 +1795,24 @@ function DoctorManager({
   return (
     <div className="admin-panel-grid">
       <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave(form); }}>
+        {source.some(d => d.slug === form.slug && form.slug) && (
+          <div style={{ background: "#e0f2fe", color: "#0369a1", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <span>✏️ Editing doctor profile: <strong>{form.name}</strong></span>
+            <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({
+              slug: "",
+              name: "",
+              speciality: "",
+              qualification: "",
+              departmentSlug: departments[0]?.slug || "",
+              photoUrl: "",
+              profileNote: "",
+              isVisible: "1",
+              blockedDates: ""
+            })}>
+              Create New
+            </button>
+          </div>
+        )}
         <label>
           Existing doctor
           <select value={form.slug} onChange={(event) => choose(event.target.value)}>
@@ -1486,6 +1865,14 @@ function BlogForm({
   return (
     <div className="admin-panel-grid">
       <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave({ ...form, slug: form.slug || slugify(form.title) }); }}>
+        {rows.some(b => b.slug === form.slug && form.slug) && (
+          <div style={{ background: "#e0f2fe", color: "#0369a1", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <span>✏️ Editing blog post: <strong>{form.title}</strong></span>
+            <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({ title: "", slug: "", excerpt: "", body: "" })}>
+              Create New
+            </button>
+          </div>
+        )}
         <label>Title<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value, slug: slugify(event.target.value) })} /></label>
         <label>Slug<input value={form.slug} onChange={(event) => setForm({ ...form, slug: slugify(event.target.value) })} /></label>
         <label>Excerpt<textarea rows={3} value={form.excerpt} onChange={(event) => setForm({ ...form, excerpt: event.target.value })} /></label>
@@ -1531,6 +1918,14 @@ function CareerForm({
   return (
     <div className="admin-panel-grid">
       <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave({ ...form, slug: form.slug || slugify(form.title) }); }}>
+        {rows.some(j => j.slug === form.slug && form.slug) && (
+          <div style={{ background: "#e0f2fe", color: "#0369a1", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <span>✏️ Editing job listing: <strong>{form.title}</strong></span>
+            <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({ title: "", slug: "", department: "", employmentType: "Full-time", description: "" })}>
+              Create New
+            </button>
+          </div>
+        )}
         <label>Job title<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value, slug: slugify(event.target.value) })} /></label>
         <label>Department<input value={form.department} onChange={(event) => setForm({ ...form, department: event.target.value })} /></label>
         <label>Employment type<input value={form.employmentType} onChange={(event) => setForm({ ...form, employmentType: event.target.value })} /></label>
@@ -1577,6 +1972,14 @@ function VideoForm({
   return (
     <div className="admin-panel-grid">
       <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave(form); }}>
+        {rows.some(v => v.youtube_url === form.youtubeUrl && form.youtubeUrl) && (
+          <div style={{ background: "#e0f2fe", color: "#0369a1", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <span>✏️ Editing video entry: <strong>{form.title}</strong></span>
+            <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({ title: "", youtubeUrl: "", consentNote: "" })}>
+              Create New
+            </button>
+          </div>
+        )}
         <label>Video title<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
         <label>YouTube URL<input value={form.youtubeUrl} onChange={(event) => setForm({ ...form, youtubeUrl: event.target.value })} /></label>
         <label>Consent/source note<textarea rows={4} value={form.consentNote} onChange={(event) => setForm({ ...form, consentNote: event.target.value })} /></label>
@@ -1621,6 +2024,8 @@ function MediaManager({
   const [consentNote, setConsentNote] = useState("");
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState("");
+
+  const [selectedPurposeFilter, setSelectedPurposeFilter] = useState("ALL");
 
   async function handleUpload(e: React.FormEvent) {
     e.preventDefault();
@@ -1677,15 +2082,34 @@ function MediaManager({
       </form>
 
       <div>
-        <h3 style={{ margin: "0 0 12px 0", fontSize: "16px", fontWeight: "600" }}>R2 Uploaded Assets Directory</h3>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "600" }}>R2 Uploaded Assets Directory</h3>
+          <select value={selectedPurposeFilter} onChange={(e) => setSelectedPurposeFilter(e.target.value)} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid var(--border)", fontSize: 13 }}>
+            <option value="ALL">All Purposes</option>
+            <option value="gallery">Gallery Only</option>
+            <option value="doctor-photo">Doctor Photos Only</option>
+            <option value="admin-upload">General Admin Uploads Only</option>
+          </select>
+        </div>
         <DataTable
-          rows={rows}
+          rows={rows.filter(r => selectedPurposeFilter === "ALL" || r.purpose === selectedPurposeFilter)}
           columns={["file_name", "r2_key", "purpose", "size_bytes", "status", "created_at"]}
           actions={(row) => (
             <div className="table-actions">
               <a href={`/api/media/${row.r2_key}`} target="_blank" rel="noopener noreferrer" className="button subtle small" style={{ display: "inline-flex", textDecoration: "none", alignItems: "center" }}>
                 Open Preview
               </a>
+              <button
+                type="button"
+                className="button subtle small"
+                onClick={() => {
+                  const url = `${window.location.origin}/api/media/${row.r2_key}`;
+                  navigator.clipboard.writeText(url);
+                  alert("Copied media URL to clipboard!");
+                }}
+              >
+                Copy Link
+              </button>
               <button 
                 className="button secondary small"
                 disabled={busy}

@@ -210,6 +210,14 @@ const tableStatements = [
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE INDEX IF NOT EXISTS admin_email_otps_email_idx ON admin_email_otps(email)`,
+  `CREATE TABLE IF NOT EXISTS department_closures (
+    id TEXT PRIMARY KEY,
+    department_slug TEXT NOT NULL,
+    closed_date TEXT NOT NULL,
+    reason TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(department_slug, closed_date)
+  )`,
 ];
 
 let initialized = false;
@@ -218,6 +226,7 @@ const adminUserMigrationStatements = [
   "ALTER TABLE admin_users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
   "ALTER TABLE admin_users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE doctor_profiles ADD COLUMN blocked_dates TEXT DEFAULT ''",
+  "CREATE TABLE IF NOT EXISTS department_closures (id TEXT PRIMARY KEY, department_slug TEXT NOT NULL, closed_date TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(department_slug, closed_date))",
 ];
 
 export async function getD1() {

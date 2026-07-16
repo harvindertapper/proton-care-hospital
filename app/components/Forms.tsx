@@ -191,13 +191,18 @@ export function AppointmentForm({
 
   useEffect(() => {
     let cancelled = false;
-    if (!departmentSlug || isEmergency) return;
-    fetch(`/api/department-slots?departmentSlug=${encodeURIComponent(departmentSlug)}`)
+    if (!departmentSlug || isEmergency || !form.requestedDate) return;
+    fetch(`/api/department-slots?departmentSlug=${encodeURIComponent(departmentSlug)}&date=${encodeURIComponent(form.requestedDate)}`)
       .then((response) => response.json())
       .then((data: SlotsResponse) => {
         if (cancelled) return;
-        if (data.error) setSlotError(data.error);
-        setSlots(data.slots || []);
+        if (data.error) {
+          setSlotError(data.error);
+          setSlots([]);
+        } else {
+          setSlotError("");
+          setSlots(data.slots || []);
+        }
       })
       .catch(() => {
         if (!cancelled) setSlotError("Please call the hospital desk to confirm timing for this department.");
@@ -205,7 +210,7 @@ export function AppointmentForm({
     return () => {
       cancelled = true;
     };
-  }, [departmentSlug, isEmergency]);
+  }, [departmentSlug, isEmergency, form.requestedDate]);
 
   function chooseDepartment(slug: string) {
     setSlots([]);
