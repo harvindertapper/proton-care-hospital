@@ -120,7 +120,7 @@ export function AppointmentForm({
     return { morningSlots: morning, afternoonSlots: afternoon };
   }, [slots]);
 
-  const [mounted, setMounted] = useState(false);
+  const [mounted] = useState(() => typeof window !== "undefined");
 
   useEffect(() => {
     if (mounted) {
@@ -139,7 +139,6 @@ export function AppointmentForm({
   }, [mounted, success]);
 
   useEffect(() => {
-    setMounted(true);
     import("@/app/lib/cryptoStorage").then((m) => {
       m.getAndDecrypt("pch_appointment_draft").then((savedForm) => {
         if (savedForm) {
@@ -231,6 +230,13 @@ export function AppointmentForm({
     setBusy(true);
     setMessage("");
     setSuccess(false);
+
+    fetch("/api/analytics", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ eventType: "booking_intent", path: window.location.pathname }),
+    }).catch(() => {});
+
     try {
       const data = await postJson("/api/appointments", {
         ...form,
@@ -239,6 +245,13 @@ export function AppointmentForm({
         idempotencyKey,
       });
       setSuccess(true);
+
+      fetch("/api/analytics", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ eventType: "booking_success", path: window.location.pathname }),
+      }).catch(() => {});
+
       setMessage(`${data.message || "Your appointment request has been registered securely."} Reference ID: ${data.requestId || ""}`);
       setStep(1);
       setForm({
@@ -471,7 +484,7 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
   const [success, setSuccess] = useState(false);
 
   const [idempotencyKey, setIdempotencyKey] = useState("");
-  const [mounted, setMounted] = useState(false);
+  const [mounted] = useState(() => typeof window !== "undefined");
 
   useEffect(() => {
     if (mounted) {
@@ -490,7 +503,6 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
   }, [mounted, success]);
 
   useEffect(() => {
-    setMounted(true);
     import("@/app/lib/cryptoStorage").then((m) => {
       m.getAndDecrypt("pch_feedback_draft").then((saved) => {
         if (saved) {
@@ -590,7 +602,7 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
   const [success, setSuccess] = useState(false);
 
   const [idempotencyKey, setIdempotencyKey] = useState("");
-  const [mounted, setMounted] = useState(false);
+  const [mounted] = useState(() => typeof window !== "undefined");
 
   useEffect(() => {
     if (mounted) {
@@ -609,7 +621,6 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
   }, [mounted, success]);
 
   useEffect(() => {
-    setMounted(true);
     import("@/app/lib/cryptoStorage").then((m) => {
       m.getAndDecrypt("pch_contact_draft").then((saved) => {
         if (saved) {

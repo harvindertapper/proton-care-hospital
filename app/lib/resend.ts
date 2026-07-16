@@ -13,7 +13,7 @@ export async function sendEmail({ to, subject, html }: SendEmailParams) {
   try {
     // Dynamic import to avoid Node link-time crash during testing
     const { env } = await import("cloudflare:workers");
-    apiKey = (env as Record<string, any>).RESEND_API_KEY;
+    apiKey = (env as Record<string, string | undefined>).RESEND_API_KEY;
   } catch {
     // Fallback for local testing environments if process.env is populated
     apiKey = typeof process !== "undefined" ? process.env?.RESEND_API_KEY : undefined;

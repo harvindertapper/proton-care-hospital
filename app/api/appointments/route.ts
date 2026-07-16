@@ -130,8 +130,8 @@ export async function POST(request: Request) {
         request.headers.get("user-agent") || ""
       )
     ]);
-  } catch (err: any) {
-    if (err?.message?.includes("UNIQUE constraint failed")) {
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message.includes("UNIQUE constraint failed")) {
       return json({ error: "This time slot has just been booked. Please select another slot." }, { status: 409 });
     }
     throw err;

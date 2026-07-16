@@ -52,8 +52,8 @@ export default function StatusClient() {
       }
       
       setData(json.data);
-    } catch (err: any) {
-      setError(err.message || "An unexpected error occurred.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "An unexpected error occurred.");
     } finally {
       setLoading(false);
     }
@@ -171,7 +171,7 @@ export default function StatusClient() {
               <p style={{ margin: 0, color: "var(--muted)" }}>Your request is currently under review. Our staff will confirm it shortly.</p>
             )}
             {(data.status === "REJECTED" || data.status === "CANCELLED") && (
-              <p style={{ margin: 0, color: "var(--danger)" }}>We couldn't accommodate this slot. Please request a new appointment or call us.</p>
+              <p style={{ margin: 0, color: "var(--danger)" }}>We couldn&apos;t accommodate this slot. Please request a new appointment or call us.</p>
             )}
             {(data.status === "COMPLETED" || data.status === "CLOSED") && (
               <p style={{ margin: 0, color: "var(--blue)", fontWeight: 500 }}>This appointment has been completed. Thank you for visiting Protone Care Hospital.</p>

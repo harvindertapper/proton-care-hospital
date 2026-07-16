@@ -69,7 +69,7 @@ function hexToBuf(hex: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-export async function encryptAndSave(keyName: string, data: any): Promise<void> {
+export async function encryptAndSave(keyName: string, data: unknown): Promise<void> {
   if (typeof window === "undefined") return;
 
   try {
@@ -102,7 +102,7 @@ export async function encryptAndSave(keyName: string, data: any): Promise<void> 
   }
 }
 
-export async function getAndDecrypt(keyName: string): Promise<any | null> {
+export async function getAndDecrypt(keyName: string): Promise<unknown | null> {
   if (typeof window === "undefined") return null;
 
   try {

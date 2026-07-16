@@ -10,6 +10,12 @@ type GalleryAsset = {
   note: string;
 };
 
+type ApiGalleryAsset = {
+  r2_key: string;
+  file_name?: string;
+  consent_note?: string;
+};
+
 const presetAssets: GalleryAsset[] = [
   {
     url: "/assets/hospital/front-exterior-hero.webp",
@@ -60,7 +66,7 @@ export default function GalleryClient() {
         const res = await fetch("/api/gallery");
         const data = await res.json();
         if (data.success && data.assets && data.assets.length > 0) {
-          const formatted = data.assets.map((asset: any) => ({
+          const formatted = data.assets.map((asset: ApiGalleryAsset) => ({
             url: `/api/media/${asset.r2_key}`,
             title: asset.file_name || "Gallery Asset",
             note: asset.consent_note || "Protone Care Hospital Facility",

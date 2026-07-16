@@ -10,12 +10,15 @@ export function HeroCarousel() {
   ];
   const [index, setIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
-  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(() =>
+    typeof window !== "undefined"
+      ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      : false,
+  );
 
-  // Check prefers-reduced-motion media query
   useEffect(() => {
+    if (typeof window === "undefined") return;
     const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setPrefersReducedMotion(mediaQuery.matches);
 
     const listener = (e: MediaQueryListEvent) => {
       setPrefersReducedMotion(e.matches);

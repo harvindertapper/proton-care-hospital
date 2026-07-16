@@ -15,7 +15,7 @@ export default function NotFound() {
             Page Not Found / पृष्ठ नहीं मिला
           </h1>
           <p className="text-slate-600 text-lg max-w-md mx-auto mb-8 leading-relaxed">
-            We couldn't find the page you are looking for. It may have been moved, deleted, or the address might be incorrect.
+            We couldn&apos;t find the page you are looking for. It may have been moved, deleted, or the address might be incorrect.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
             <Link href="/" className="button primary flex items-center gap-2">
