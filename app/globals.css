@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
 
 :root {
   --navy: #0b2545;
@@ -35,7 +34,7 @@ body {
   margin: 0;
   background: var(--surface);
   color: var(--ink);
-  font-family: 'Outfit', var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-family: var(--font-outfit), 'Outfit', var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
 
 a {
@@ -1122,7 +1121,7 @@ button:disabled {
   display: grid;
   grid-template-columns: 280px 1fr;
   background: #f8fafc;
-  font-family: 'Outfit', sans-serif;
+  font-family: var(--font-outfit), 'Outfit', sans-serif;
 }
 
 .admin-sidebar {

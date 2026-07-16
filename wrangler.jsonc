@@ -26,6 +26,8 @@
   "secrets": {
     "required": [
       "ADMIN_SESSION_SECRET",
+      "AUTH_SECRET",
+      "RESEND_API_KEY",
       "ADMIN_SUPER_EMAIL",
       "ADMIN_SUPER_PASSWORD",
       "TURNSTILE_SECRET_KEY"

@@ -10,9 +10,9 @@ import {
   json,
   nextRequestId,
   normalizePhone,
-  run,
   sanitizeHtml,
   saveIdempotency,
+  sha256,
   validateEmail,
   validatePhone,
   verifyTurnstile,
@@ -71,23 +71,30 @@ export async function POST(request: Request) {
   }
 
   // Idempotency-Key Check
-  const idempotencyKey = request.headers.get("idempotency-key") || cleanText(body.idempotencyKey, 100);
-  if (idempotencyKey) {
-    try {
-      const cached = await checkIdempotency(idempotencyKey, {
-        patientName,
-        phone,
-        email,
-        departmentSlug,
-        requestedDate,
-        requestedTime,
-        concern,
-        consent,
-      });
-      if (cached) return json(cached);
-    } catch (err) {
-      return json({ error: err instanceof Error ? err.message : "Idempotency check failed." }, { status: 400 });
-    }
+  // If the client omits a key (or sends an empty one), derive a deterministic
+  // server-side key from the normalized payload via SHA-256. This closes the
+  // bypass where a missing key skipped deduplication entirely, while still
+  // honoring an explicit client key for cross-request retries.
+  const idempotencyPayload = {
+    patientName,
+    phone,
+    email,
+    departmentSlug,
+    requestedDate,
+    requestedTime,
+    concern,
+    consent,
+  };
+  const clientKey = request.headers.get("idempotency-key") || cleanText(body.idempotencyKey, 100);
+  const idempotencyKey = clientKey
+    ? `client:${clientKey}`
+    : `server:${await sha256(JSON.stringify(idempotencyPayload))}`;
+
+  try {
+    const cached = await checkIdempotency(idempotencyKey, idempotencyPayload);
+    if (cached) return json(cached);
+  } catch (err) {
+    return json({ error: err instanceof Error ? err.message : "Idempotency check failed." }, { status: 400 });
   }
 
   const duplicate = await checkRateLimit("appointment-duplicate", `${phone}:${email}`, 1, 10 * 60);
@@ -147,16 +154,7 @@ export async function POST(request: Request) {
   };
 
   if (idempotencyKey) {
-    await saveIdempotency(idempotencyKey, {
-      patientName,
-      phone,
-      email,
-      departmentSlug,
-      requestedDate,
-      requestedTime,
-      concern,
-      consent,
-    }, responseData);
+    await saveIdempotency(idempotencyKey, idempotencyPayload, responseData);
   }
 
   return json(responseData);

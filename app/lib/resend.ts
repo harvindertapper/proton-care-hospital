@@ -33,6 +33,10 @@ export async function sendEmail({ to, subject, html }: SendEmailParams) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        // TODO: After verifying protonecarehospital.com DNS in Resend, switch the
+        // sender to "Protone Care Hospital <noreply@protonecarehospital.com>" so
+        // production emails are not sent from the unverified Resend sandbox domain.
+        // Until then, onboarding@resend.dev is used and some providers may reject it.
         from: "Protone Care Hospital <onboarding@resend.dev>",
         to: [to],
         subject,
