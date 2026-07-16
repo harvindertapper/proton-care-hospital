@@ -218,6 +218,28 @@ const tableStatements = [
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(department_slug, closed_date)
   )`,
+  `CREATE TABLE IF NOT EXISTS site_analytics (
+    id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    path TEXT NOT NULL,
+    session_hash TEXT,
+    user_agent TEXT,
+    ip_hash TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_analytics_event ON site_analytics(event_type)`,
+  `CREATE TABLE IF NOT EXISTS admin_webhooks (
+    id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    event_trigger TEXT NOT NULL,
+    secret TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS site_configs (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )`,
 ];
 
 let initialized = false;
@@ -227,6 +249,10 @@ const adminUserMigrationStatements = [
   "ALTER TABLE admin_users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE doctor_profiles ADD COLUMN blocked_dates TEXT DEFAULT ''",
   "CREATE TABLE IF NOT EXISTS department_closures (id TEXT PRIMARY KEY, department_slug TEXT NOT NULL, closed_date TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(department_slug, closed_date))",
+  "CREATE TABLE IF NOT EXISTS site_analytics (id TEXT PRIMARY KEY, event_type TEXT NOT NULL, path TEXT NOT NULL, session_hash TEXT, user_agent TEXT, ip_hash TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+  "CREATE INDEX IF NOT EXISTS idx_analytics_event ON site_analytics(event_type)",
+  "CREATE TABLE IF NOT EXISTS admin_webhooks (id TEXT PRIMARY KEY, url TEXT NOT NULL, event_trigger TEXT NOT NULL, secret TEXT, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+  "CREATE TABLE IF NOT EXISTS site_configs (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
 ];
 
 export async function getD1() {
@@ -502,9 +528,15 @@ export function json(data: unknown, init?: ResponseInit) {
 }
 
 export function getClientIp(request: Request) {
+  // CF-Connecting-IP is set by the Cloudflare network edge and cannot be
+  // spoofed by the client. Always prefer it over client-supplied headers.
+  const cfIp = request.headers.get("cf-connecting-ip");
+  if (cfIp) return cfIp.trim();
+
+  // Fallback for local dev / non-Cloudflare deployments only.
   const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0]?.trim() || "unknown";
-  return request.headers.get("cf-connecting-ip") || request.headers.get("x-real-ip") || "unknown";
+  if (forwarded) return forwarded.split(",")[0]?.trim() || "127.0.0.1";
+  return request.headers.get("x-real-ip")?.trim() || "127.0.0.1";
 }
 
 export async function checkRateLimit(action: string, identifier: string, limit: number, windowSeconds: number) {
@@ -682,7 +714,10 @@ export async function createAdminSession(email: string, role: "SUPER_ADMIN" | "S
   const sessionId = crypto.randomUUID();
   const csrf = crypto.randomUUID();
   const exp = Date.now() + SESSION_MAX_AGE_SECONDS * 1000;
-  
+
+  // Prune expired sessions to keep the table from growing unbounded.
+  await run("DELETE FROM sessions WHERE expires_at < ?", Date.now()).catch(() => {});
+
   await run(
     "INSERT INTO sessions (id, email, role, csrf, expires_at) VALUES (?, ?, ?, ?, ?)",
     sessionId, email, role, csrf, exp
