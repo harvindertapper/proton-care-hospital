@@ -12,6 +12,7 @@ import {
 } from "@/app/lib/server";
 import { departmentBySlug } from "@/app/lib/data";
 import { validateStaffAccountInput } from "@/app/lib/adminAuth";
+import { sendEmail, getStaffOnboardingTemplate } from "@/app/lib/resend";
 
 type AdminSession = { email: string; role: "SUPER_ADMIN" | "STAFF" };
 
@@ -477,7 +478,15 @@ export async function POST(request: Request) {
         staff.name,
         pHash,
       );
-      await audit(admin.session.email, "STAFF_CREATED", "AdminUser", staff.email, "Created active staff account requiring password change");
+
+      // Send onboarding credentials email to the new staff member
+      await sendEmail({
+        to: staff.email,
+        subject: "Welcome to Protone Care Hospital - Your Staff Account Details",
+        html: getStaffOnboardingTemplate(staff.name, staff.email, staff.password),
+      });
+
+      await audit(admin.session.email, "STAFF_CREATED", "AdminUser", staff.email, "Created active staff account requiring password change and sent onboarding email");
       return json({ success: true });
     }
 
@@ -515,6 +524,84 @@ export async function POST(request: Request) {
         active ? "Reactivated staff account" : "Deactivated staff account and revoked sessions",
       );
       return json({ success: true });
+    }
+
+    if (action === "account.changeEmail") {
+      const otpInput = clean(payload.otp, 6);
+      if (!otpInput) {
+        throw new Error("Verification code is required.");
+      }
+
+      const otpRes = await query<{
+        id: string;
+        otp_hash: string;
+        meta_json: string;
+        attempts: number;
+        expires_at: number;
+      }>(
+        `SELECT id, otp_hash, meta_json, attempts, expires_at 
+         FROM admin_email_otps 
+         WHERE lower(email) = lower(?) AND purpose = 'change_email'
+         ORDER BY created_at DESC LIMIT 1`,
+        admin.session.email
+      );
+      const challenge = otpRes.results?.[0];
+
+      if (!challenge) {
+        throw new Error("No active verification code request found. Please request a new code.");
+      }
+
+      const now = Math.floor(Date.now() / 1000);
+      if (challenge.expires_at < now) {
+        await run("DELETE FROM admin_email_otps WHERE id = ?", challenge.id);
+        throw new Error("Verification code has expired. Please request a new one.");
+      }
+
+      if (challenge.attempts >= 3) {
+        await run("DELETE FROM admin_email_otps WHERE id = ?", challenge.id);
+        throw new Error("Too many incorrect attempts. Please request a new code.");
+      }
+
+      const msgBuffer = new TextEncoder().encode(otpInput);
+      const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
+      const inputHash = Array.from(new Uint8Array(hashBuffer))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+
+      if (inputHash !== challenge.otp_hash) {
+        await run("UPDATE admin_email_otps SET attempts = attempts + 1 WHERE id = ?", challenge.id);
+        throw new Error("Invalid verification code.");
+      }
+
+      const meta = JSON.parse(challenge.meta_json || "{}") as { newEmail?: string };
+      const newEmail = (meta.newEmail || "").trim().toLowerCase();
+
+      if (!newEmail) {
+        throw new Error("Target email address not found in verification challenge.");
+      }
+
+      const checkEmail = await query("SELECT id FROM admin_users WHERE lower(email) = lower(?) LIMIT 1", newEmail);
+      if (checkEmail.results?.length) {
+        throw new Error("Email address is already in use by another account.");
+      }
+
+      await run(
+        "UPDATE admin_users SET email = ?, updated_at = CURRENT_TIMESTAMP WHERE lower(email) = lower(?)",
+        newEmail,
+        admin.session.email,
+      );
+
+      await run("UPDATE sessions SET revoked = 1 WHERE lower(email) = lower(?)", admin.session.email);
+      await run("DELETE FROM admin_email_otps WHERE id = ?", challenge.id);
+
+      await audit(
+        admin.session.email,
+        "ADMIN_EMAIL_CHANGED",
+        "AdminUser",
+        admin.session.email,
+        `Email updated to ${newEmail}. All sessions revoked.`,
+      );
+      return json({ success: true, loginRequired: true });
     }
 
     if (admin.session.role === "STAFF") {

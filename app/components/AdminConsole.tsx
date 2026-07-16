@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
   Clock3,
+  Eye,
   EyeOff,
   FileText,
   LogOut,
@@ -103,13 +104,24 @@ function slugify(value: string) {
 export function AdminLoginForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState("");
+  const [infoMessage, setInfoMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
+  // Forgot Password Wizard States
+  const [forgotMode, setForgotMode] = useState(false);
+  const [forgotStep, setForgotStep] = useState<"request" | "verify">("request");
+  const [otp, setOtp] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+
+  async function submitLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
     setMessage("");
+    setInfoMessage("");
     try {
       const response = await fetch("/api/admin/login", {
         method: "POST",
@@ -126,21 +138,143 @@ export function AdminLoginForm() {
     }
   }
 
+  async function submitForgotRequest(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    setInfoMessage("");
+    try {
+      const response = await fetch("/api/admin/forgot-password", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "request", email }),
+      });
+      const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) throw new Error(String(data.error || "Failed to send reset code."));
+      setInfoMessage(String(data.message || "Verification code sent to your email."));
+      setForgotStep("verify");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Request failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitForgotVerify(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (newPassword !== confirmPassword) {
+      setMessage("Passwords do not match.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    setInfoMessage("");
+    try {
+      const response = await fetch("/api/admin/forgot-password", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "verify", email, otp, newPassword }),
+      });
+      const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) throw new Error(String(data.error || "Reset failed."));
+      setInfoMessage(String(data.message || "Password updated. Please login."));
+      setForgotMode(false);
+      setForgotStep("request");
+      setPassword("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Reset failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (forgotMode) {
+    if (forgotStep === "request") {
+      return (
+        <form className="admin-login-card" onSubmit={submitForgotRequest}>
+          <div>
+            <button type="button" className="admin-back-btn" onClick={() => setForgotMode(false)}>
+              ← Back to Login
+            </button>
+            <h1>Reset Password</h1>
+            <p>Enter your email to receive a reset verification code</p>
+          </div>
+          <label>
+            Email Address
+            <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" required />
+          </label>
+          <button className="button primary full" type="submit" disabled={busy}>
+            Send Verification Code
+          </button>
+          {message ? <p className="admin-error">{message}</p> : null}
+        </form>
+      );
+    }
+
+    return (
+      <form className="admin-login-card" onSubmit={submitForgotVerify}>
+        <div>
+          <button type="button" className="admin-back-btn" onClick={() => setForgotStep("request")}>
+            ← Change Email
+          </button>
+          <h1>Reset Password</h1>
+          <p>Verify code and set your new password</p>
+        </div>
+        {infoMessage ? <div className="admin-info-alert">{infoMessage}</div> : null}
+        <label>
+          Verification Code
+          <input value={otp} onChange={(event) => setOtp(event.target.value)} type="text" placeholder="6-digit code" required maxLength={6} />
+        </label>
+        <label>
+          New Password (min 15 chars)
+          <div className="password-input-container">
+            <input value={newPassword} onChange={(event) => setNewPassword(event.target.value)} type={showNewPassword ? "text" : "password"} required minLength={15} maxLength={128} />
+            <button type="button" className="password-toggle-btn" onClick={() => setShowNewPassword(!showNewPassword)}>
+              {showNewPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
+        </label>
+        <label>
+          Confirm New Password
+          <input value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} type={showNewPassword ? "text" : "password"} required minLength={15} maxLength={128} />
+        </label>
+        <button className="button primary full" type="submit" disabled={busy}>
+          Reset Password
+        </button>
+        {message ? <p className="admin-error">{message}</p> : null}
+      </form>
+    );
+  }
+
   return (
-    <form className="admin-login-card" onSubmit={submit}>
+    <form className="admin-login-card" onSubmit={submitLogin}>
       <div>
         <span className="admin-mark"><ShieldCheck size={24} aria-hidden="true" /></span>
         <h1>Admin Sign In</h1>
         <p>Protected hospital operations console</p>
       </div>
+      {infoMessage ? <div className="admin-info-alert">{infoMessage}</div> : null}
       <label>
         Email
         <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="username" required />
       </label>
       <label>
         Password
-        <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" required />
+        <div className="password-input-container">
+          <input value={password} onChange={(event) => setPassword(event.target.value)} type={showPassword ? "text" : "password"} autoComplete="current-password" required />
+          <button type="button" className="password-toggle-btn" onClick={() => setShowPassword(!showPassword)}>
+            {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+          </button>
+        </div>
       </label>
+      <button type="button" className="forgot-password-link" onClick={() => {
+        setForgotMode(true);
+        setForgotStep("request");
+        setMessage("");
+        setInfoMessage("");
+      }}>
+        Forgot Password?
+      </button>
       <button className="button primary full" type="submit" disabled={busy}>Sign in</button>
       {message ? <p className="admin-error">{message}</p> : null}
     </form>
@@ -156,13 +290,37 @@ export function AdminPasswordChangeForm({
   mandatory?: boolean;
   onMessage?: (message: string) => void;
 }) {
-  const [form, setForm] = useState({ oldPassword: "", newPassword: "", confirmPassword: "" });
+  const [form, setForm] = useState({ oldPassword: "", newPassword: "", confirmPassword: "", otp: "" });
   const [message, setMessage] = useState("");
+  const [infoMessage, setInfoMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   function showMessage(value: string) {
     setMessage(value);
     onMessage?.(value);
+  }
+
+  async function sendOtp() {
+    setBusy(true);
+    showMessage("");
+    setInfoMessage("");
+    try {
+      const response = await fetch("/api/admin/otp/request", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-csrf-token": csrf },
+        body: JSON.stringify({ purpose: "change_password" }),
+      });
+      const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) throw new Error(String(data.error || "Failed to send code."));
+      setInfoMessage("Verification code sent to your email.");
+      setOtpSent(true);
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : "Failed to send code.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -175,13 +333,18 @@ export function AdminPasswordChangeForm({
       showMessage("New password must be between 15 and 128 characters.");
       return;
     }
+    if (!form.otp) {
+      showMessage("Please request and enter a verification code.");
+      return;
+    }
     setBusy(true);
     showMessage("");
+    setInfoMessage("");
     try {
       const response = await fetch("/api/admin/change-password", {
         method: "POST",
         headers: { "content-type": "application/json", "x-csrf-token": csrf },
-        body: JSON.stringify({ oldPassword: form.oldPassword, newPassword: form.newPassword }),
+        body: JSON.stringify({ oldPassword: form.oldPassword, newPassword: form.newPassword, otp: form.otp }),
       });
       const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (!response.ok) throw new Error(String(data.error || "Failed to change password."));
@@ -197,18 +360,35 @@ export function AdminPasswordChangeForm({
   return (
     <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 420 }}>
       {mandatory ? <p>You must replace the temporary password before using the admin console.</p> : null}
+      {infoMessage ? <div className="admin-info-alert">{infoMessage}</div> : null}
       <label>
         Current Password
-        <input type="password" autoComplete="current-password" required value={form.oldPassword} onChange={(event) => setForm({ ...form, oldPassword: event.target.value })} />
+        <div className="password-input-container">
+          <input type={showPassword ? "text" : "password"} autoComplete="current-password" required value={form.oldPassword} onChange={(event) => setForm({ ...form, oldPassword: event.target.value })} />
+          <button type="button" className="password-toggle-btn" onClick={() => setShowPassword(!showPassword)}>
+            {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+          </button>
+        </div>
       </label>
       <label>
-        New Password
-        <input type="password" autoComplete="new-password" required minLength={15} maxLength={128} value={form.newPassword} onChange={(event) => setForm({ ...form, newPassword: event.target.value })} />
+        New Password (min 15 chars)
+        <input type={showPassword ? "text" : "password"} autoComplete="new-password" required minLength={15} maxLength={128} value={form.newPassword} onChange={(event) => setForm({ ...form, newPassword: event.target.value })} />
       </label>
       <label>
         Confirm New Password
-        <input type="password" autoComplete="new-password" required minLength={15} maxLength={128} value={form.confirmPassword} onChange={(event) => setForm({ ...form, confirmPassword: event.target.value })} />
+        <input type={showPassword ? "text" : "password"} autoComplete="new-password" required minLength={15} maxLength={128} value={form.confirmPassword} onChange={(event) => setForm({ ...form, confirmPassword: event.target.value })} />
       </label>
+      <div style={{ borderTop: "1px solid var(--line)", paddingTop: 16, marginTop: 4 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12, marginBottom: 8 }}>
+          <label style={{ flex: 1, margin: 0 }}>
+            Verification Code
+            <input type="text" placeholder="6-digit code" required maxLength={6} value={form.otp} onChange={(event) => setForm({ ...form, otp: event.target.value })} />
+          </label>
+          <button type="button" className="button secondary" style={{ height: "42px" }} disabled={busy} onClick={sendOtp}>
+            {otpSent ? "Resend Code" : "Send Code"}
+          </button>
+        </div>
+      </div>
       <button type="submit" className="button primary" disabled={busy}>Update Password</button>
       {mandatory ? (
         <button
@@ -224,6 +404,108 @@ export function AdminPasswordChangeForm({
         </button>
       ) : null}
       {message ? <p className={message.startsWith("Password changed") ? "admin-success" : "admin-error"}>{message}</p> : null}
+    </form>
+  );
+}
+
+export function AdminEmailChangeForm({
+  csrf,
+  onMessage,
+}: {
+  csrf: string;
+  onMessage?: (message: string) => void;
+}) {
+  const [newEmail, setNewEmail] = useState("");
+  const [otp, setOtp] = useState("");
+  const [message, setMessage] = useState("");
+  const [infoMessage, setInfoMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+
+  function showMessage(value: string) {
+    setMessage(value);
+    onMessage?.(value);
+  }
+
+  async function sendOtp() {
+    if (!newEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(newEmail)) {
+      showMessage("Please enter a valid new email address.");
+      return;
+    }
+    setBusy(true);
+    showMessage("");
+    setInfoMessage("");
+    try {
+      const response = await fetch("/api/admin/otp/request", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-csrf-token": csrf },
+        body: JSON.stringify({ purpose: "change_email", newEmail }),
+      });
+      const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) throw new Error(String(data.error || "Failed to send verification code."));
+      setInfoMessage(`Verification code sent to ${newEmail}.`);
+      setOtpSent(true);
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : "Failed to send code.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!otp) {
+      showMessage("Verification code is required.");
+      return;
+    }
+    setBusy(true);
+    showMessage("");
+    setInfoMessage("");
+    try {
+      const response = await fetch("/api/admin/data", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-csrf-token": csrf },
+        body: JSON.stringify({ action: "account.changeEmail", otp }),
+      });
+      const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) throw new Error(String(data.error || "Failed to update email."));
+      showMessage("Email address changed successfully. Please sign in again.");
+      window.setTimeout(() => { window.location.href = "/admin/login"; }, 1200);
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : "Email change failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 420 }}>
+      {infoMessage ? <div className="admin-info-alert">{infoMessage}</div> : null}
+      <label>
+        New Email Address
+        <input type="email" placeholder="newemail@domain.com" required value={newEmail} onChange={(event) => setNewEmail(event.target.value)} disabled={otpSent} />
+      </label>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12, marginBottom: 8 }}>
+        <label style={{ flex: 1, margin: 0 }}>
+          Verification Code (sent to new email)
+          <input type="text" placeholder="6-digit code" required maxLength={6} value={otp} onChange={(event) => setOtp(event.target.value)} />
+        </label>
+        <button type="button" className="button secondary" style={{ height: "42px" }} disabled={busy} onClick={sendOtp}>
+          {otpSent ? "Resend Code" : "Send Code"}
+        </button>
+      </div>
+      {otpSent ? (
+        <button type="button" className="admin-back-btn" style={{ marginTop: -8 }} onClick={() => {
+          setOtpSent(false);
+          setOtp("");
+          setInfoMessage("");
+          setMessage("");
+        }}>
+          ← Change Email Address
+        </button>
+      ) : null}
+      <button type="submit" className="button primary" disabled={busy || !otpSent}>Update Email Address</button>
+      {message ? <p className={message.startsWith("Email address changed") ? "admin-success" : "admin-error"}>{message}</p> : null}
     </form>
   );
 }
@@ -755,6 +1037,11 @@ export function AdminConsole({
             <div style={{ background: "white", padding: 32, borderRadius: 12, border: "1px solid var(--border)" }}>
               <h3 style={{ margin: "0 0 20px 0", fontSize: 20 }}>Change Password</h3>
               <AdminPasswordChangeForm csrf={session.csrf} onMessage={setNotice} />
+            </div>
+
+            <div style={{ background: "white", padding: 32, borderRadius: 12, border: "1px solid var(--border)" }}>
+              <h3 style={{ margin: "0 0 20px 0", fontSize: 20 }}>Change Email Address</h3>
+              <AdminEmailChangeForm csrf={session.csrf} onMessage={setNotice} />
             </div>
 
             <div style={{ background: "white", padding: 32, borderRadius: 12, border: "1px solid var(--border)" }}>

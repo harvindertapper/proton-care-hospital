@@ -54,9 +54,20 @@ export async function POST(request: Request) {
   const verification = account
     ? await verifyPasswordWithUpgrade(password, account.password_hash)
     : { valid: false, needsRehash: false };
-  if (!account || account.is_active !== 1 || !verification.valid) {
-    await audit(email || "unknown", "ADMIN_LOGIN_FAILED", "Admin", email, `Failed login from ${ip}`);
-    return json({ error: "Invalid admin credentials." }, { status: 401 });
+
+  if (!account) {
+    await audit(email || "unknown", "ADMIN_LOGIN_FAILED", "Admin", email, `Failed login from ${ip} - Email not found`);
+    return json({ error: "Admin account not found." }, { status: 404 });
+  }
+
+  if (account.is_active !== 1) {
+    await audit(email, "ADMIN_LOGIN_FAILED", "Admin", email, `Failed login from ${ip} - Account deactivated`);
+    return json({ error: "This admin account has been deactivated." }, { status: 403 });
+  }
+
+  if (!verification.valid) {
+    await audit(email, "ADMIN_LOGIN_FAILED", "Admin", email, `Failed login from ${ip} - Incorrect password`);
+    return json({ error: "Incorrect password." }, { status: 401 });
   }
 
   if (verification.needsRehash) {

@@ -198,6 +198,17 @@ const tableStatements = [
     response_body TEXT NOT NULL,
     created_at INTEGER NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS admin_email_otps (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    otp_hash TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    meta_json TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    expires_at INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS admin_email_otps_email_idx ON admin_email_otps(email)`,
 ];
 
 let initialized = false;

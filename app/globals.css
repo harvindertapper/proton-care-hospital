@@ -1564,3 +1564,86 @@ button:disabled {
     height: 64px;
   }
 }
+
+/* Admin/Staff Professional Login rewrite enhancements */
+.password-input-container {
+  display: flex;
+  align-items: center;
+  position: relative;
+  width: 100%;
+}
+
+.password-input-container input {
+  padding-right: 42px !important;
+  width: 100%;
+}
+
+.password-toggle-btn {
+  position: absolute;
+  right: 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s ease;
+}
+
+.password-toggle-btn:hover {
+  color: var(--navy);
+}
+
+.forgot-password-link {
+  display: inline-block;
+  text-align: right;
+  font-size: 13px;
+  margin-top: -6px;
+  color: var(--blue);
+  cursor: pointer;
+  text-decoration: underline;
+  background: none;
+  border: none;
+  width: fit-content;
+  margin-left: auto;
+  padding: 2px 0;
+  transition: color 0.2s ease;
+}
+
+.forgot-password-link:hover {
+  color: var(--navy);
+}
+
+.admin-info-alert {
+  color: #2b6cb0;
+  font-size: 13px;
+  background: #ebf8ff;
+  border: 1px solid #bee3f8;
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.admin-back-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  width: fit-content;
+  text-align: left;
+  padding: 4px 0;
+  margin-bottom: 4px;
+  transition: color 0.2s ease;
+}
+
+.admin-back-btn:hover {
+  color: var(--navy);
+}
+

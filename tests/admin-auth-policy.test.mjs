@@ -296,3 +296,9 @@ test("a STAFF account holding the configured email stays a conflict, never escal
     "conflict",
   );
 });
+
+test("admin password policy validation utility checks length and differences", () => {
+  assert.equal(validateAdminPassword("short").ok, false);
+  assert.equal(validateAdminPassword("correct-horse-battery-staple").ok, true);
+  assert.equal(validateAdminPassword("correct-horse-battery-staple", "correct-horse-battery-staple").ok, false);
+});
