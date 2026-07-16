@@ -535,7 +535,7 @@ export function AdminConsole({
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<Record<string, string | number | null> | null>(null);
-  const [editForm, setEditForm] = useState({ requestedDate: "", requestedTime: "", internalNotes: "" });
+  const [editForm, setEditForm] = useState({ requestedDate: "", requestedTime: "", internalNotes: "", status: "" });
   const [appointmentsView, setAppointmentsView] = useState<"LIST" | "DAY">("LIST");
   const [appointmentsDate, setAppointmentsDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [appointmentsDept, setAppointmentsDept] = useState("ALL");
@@ -550,6 +550,7 @@ export function AdminConsole({
       requestedDate: String(row.requested_date || ""),
       requestedTime: String(row.requested_time || ""),
       internalNotes: String(row.internal_notes || ""),
+      status: String(row.status || ""),
     });
   }
 
@@ -578,17 +579,17 @@ export function AdminConsole({
   const stats = useMemo(() => {
     const todayStr = new Date().toISOString().split("T")[0];
     const todayAppointments = adminData.appointments.filter((a) => a.requested_date === todayStr);
-    const pendingAppointments = adminData.appointments.filter((a) => a.status === "PENDING");
     
     let pendingCount = 0;
     let approvedCount = 0;
     let rejectedCount = 0;
     let completedCount = 0;
     adminData.appointments.forEach((a) => {
-      if (a.status === "PENDING") pendingCount++;
-      else if (a.status === "APPROVED") approvedCount++;
-      else if (a.status === "REJECTED") rejectedCount++;
-      else if (a.status === "COMPLETED") completedCount++;
+      const s = String(a.status || "").toUpperCase();
+      if (s === "PENDING" || s === "NEW" || s === "CONTACTED") pendingCount++;
+      else if (s === "APPROVED" || s === "CONFIRMED") approvedCount++;
+      else if (s === "REJECTED" || s === "CANCELLED") rejectedCount++;
+      else if (s === "COMPLETED" || s === "CLOSED") completedCount++;
     });
     
     const totalAppointments = adminData.appointments.length;
@@ -824,6 +825,9 @@ export function AdminConsole({
                     <button disabled={busy} onClick={() => mutate({ action: "appointment.status", id: row.id, status: "CANCELLED" }, "Appointment marked cancelled.")}>
                       Cancelled
                     </button>
+                    <button disabled={busy} onClick={() => mutate({ action: "appointment.status", id: row.id, status: "CLOSED" }, "Appointment marked completed.")}>
+                      Completed
+                    </button>
                   </div>
                 )}
                 onRowClick={openTriage}
@@ -841,8 +845,8 @@ export function AdminConsole({
                         <div style={{ marginTop: 4 }}>
                           <span style={{ 
                             padding: "4px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
-                            background: app.status === "APPROVED" ? "#ccfbf1" : app.status === "PENDING" ? "#fef3c7" : app.status === "REJECTED" ? "#ffe4e6" : "#f3f4f6",
-                            color: app.status === "APPROVED" ? "#0f766e" : app.status === "PENDING" ? "#b45309" : app.status === "REJECTED" ? "#be123c" : "#374151"
+                            background: app.status === "CONFIRMED" || app.status === "APPROVED" ? "#ccfbf1" : app.status === "NEW" || app.status === "PENDING" || app.status === "CONTACTED" ? "#fef3c7" : app.status === "CANCELLED" || app.status === "REJECTED" ? "#ffe4e6" : "#f3f4f6",
+                            color: app.status === "CONFIRMED" || app.status === "APPROVED" ? "#0f766e" : app.status === "NEW" || app.status === "PENDING" || app.status === "CONTACTED" ? "#b45309" : app.status === "CANCELLED" || app.status === "REJECTED" ? "#be123c" : "#374151"
                           }}>
                             {app.status}
                           </span>
@@ -863,11 +867,12 @@ export function AdminConsole({
                             {String(app.concern)}
                           </p>
                         )}
-                        <div style={{ display: "flex", gap: 8 }}>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                           <button className="button secondary" onClick={() => openTriage(app)}>Triage / Edit</button>
-                          <button className="button secondary" disabled={busy} onClick={() => mutate({ action: "appointment.status", id: app.id, status: "APPROVED" }, "Approved")}>Approve</button>
-                          <button className="button secondary" disabled={busy} onClick={() => mutate({ action: "appointment.status", id: app.id, status: "REJECTED" }, "Rejected")}>Reject</button>
-                          <button className="button secondary" disabled={busy} onClick={() => mutate({ action: "appointment.status", id: app.id, status: "COMPLETED" }, "Completed")}>Mark Completed</button>
+                          <button className="button secondary" disabled={busy} onClick={() => mutate({ action: "appointment.status", id: app.id, status: "CONTACTED" }, "Appointment marked contacted.")}>Contacted</button>
+                          <button className="button secondary" disabled={busy} onClick={() => mutate({ action: "appointment.status", id: app.id, status: "CONFIRMED" }, "Appointment confirmed.")}>Confirm</button>
+                          <button className="button secondary" disabled={busy} onClick={() => mutate({ action: "appointment.status", id: app.id, status: "CANCELLED" }, "Appointment cancelled.")}>Cancel</button>
+                          <button className="button secondary" disabled={busy} onClick={() => mutate({ action: "appointment.status", id: app.id, status: "CLOSED" }, "Appointment marked completed.")}>Completed</button>
                         </div>
                       </div>
                     </div>
@@ -1210,13 +1215,24 @@ export function AdminConsole({
               mutate({
                 action: "appointment.status",
                 id: selectedAppointment.id,
-                status: selectedAppointment.status,
+                status: editForm.status,
                 requestedDate: editForm.requestedDate,
                 requestedTime: editForm.requestedTime,
                 internalNotes: editForm.internalNotes,
               }, "Appointment details updated.");
               setSelectedAppointment(null);
             }} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <label>
+                Appointment Status
+                <select value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, marginTop: 4 }}>
+                  <option value="NEW">New / Pending Review</option>
+                  <option value="CONTACTED">Patient Contacted</option>
+                  <option value="CONFIRMED">Confirmed / Approved</option>
+                  <option value="CANCELLED">Cancelled / Rejected</option>
+                  <option value="CLOSED">Completed / Closed</option>
+                </select>
+              </label>
+
               <label>
                 Reschedule Date
                 <input type="date" value={editForm.requestedDate} onChange={(e) => setEditForm({ ...editForm, requestedDate: e.target.value })} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, marginTop: 4 }} />
@@ -1384,6 +1400,7 @@ function DoctorManager({
     photo_url: item.photo || "",
     profile_note: "",
     is_visible: 1,
+    blocked_dates: "",
   }));
   const first = source[0];
   const [form, setForm] = useState({
@@ -1395,6 +1412,7 @@ function DoctorManager({
     photoUrl: String(first?.photo_url || ""),
     profileNote: String(first?.profile_note || ""),
     isVisible: String(first?.is_visible ?? "1"),
+    blockedDates: String(first?.blocked_dates || ""),
   });
 
   function choose(slug: string) {
@@ -1409,6 +1427,7 @@ function DoctorManager({
       photoUrl: String(row.photo_url || ""),
       profileNote: String(row.profile_note || ""),
       isVisible: String(row.is_visible ?? "1"),
+      blockedDates: String(row.blocked_dates || ""),
     });
   }
 
@@ -1436,13 +1455,14 @@ function DoctorManager({
         </label>
         <label>Photo URL or uploaded media URL<input value={form.photoUrl} onChange={(event) => setForm({ ...form, photoUrl: event.target.value })} /></label>
         <label>Profile note<textarea rows={3} value={form.profileNote} onChange={(event) => setForm({ ...form, profileNote: event.target.value })} /></label>
+        <label>Blocked Dates / Leaves (comma-separated, e.g. 2026-07-20,2026-07-21)<input placeholder="e.g. 2026-07-20,2026-07-21" value={form.blockedDates} onChange={(event) => setForm({ ...form, blockedDates: event.target.value })} /></label>
         <label className="checkbox-field">
           <input type="checkbox" checked={form.isVisible === "1"} onChange={(event) => setForm({ ...form, isVisible: event.target.checked ? "1" : "0" })} />
           <span>Visible on public doctors page after approval</span>
         </label>
         <button className="button primary" disabled={busy}><UserCog size={17} aria-hidden="true" /> Save Doctor</button>
       </form>
-      <DataTable rows={rows} columns={["name", "speciality", "qualification", "department_slug", "status", "is_visible"]} />
+      <DataTable rows={rows} columns={["name", "speciality", "qualification", "department_slug", "status", "is_visible", "blocked_dates"]} />
     </div>
   );
 }

@@ -107,6 +107,7 @@ const tableStatements = [
     is_visible INTEGER NOT NULL DEFAULT 1,
     proposed_by TEXT,
     approved_by TEXT,
+    blocked_dates TEXT DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS content_revisions (
@@ -216,6 +217,7 @@ let initialized = false;
 const adminUserMigrationStatements = [
   "ALTER TABLE admin_users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
   "ALTER TABLE admin_users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE doctor_profiles ADD COLUMN blocked_dates TEXT DEFAULT ''",
 ];
 
 export async function getD1() {

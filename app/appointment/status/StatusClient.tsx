@@ -60,13 +60,20 @@ export default function StatusClient() {
   }
 
   function getStatusIcon(status: string) {
-    switch (status) {
+    const s = String(status || "").toUpperCase();
+    switch (s) {
+      case "CONFIRMED":
       case "APPROVED":
         return <CheckCircle2 size={32} color="#0d9488" />;
+      case "CANCELLED":
       case "REJECTED":
         return <XCircle size={32} color="#be123c" />;
+      case "CLOSED":
       case "COMPLETED":
         return <CheckCircle2 size={32} color="#0284c7" />;
+      case "CONTACTED":
+        return <Clock size={32} color="#d97706" />;
+      case "NEW":
       case "PENDING":
       default:
         return <Clock size={32} color="#d97706" />;
@@ -154,14 +161,20 @@ export default function StatusClient() {
           </div>
 
           <div style={{ marginTop: 32, paddingTop: 24, borderTop: "1px solid var(--line)" }}>
-            {data.status === "APPROVED" && (
+            {(data.status === "APPROVED" || data.status === "CONFIRMED") && (
               <p style={{ margin: 0, color: "var(--green)", fontWeight: 500 }}>Your appointment is confirmed. Please arrive 15 minutes early at the reception.</p>
             )}
-            {data.status === "PENDING" && (
+            {data.status === "CONTACTED" && (
+              <p style={{ margin: 0, color: "var(--muted)", fontWeight: 500 }}>Our hospital team has reached out to you. Please check your calls or messages.</p>
+            )}
+            {(data.status === "PENDING" || data.status === "NEW") && (
               <p style={{ margin: 0, color: "var(--muted)" }}>Your request is currently under review. Our staff will confirm it shortly.</p>
             )}
-            {data.status === "REJECTED" && (
+            {(data.status === "REJECTED" || data.status === "CANCELLED") && (
               <p style={{ margin: 0, color: "var(--danger)" }}>We couldn't accommodate this slot. Please request a new appointment or call us.</p>
+            )}
+            {(data.status === "COMPLETED" || data.status === "CLOSED") && (
+              <p style={{ margin: 0, color: "var(--blue)", fontWeight: 500 }}>This appointment has been completed. Thank you for visiting Protone Care Hospital.</p>
             )}
           </div>
         </div>

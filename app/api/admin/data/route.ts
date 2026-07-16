@@ -164,13 +164,14 @@ async function applyDoctor(payload: Record<string, unknown>, actorEmail: string)
   const photoUrl = clean(payload.photoUrl, 500);
   const profileNote = clean(payload.profileNote, 1000);
   const isVisible = Number(payload.isVisible) === 0 ? 0 : 1;
+  const blockedDates = clean(payload.blockedDates, 2000);
 
   if (!name || !slug || !speciality || !department) throw new Error("Invalid doctor profile payload.");
 
   await run(
     `INSERT INTO doctor_profiles
-      (id, slug, name, speciality, qualification, department_slug, photo_url, profile_note, consent_status, status, is_visible, approved_by, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED_SOURCE', 'APPROVED', ?, ?, CURRENT_TIMESTAMP)
+      (id, slug, name, speciality, qualification, department_slug, photo_url, profile_note, consent_status, status, is_visible, approved_by, blocked_dates, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED_SOURCE', 'APPROVED', ?, ?, ?, CURRENT_TIMESTAMP)
       ON CONFLICT(slug) DO UPDATE SET
         name = excluded.name,
         speciality = excluded.speciality,
@@ -181,6 +182,7 @@ async function applyDoctor(payload: Record<string, unknown>, actorEmail: string)
         status = 'APPROVED',
         is_visible = excluded.is_visible,
         approved_by = excluded.approved_by,
+        blocked_dates = excluded.blocked_dates,
         updated_at = CURRENT_TIMESTAMP`,
     `doctor-${slug}`,
     slug,
@@ -192,6 +194,7 @@ async function applyDoctor(payload: Record<string, unknown>, actorEmail: string)
     profileNote,
     isVisible,
     actorEmail,
+    blockedDates,
   );
   await audit(actorEmail, "DOCTOR_APPROVED", "DoctorProfile", slug, name);
 }
@@ -298,10 +301,18 @@ async function applyContactStatus(payload: Record<string, unknown>, actorEmail: 
 
 async function applyAppointmentStatus(payload: Record<string, unknown>, actorEmail: string) {
   const id = clean(payload.id, 120);
-  const status = clean(payload.status, 40).toUpperCase();
+  const statusInput = clean(payload.status, 40).toUpperCase();
   const notes = clean(payload.internalNotes, 1000);
   const requestedDate = clean(payload.requestedDate, 20);
   const requestedTime = clean(payload.requestedTime, 20);
+
+  // Map legacy status strings to canonical DB values
+  let status = statusInput;
+  if (status === "APPROVED") status = "CONFIRMED";
+  if (status === "REJECTED") status = "CANCELLED";
+  if (status === "COMPLETED") status = "CLOSED";
+  if (status === "PENDING") status = "NEW";
+
   if (!id || !["NEW", "CONTACTED", "CONFIRMED", "CANCELLED", "CLOSED"].includes(status)) throw new Error("Invalid appointment status.");
 
   // Fetch current details to check if rescheduling occurred

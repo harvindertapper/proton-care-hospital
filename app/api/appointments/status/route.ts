@@ -22,7 +22,7 @@ export async function POST(request: Request) {
 
     const rows = await query<{ status: string; department_name: string; requested_date: string; requested_time: string; created_at: string; phone: string }>(
       "SELECT status, department_name, requested_date, requested_time, created_at, phone FROM appointments WHERE request_id = ?",
-      [requestId]
+      requestId
     );
 
     if (!rows.results || rows.results.length === 0) {
