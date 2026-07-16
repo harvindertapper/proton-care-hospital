@@ -11,7 +11,6 @@
     "start": "vinext start",
     "test": "npm run build && node --experimental-strip-types --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern worker-configuration.d.ts",
-    "db:generate": "drizzle-kit generate",
     "cf:whoami": "wrangler whoami",
     "cf:types": "wrangler types",
     "deploy:check-env": "node scripts/validate-cloudflare-deploy-env.mjs",
@@ -19,7 +18,6 @@
     "deploy": "npm run deploy:check-env && npm run build && wrangler deploy"
   },
   "dependencies": {
-    "drizzle-orm": "0.45.2",
     "lucide-react": "^0.468.0",
     "next": "16.2.6",
     "react": "19.2.6",
@@ -33,7 +31,6 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
-    "drizzle-kit": "0.31.10",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "react-server-dom-webpack": "19.2.6",
