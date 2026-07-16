@@ -41,19 +41,21 @@ export async function POST(request: Request) {
   }
 
   if (action === "request") {
-    // 1. Check if email exists
+    // Look up the account without disclosing its existence or state.
     const userRes = await query(
       "SELECT id, is_active FROM admin_users WHERE lower(email) = lower(?) LIMIT 1",
       email
     );
     const user = userRes.results?.[0];
-    if (!user) {
-      // Return specific error as requested
-      return json({ error: "Admin account not found." }, { status: 404 });
-    }
 
-    if (user.is_active !== 1) {
-      return json({ error: "This admin account has been deactivated." }, { status: 403 });
+    // Always return a generic, identical response to prevent account enumeration.
+    const genericResponse = json({
+      success: true,
+      message: "If an admin account exists for that email, a verification code has been sent.",
+    });
+
+    if (!user || user.is_active !== 1) {
+      return genericResponse;
     }
 
     // 2. Generate 6-digit OTP
@@ -83,7 +85,7 @@ export async function POST(request: Request) {
     }
 
     await audit(email, "ADMIN_FORGOT_PASSWORD_REQUESTED", "AdminUser", email, `OTP generated and sent to ${email}`);
-    return json({ success: true, message: "Verification code sent to your email." });
+    return genericResponse;
   }
 
   if (action === "verify") {

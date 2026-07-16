@@ -1,11 +1,11 @@
 import {
   audit,
   checkRateLimit,
-  getClientIp,
   json,
   query,
   run,
   verifyAdminSession,
+  verifyCsrf,
 } from "@/app/lib/server";
 import { sendEmail, getOtpEmailTemplate } from "@/app/lib/resend";
 
@@ -18,10 +18,13 @@ async function hashOtp(otp: string): Promise<string> {
 }
 
 export async function POST(request: Request) {
-  const ip = getClientIp(request);
   const session = await verifyAdminSession();
   if (!session) {
     return json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  if (!verifyCsrf(request, session)) {
+    return json({ error: "Invalid CSRF token." }, { status: 403 });
   }
 
   const body = (await request.json().catch(() => ({}))) as {

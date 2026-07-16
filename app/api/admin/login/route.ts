@@ -92,10 +92,8 @@ export async function POST(request: Request) {
     const err = error instanceof Error ? error : new Error(String(error));
     console.error("CRITICAL LOGIN EXCEPTION:", err);
     return json(
-      {
-        error: `Server Error 500: ${err.message}. Stack: ${err.stack || "No stack trace available."}`
-      },
-      { status: 500 }
+      { error: "An unexpected error occurred during sign in. Please try again later." },
+      { status: 500 },
     );
   }
 }
