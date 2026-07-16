@@ -35,7 +35,7 @@ export async function GET() {
     const csvRows: string[] = [];
 
     // Header
-    csvRows.push("Request ID,Patient Name,Phone,Email,Department Name,Requested Date,Requested Time,Status,Concern,Consent,OTP Verified,Created At,Schedule Version");
+    csvRows.push("Request ID,Patient Name,Phone,Email,Department Name,Requested Date,Requested Time,Status,Concern,Consent,Created At,Schedule Version");
 
     for (const row of rows) {
       const status = String(row.status || "").toUpperCase();
@@ -56,7 +56,6 @@ export async function GET() {
         sanitizeCsvCell(row.status),
         sanitizeCsvCell(row.concern),
         row.consent ? "Yes" : "No",
-        row.otp_verified ? "Yes" : "No",
         sanitizeCsvCell(row.created_at),
         sanitizeCsvCell(row.schedule_version),
       ];

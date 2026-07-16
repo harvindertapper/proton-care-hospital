@@ -56,18 +56,6 @@ const tableStatements = [
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
-  `CREATE TABLE IF NOT EXISTS otp_challenges (
-    id TEXT PRIMARY KEY,
-    purpose TEXT NOT NULL,
-    phone TEXT NOT NULL,
-    code_hash TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'PENDING',
-    attempts INTEGER NOT NULL DEFAULT 0,
-    ip_address TEXT,
-    expires_at INTEGER NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    verified_at TEXT
-  )`,
   `CREATE TABLE IF NOT EXISTS feedback (
     id TEXT PRIMARY KEY,
     patient_name TEXT NOT NULL,
@@ -198,7 +186,6 @@ const tableStatements = [
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE INDEX IF NOT EXISTS appointments_status_created_idx ON appointments(status, created_at)`,
-  `CREATE INDEX IF NOT EXISTS otp_phone_purpose_idx ON otp_challenges(phone, purpose, status)`,
   `CREATE INDEX IF NOT EXISTS revisions_status_idx ON content_revisions(status, created_at)`,
   `CREATE INDEX IF NOT EXISTS doctors_department_idx ON doctor_profiles(department_slug, is_visible)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS rate_limits_action_identifier_idx ON rate_limits(action, identifier)`,
@@ -210,10 +197,6 @@ const tableStatements = [
     payload_hash TEXT NOT NULL,
     response_body TEXT NOT NULL,
     created_at INTEGER NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS verified_tokens (
-    signature TEXT PRIMARY KEY,
-    expires_at INTEGER NOT NULL
   )`,
 ];
 
@@ -567,17 +550,7 @@ function sessionSecret() {
   throw new Error("ADMIN_SESSION_SECRET or AUTH_SECRET env secret is required in production.");
 }
 
-export async function hashOtp(code: string, phone: string) {
-  const secret = env.OTP_HASH_SECRET;
-  if (!secret) {
-    const isDev = process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
-    if (!isDev) {
-      throw new Error("OTP_HASH_SECRET env secret is required in production.");
-    }
-    return sha256(`${phone}:${code}:pch-preview-otp-secret`);
-  }
-  return sha256(`${phone}:${code}:${secret}`);
-}
+
 
 export function normalizePhone(phone: string) {
   const digits = phone.replace(/\D/g, "");
@@ -605,107 +578,7 @@ export function sanitizeHtml(input: string): string {
 
 
 
-function decodeBase64Url(str: string) {
-  str = str.replace(/-/g, "+").replace(/_/g, "/");
-  const pad = str.length % 4;
-  if (pad) str += "=".repeat(4 - pad);
-  return atob(str);
-}
 
-let cachedJwks: { keys: JsonWebKey[] } | null = null;
-let cachedJwksExpiry = 0;
-
-async function getFirebaseJwks(forceRefetch = false): Promise<{ keys: JsonWebKey[] }> {
-  const now = Date.now();
-  if (!forceRefetch && cachedJwks && now < cachedJwksExpiry) {
-    return cachedJwks;
-  }
-
-  const res = await fetch("https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com");
-  if (!res.ok) {
-    throw new Error("Failed to fetch JWKS from Google service account.");
-  }
-  const data = await res.json() as { keys: JsonWebKey[] };
-
-  const cacheControl = res.headers.get("cache-control") || "";
-  const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
-  const maxAgeSeconds = maxAgeMatch ? parseInt(maxAgeMatch[1], 10) : 3600;
-
-  cachedJwks = data;
-  cachedJwksExpiry = now + maxAgeSeconds * 1000;
-
-  return data;
-}
-
-export async function verifyFirebaseToken(token: string, phoneToVerify?: string) {
-  const projectId = env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
-  if (!projectId) {
-    if (process.env.NODE_ENV !== "production") return { ok: true, phone: phoneToVerify };
-    return { ok: false };
-  }
-
-  const parts = token.split(".");
-  if (parts.length !== 3) return { ok: false };
-
-  try {
-    const header = JSON.parse(decodeBase64Url(parts[0]));
-    const payload = JSON.parse(decodeBase64Url(parts[1]));
-
-    if (payload.aud !== projectId || payload.iss !== `https://securetoken.google.com/${projectId}`) {
-      return { ok: false };
-    }
-
-    const now = Math.floor(Date.now() / 1000);
-    // Allow clock skew of up to 5 minutes (300 seconds)
-    if (payload.exp < now - 300) return { ok: false };
-    if (payload.iat > now + 300) return { ok: false };
-
-    // Replay attack prevention check
-    const signatureHash = parts[2];
-    const existing = await query("SELECT signature FROM verified_tokens WHERE signature = ? LIMIT 1", signatureHash);
-    if (existing.results?.length) {
-      return { ok: false };
-    }
-
-    if (phoneToVerify) {
-      const tokenPhone = String(payload.phone_number || "").replace(/\D/g, "");
-      const expectedPhone = String(phoneToVerify).replace(/\D/g, "");
-      if (tokenPhone.slice(-10) !== expectedPhone.slice(-10)) return { ok: false };
-    }
-
-    let jwks = await getFirebaseJwks();
-    let jwk = jwks.keys.find((key) => key.kid === header.kid);
-    if (!jwk) {
-      jwks = await getFirebaseJwks(true);
-      jwk = jwks.keys.find((key) => key.kid === header.kid);
-    }
-    if (!jwk) return { ok: false };
-
-    const key = await crypto.subtle.importKey(
-      "jwk",
-      jwk,
-      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-      false,
-      ["verify"]
-    );
-
-    const encoder = new TextEncoder();
-    const data = encoder.encode(parts[0] + "." + parts[1]);
-    const signature = Uint8Array.from(decodeBase64Url(parts[2]), c => c.charCodeAt(0));
-
-    const isValid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, signature, data);
-    if (isValid) {
-      // Record this signature so it cannot be replayed
-      await run("INSERT OR IGNORE INTO verified_tokens (signature, expires_at) VALUES (?, ?)", signatureHash, payload.exp * 1000);
-      // Clean up expired verified tokens in the background
-      run("DELETE FROM verified_tokens WHERE expires_at < ?", Date.now()).catch(() => {});
-    }
-
-    return { ok: isValid, phone: payload.phone_number };
-  } catch {
-    return { ok: false };
-  }
-}
 
 export async function audit(actorEmail: string, action: string, entityType?: string, entityId?: string, details = "") {
   await run(

@@ -28,7 +28,6 @@
       "ADMIN_SESSION_SECRET",
       "ADMIN_SUPER_EMAIL",
       "ADMIN_SUPER_PASSWORD",
-      "OTP_HASH_SECRET",
       "TURNSTILE_SECRET_KEY"
     ]
   },

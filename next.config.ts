@@ -13,7 +13,7 @@ const nextConfig: NextConfig = {
           {
             key: "Content-Security-Policy",
             value:
-              "default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com https://www.gstatic.com https://www.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://challenges.cloudflare.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com; frame-src https://www.youtube.com https://challenges.cloudflare.com https://www.google.com; base-uri 'self'; form-action 'self'; frame-ancestors 'self'",
+              "default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://challenges.cloudflare.com; frame-src https://www.youtube.com https://challenges.cloudflare.com; base-uri 'self'; form-action 'self'; frame-ancestors 'self'",
           },
         ],
       },

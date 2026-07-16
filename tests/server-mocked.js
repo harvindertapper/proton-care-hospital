@@ -153,12 +153,6 @@ export function addMockAppointment(app) {
   mockDbState.appointments.push(app);
 }
 
-export async function verifyFirebaseToken(token, phoneToVerify) {
-  if (token === "valid-token") {
-    return { ok: true, phone: phoneToVerify };
-  }
-  return { ok: false };
-}
 
 export async function audit(actorEmail, action, entityType, entityId, details = "") {
   mockDbState.audits.push({ actorEmail, action, entityType, entityId, details });

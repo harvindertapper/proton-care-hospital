@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { AlertCircle, CheckCircle2, LockKeyhole, MessageCircle, PhoneCall, Send, Sunrise, Sun } from "lucide-react";
 import type { Department } from "@/app/lib/data";
 import { consentText, emergencyNotice, hospital } from "@/app/lib/data";
-import { auth, RecaptchaVerifier, signInWithPhoneNumber, type ConfirmationResult } from "@/app/lib/firebaseClient";
 
 type SlotsResponse = {
   departmentName?: string;
@@ -96,7 +95,6 @@ export function AppointmentForm({
     requestedDate: todayIso(),
     requestedTime: "",
     concern: "",
-    otpCode: "",
     consent: false,
     company: "",
   });
@@ -104,10 +102,6 @@ export function AppointmentForm({
   const [message, setMessage] = useState("");
   const [success, setSuccess] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
-  const [otpVerified, setOtpVerified] = useState(false);
-  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
-  const [firebaseIdToken, setFirebaseIdToken] = useState("");
   const [idempotencyKey, setIdempotencyKey] = useState("");
   const department = useMemo(
     () => selectableDepartments.find((item) => item.slug === departmentSlug),
@@ -216,9 +210,7 @@ export function AppointmentForm({
   function chooseDepartment(slug: string) {
     setSlots([]);
     setSlotError("");
-    setForm((current) => ({ ...current, requestedTime: "", otpCode: "" }));
-    setOtpSent(false);
-    setOtpVerified(false);
+    setForm((current) => ({ ...current, requestedTime: "" }));
     setStep(1);
     setDepartmentSlug(slug);
   }
@@ -227,45 +219,7 @@ export function AppointmentForm({
     setForm((current) => ({ ...current, [name]: value }));
   }
 
-  async function sendOtp() {
-    setBusy(true);
-    setMessage("");
-    try {
-      if (!(window as any).appointmentRecaptchaVerifier) {
-        (window as any).appointmentRecaptchaVerifier = new RecaptchaVerifier(auth, "recaptcha-container", {
-          size: "invisible",
-        });
-      }
-      const digits = form.phone.replace(/\D/g, "");
-      const formattedPhone = digits.length === 10 ? `+91${digits}` : `+${digits}`;
-      const result = await signInWithPhoneNumber(auth, formattedPhone, (window as any).appointmentRecaptchaVerifier);
-      setConfirmationResult(result);
-      setOtpSent(true);
-      setMessage("OTP sent to your mobile number.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not send OTP. Please try again.");
-    } finally {
-      setBusy(false);
-    }
-  }
 
-  async function verifyOtp() {
-    setBusy(true);
-    setMessage("");
-    try {
-      if (!confirmationResult) throw new Error("No active OTP request.");
-      const userCredential = await confirmationResult.confirm(form.otpCode);
-      const idToken = await userCredential.user.getIdToken();
-      setFirebaseIdToken(idToken);
-      setOtpVerified(true);
-      setStep(3);
-      setMessage("Mobile number verified.");
-    } catch (error) {
-      setMessage("OTP verification failed. Please check the code and try again.");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -278,13 +232,10 @@ export function AppointmentForm({
         departmentSlug,
         turnstileToken,
         idempotencyKey,
-        firebaseIdToken,
       });
       setSuccess(true);
       setMessage(`${data.message || "Your appointment request has been registered securely."} Reference ID: ${data.requestId || ""}`);
       setStep(1);
-      setOtpSent(false);
-      setOtpVerified(false);
       setForm({
         patientName: "",
         phone: "",
@@ -292,7 +243,6 @@ export function AppointmentForm({
         requestedDate: todayIso(),
         requestedTime: "",
         concern: "",
-        otpCode: "",
         consent: false,
         company: "",
       });
@@ -466,20 +416,12 @@ export function AppointmentForm({
             Concern / reason for visit
             <textarea value={form.concern} onChange={(event) => update("concern", event.target.value)} rows={4} required />
           </label>
-          <div className="otp-row">
-            <button type="button" className="button secondary" onClick={sendOtp} disabled={busy || !form.phone}>
-              <PhoneCall size={18} aria-hidden="true" /> Send OTP
-            </button>
-            <label>
-              OTP
-              <input value={form.otpCode} onChange={(event) => update("otpCode", event.target.value)} inputMode="numeric" maxLength={6} />
-            </label>
-            <button type="button" className="button subtle" onClick={verifyOtp} disabled={busy || !otpSent || !form.otpCode}>
-              Verify
-            </button>
-            <div id="recaptcha-container"></div>
-          </div>
-          <button className="button primary" type="button" onClick={() => setStep(3)} disabled={!otpVerified}>
+          <button
+            className="button primary mt-4"
+            type="button"
+            onClick={() => setStep(3)}
+            disabled={!form.patientName.trim() || !form.phone.trim() || !form.email.trim() || !form.concern.trim()}
+          >
             Continue
           </button>
         </div>
@@ -504,7 +446,7 @@ export function AppointmentForm({
         </div>
       ) : null}
 
-      <FieldMessage message={message} success={success || otpVerified} />
+      <FieldMessage message={message} success={success} />
     </form>
   );
 }
@@ -515,16 +457,11 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
     phone: "",
     rating: "5",
     message: "",
-    otpCode: "",
     consent: false,
     company: "",
   });
   const [turnstileToken, setTurnstileToken] = useState("");
   const [busy, setBusy] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
-  const [otpVerified, setOtpVerified] = useState(false);
-  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
-  const [firebaseIdToken, setFirebaseIdToken] = useState("");
   const [message, setMessage] = useState("");
   const [success, setSuccess] = useState(false);
 
@@ -576,45 +513,6 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
     setForm((current) => ({ ...current, [name]: value }));
   }
 
-  async function sendOtp() {
-    setBusy(true);
-    setMessage("");
-    try {
-      if (!(window as any).feedbackRecaptchaVerifier) {
-        (window as any).feedbackRecaptchaVerifier = new RecaptchaVerifier(auth, "feedback-recaptcha-container", {
-          size: "invisible",
-        });
-      }
-      const digits = form.phone.replace(/\D/g, "");
-      const formattedPhone = digits.length === 10 ? `+91${digits}` : `+${digits}`;
-      const result = await signInWithPhoneNumber(auth, formattedPhone, (window as any).feedbackRecaptchaVerifier);
-      setConfirmationResult(result);
-      setOtpSent(true);
-      setMessage("OTP sent to your mobile number.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not send OTP. Please try again.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function verifyOtp() {
-    setBusy(true);
-    setMessage("");
-    try {
-      if (!confirmationResult) throw new Error("No active OTP request.");
-      const userCredential = await confirmationResult.confirm(form.otpCode);
-      const idToken = await userCredential.user.getIdToken();
-      setFirebaseIdToken(idToken);
-      setOtpVerified(true);
-      setMessage("Mobile number verified.");
-    } catch (error) {
-      setMessage("OTP verification failed. Please check the code and try again.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -626,13 +524,10 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
         rating: Number(form.rating),
         turnstileToken,
         idempotencyKey,
-        firebaseIdToken,
       });
       setSuccess(true);
       setMessage(String(data.message || "Feedback submitted for review."));
-      setForm({ patientName: "", phone: "", rating: "5", message: "", otpCode: "", consent: false, company: "" });
-      setOtpSent(false);
-      setOtpVerified(false);
+      setForm({ patientName: "", phone: "", rating: "5", message: "", consent: false, company: "" });
       localStorage.removeItem("pch_feedback_draft");
       localStorage.removeItem("pch_feedback_idempotency");
     } catch (error) {
@@ -669,28 +564,15 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
         Feedback
         <textarea rows={5} value={form.message} onChange={(event) => update("message", event.target.value)} required />
       </label>
-      <div className="otp-row">
-        <button type="button" className="button secondary" onClick={sendOtp} disabled={busy || !form.phone}>
-          <PhoneCall size={18} aria-hidden="true" /> Send OTP
-        </button>
-        <label>
-          OTP
-          <input value={form.otpCode} onChange={(event) => update("otpCode", event.target.value)} inputMode="numeric" maxLength={6} />
-        </label>
-        <button type="button" className="button subtle" onClick={verifyOtp} disabled={busy || !otpSent || !form.otpCode}>
-          Verify
-        </button>
-      </div>
-      <div id="feedback-recaptcha-container"></div>
       <TurnstileBox siteKey={turnstileSiteKey} onToken={setTurnstileToken} />
       <label className="checkbox-field">
         <input type="checkbox" checked={form.consent} onChange={(event) => update("consent", event.target.checked)} required />
         <span>I consent to Protone Care Hospital reviewing this feedback and contacting me if follow-up is needed. Public display requires hospital approval.</span>
       </label>
-      <button className="button primary full" type="submit" disabled={busy || !otpVerified || !form.consent || !turnstileToken}>
+      <button className="button primary full" type="submit" disabled={busy || !form.consent || !turnstileToken}>
         <Send size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Submit Feedback"}
       </button>
-      <FieldMessage message={message} success={success || otpVerified} />
+      <FieldMessage message={message} success={success} />
     </form>
   );
 }

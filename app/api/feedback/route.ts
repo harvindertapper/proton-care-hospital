@@ -8,9 +8,10 @@ import {
   run,
   sanitizeHtml,
   validatePhone,
-  verifyFirebaseToken,
   verifyTurnstile,
 } from "@/app/lib/server";
+
+const FEEDBACK_PHONE_DAILY_LIMIT = 3;
 
 function clean(value: unknown, max = 1000) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -32,20 +33,20 @@ export async function POST(request: Request) {
   const phone = normalizePhone(clean(body.phone, 20));
   const rating = Number(body.rating || 0);
   const message = sanitizeHtml(clean(body.message, 1500));
-  const otpCode = clean(body.otpCode, 8);
   const consent = body.consent === true;
 
   if (patientName.length < 2 || !validatePhone(phone) || rating < 1 || rating > 5 || message.length < 10 || !consent) {
-    return json({ error: "Please complete feedback, rating, phone, OTP, and consent." }, { status: 400 });
+    return json({ error: "Please complete feedback, rating, phone, and consent." }, { status: 400 });
   }
 
-  const firebaseIdToken = clean(body.firebaseIdToken, 2000);
-  const otp = await verifyFirebaseToken(firebaseIdToken, phone);
-  if (!otp.ok) return json({ error: "Please verify the mobile number with OTP before submitting feedback." }, { status: 400 });
+  const phoneLimit = await checkRateLimit("feedback-phone", phone, FEEDBACK_PHONE_DAILY_LIMIT, 24 * 60 * 60);
+  if (!phoneLimit.ok) {
+    return json({ error: `Daily limit reached. Maximum of ${FEEDBACK_PHONE_DAILY_LIMIT} feedback submissions per phone number within 24 hours.` }, { status: 429 });
+  }
 
   const id = crypto.randomUUID();
   await run(
-    "INSERT INTO feedback (id, patient_name, phone, rating, message, consent, otp_verified) VALUES (?, ?, ?, ?, ?, 1, 1)",
+    "INSERT INTO feedback (id, patient_name, phone, rating, message, consent, otp_verified) VALUES (?, ?, ?, ?, ?, 1, 0)",
     id,
     patientName,
     phone,

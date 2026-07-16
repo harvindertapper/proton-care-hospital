@@ -15,15 +15,13 @@ import {
   saveIdempotency,
   validateEmail,
   validatePhone,
-  verifyFirebaseToken,
   verifyTurnstile,
 } from "@/app/lib/server";
 
+const APPOINTMENT_PHONE_DAILY_LIMIT = 3;
+
 // Assert production environment secrets on route load
 if (process.env.NODE_ENV === "production") {
-  if (!env.OTP_HASH_SECRET) {
-    throw new Error("Initialization assertion failed: OTP_HASH_SECRET environment variable is missing.");
-  }
   if (!env.ADMIN_SESSION_SECRET && !env.AUTH_SECRET) {
     throw new Error("Initialization assertion failed: ADMIN_SESSION_SECRET or AUTH_SECRET environment variable is missing.");
   }
@@ -58,7 +56,6 @@ export async function POST(request: Request) {
   const requestedDate = cleanText(body.requestedDate, 20);
   const requestedTime = cleanText(body.requestedTime, 20);
   const concern = sanitizeHtml(cleanText(body.concern, 1200));
-  const otpCode = cleanText(body.otpCode, 8);
   const consent = body.consent === true;
 
   if (departmentSlug === "emergency-medicine") {
@@ -98,10 +95,9 @@ export async function POST(request: Request) {
     return json({ error: "A recent request already exists for these contact details. Our team will contact you shortly." }, { status: 429 });
   }
 
-  const firebaseIdToken = cleanText(body.firebaseIdToken, 2000);
-  const otp = await verifyFirebaseToken(firebaseIdToken, phone);
-  if (!otp.ok) {
-    return json({ error: "Please verify the mobile number with OTP before submitting." }, { status: 400 });
+  const phoneLimit = await checkRateLimit("appointment-phone", phone, APPOINTMENT_PHONE_DAILY_LIMIT, 24 * 60 * 60);
+  if (!phoneLimit.ok) {
+    return json({ error: `Daily limit reached. Maximum of ${APPOINTMENT_PHONE_DAILY_LIMIT} appointment requests per phone number within 24 hours.` }, { status: 429 });
   }
 
   const id = crypto.randomUUID();
@@ -118,7 +114,7 @@ export async function POST(request: Request) {
       db.prepare(
         `INSERT INTO appointments
           (id, request_id, patient_name, phone, email, department_slug, department_name, requested_date, requested_time, concern, consent, otp_verified, ip_address, user_agent, schedule_version)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, 1)`
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, 1)`
       ).bind(
         id,
         requestId,

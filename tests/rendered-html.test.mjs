@@ -6,8 +6,7 @@ import {
   addMockAppointment,
   setMockAdminSession,
   getMockAdminState,
-  checkRateLimit,
-  verifyFirebaseToken
+  checkRateLimit
 } from "./server-mocked.js";
 
 // 1. Setup dynamic mock for status route
@@ -128,14 +127,7 @@ test("redaction test: STAFF sees redacted sensitive concerns, SUPER_ADMIN sees f
   assert.equal(adminApp2.concern, "Fever and cold symptoms");
 });
 
-test("OTP token validation test: rejects invalid, accepts valid mock", async () => {
-  const invalidResult = await verifyFirebaseToken("bad-token", "919876543210");
-  assert.equal(invalidResult.ok, false);
 
-  const validResult = await verifyFirebaseToken("valid-token", "919876543210");
-  assert.equal(validResult.ok, true);
-  assert.equal(validResult.phone, "919876543210");
-});
 
 test("rate-limiting test: permits within limit, restricts above limit", async () => {
   resetMockDb();
