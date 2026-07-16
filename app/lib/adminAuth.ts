@@ -149,6 +149,7 @@ export type BootstrapDecision =
   | { kind: "create" }
   | { kind: "preserve"; legacyIdsToDeactivate: string[] }
   | { kind: "migrate_legacy"; legacyId: string }
+  | { kind: "recover"; id: string }
   | { kind: "conflict" };
 
 export function decideSuperAdminBootstrap(
@@ -161,7 +162,14 @@ export function decideSuperAdminBootstrap(
   const activeSuperAdmins = accounts.filter((account) => account.role === "SUPER_ADMIN" && account.isActive);
 
   if (target) {
-    if (target.role !== "SUPER_ADMIN" || !target.isActive) return { kind: "conflict" };
+    if (target.role !== "SUPER_ADMIN") return { kind: "conflict" };
+    if (!target.isActive) {
+      // Documented recovery path: deactivate the super admin row (never delete it),
+      // set a fresh ADMIN_SUPER_PASSWORD secret, and the next login attempt
+      // reactivates the account with the new credential.
+      if (activeSuperAdmins.length === 0) return { kind: "recover", id: target.id };
+      return { kind: "conflict" };
+    }
     const otherNonLegacySuperAdmin = activeSuperAdmins.find(
       (account) => account.id !== target.id && account.email.toLowerCase() !== LEGACY_SUPER_ADMIN_EMAIL,
     );
@@ -188,6 +196,7 @@ export type SuperAdminBootstrapStore = {
   listAccounts(): Promise<BootstrapAccount[]>;
   createSuperAdmin(input: { email: string; passwordHash: string }): Promise<void>;
   migrateLegacySuperAdmin(input: { id: string; email: string; passwordHash: string }): Promise<void>;
+  reactivateSuperAdmin(input: { id: string; passwordHash: string }): Promise<void>;
   deactivateAccounts(ids: string[]): Promise<void>;
   revokeSessionsForEmails(emails: string[]): Promise<void>;
   recordAudit(event: {
@@ -200,7 +209,7 @@ export type SuperAdminBootstrapStore = {
 };
 
 export type SuperAdminBootstrapResult =
-  | { ok: true; status: "created" | "preserved" | "migrated" }
+  | { ok: true; status: "created" | "preserved" | "migrated" | "recovered" }
   | { ok: false; status: "not_configured" | "conflict" };
 
 export async function applySuperAdminBootstrap(
@@ -237,6 +246,22 @@ export async function applySuperAdminBootstrap(
       details: "Created the environment-configured super admin.",
     });
     return { ok: true, status: "created" };
+  }
+
+  if (decision.kind === "recover") {
+    await store.reactivateSuperAdmin({
+      id: decision.id,
+      passwordHash: await hashAdminPassword(config.password),
+    });
+    await store.revokeSessionsForEmails([config.email]);
+    await store.recordAudit({
+      actorEmail: config.email,
+      action: "SUPER_ADMIN_RECOVERED",
+      entityType: "AdminUser",
+      entityId: config.email,
+      details: "Reactivated the deactivated super admin with the environment-configured credential.",
+    });
+    return { ok: true, status: "recovered" };
   }
 
   if (decision.kind === "migrate_legacy") {

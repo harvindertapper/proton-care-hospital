@@ -77,6 +77,27 @@ remains blocked until their credentials and test flows are verified.
 
 `ADMIN_SUPER_PASSWORD` is used only when the first super admin is created (or when the one known legacy fallback account is migrated). Later password changes are stored in D1 and are never overwritten by the environment value. Staff accounts are created by the super admin in the admin console; no `ADMIN_STAFF_*`, `ADMIN_EMAIL`, or `ADMIN_PASSWORD` variables are used.
 
+## Super admin lockout recovery
+
+The bootstrap decision is re-evaluated from live D1 state on every login
+attempt (rate limited), so it is immune to warm Worker isolates caching an
+`initialized` flag. If the super admin is locked out:
+
+1. Do **not** delete the `admin_users` row. Instead, deactivate it in the D1
+   console: `UPDATE admin_users SET is_active = 0 WHERE email = '<super admin email>';`
+2. Set a fresh credential: `npx wrangler secret put ADMIN_SUPER_PASSWORD`
+   (and `ADMIN_SUPER_EMAIL` if it was removed after first launch).
+3. Load `/admin/login` and sign in with the new secret. The next login attempt
+   reactivates the account with the new password hash, revokes any old
+   sessions for that email, and records a `SUPER_ADMIN_RECOVERED` audit entry.
+4. Optionally remove the two secrets again once you are back in.
+
+Recovery only triggers while there is no *other* active `SUPER_ADMIN` row;
+otherwise it is treated as a conflict and nothing is mutated. Deleting the row
+outright also still works — the bootstrap will re-create it from the secrets —
+but deactivation is preferred because it preserves the row's identity and
+audit history.
+
 ## Appointment Rule
 
 The public appointment flow is request-only and department-only. Patients choose department, date, and a 15-minute preferred slot. Hospital staff confirms final availability manually.

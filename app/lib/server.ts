@@ -201,7 +201,6 @@ const tableStatements = [
 ];
 
 let initialized = false;
-let adminBootstrapStatus: SuperAdminBootstrapResult = { ok: false, status: "not_configured" };
 
 const adminUserMigrationStatements = [
   "ALTER TABLE admin_users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
@@ -284,8 +283,27 @@ export async function verifyPasswordWithUpgrade(password: string, storedHash: st
 }
 
 async function seedAdminUsers(db: D1Database) {
-  adminBootstrapStatus = await applySuperAdminBootstrap(
-    {
+  await applySuperAdminBootstrap(superAdminBootstrapStore(db), env);
+}
+
+/**
+ * Re-evaluates the super admin bootstrap against the *current* D1 state.
+ *
+ * Worker isolates stay warm across requests, so any module-level flag (like
+ * `initialized` above) can hide external data changes — e.g. an admin_users
+ * row deleted via the D1 console never triggers a re-seed in a warm isolate.
+ * Login calls this directly so the decision is always made from a fresh D1
+ * read instead of stale isolate memory. The underlying decision logic is
+ * idempotent: when an active super admin already exists it resolves to
+ * "preserved" after a single SELECT, so per-login cost is one indexed query.
+ */
+export async function ensureSuperAdminBootstrap(): Promise<SuperAdminBootstrapResult> {
+  const db = await getD1();
+  return applySuperAdminBootstrap(superAdminBootstrapStore(db), env);
+}
+
+function superAdminBootstrapStore(db: D1Database) {
+  return {
       async listAccounts() {
         const rows = await db
           .prepare("SELECT id, email, role, is_active FROM admin_users ORDER BY created_at")
@@ -316,6 +334,16 @@ async function seedAdminUsers(db: D1Database) {
              WHERE id = ?`,
           )
           .bind(input.email, input.passwordHash, input.id)
+          .run();
+      },
+      async reactivateSuperAdmin(input) {
+        await db
+          .prepare(
+            `UPDATE admin_users
+             SET password_hash = ?, is_active = 1, must_change_password = 0, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+          )
+          .bind(input.passwordHash, input.id)
           .run();
       },
       async deactivateAccounts(ids) {
@@ -353,13 +381,7 @@ async function seedAdminUsers(db: D1Database) {
           )
           .run();
       },
-    },
-    env,
-  );
-}
-
-export function getAdminBootstrapStatus() {
-  return adminBootstrapStatus;
+  } satisfies Parameters<typeof applySuperAdminBootstrap>[0];
 }
 
 async function seedDoctorProfiles(db: D1Database) {

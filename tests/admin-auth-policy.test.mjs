@@ -38,6 +38,11 @@ function bootstrapStore(initialAccounts = []) {
       account.passwordHash = input.passwordHash;
       account.isActive = true;
     },
+    async reactivateSuperAdmin(input) {
+      const account = accounts.find((item) => item.id === input.id);
+      account.passwordHash = input.passwordHash;
+      account.isActive = true;
+    },
     async deactivateAccounts(ids) {
       for (const account of accounts) {
         if (ids.includes(account.id)) account.isActive = false;
@@ -231,4 +236,63 @@ test("bootstrap permits config removal if super admin already exists", async () 
   ]);
   const result = await applySuperAdminBootstrap(store, {});
   assert.deepEqual(result, { ok: true, status: "preserved" });
+});
+
+test("bootstrap re-creates the super admin after external row deletion (warm-isolate incident)", async () => {
+  const store = bootstrapStore();
+  const environment = {
+    ADMIN_SUPER_EMAIL: "owner@example.com",
+    ADMIN_SUPER_PASSWORD: "first bootstrap passphrase",
+  };
+  const first = await applySuperAdminBootstrap(store, environment);
+  assert.deepEqual(first, { ok: true, status: "created" });
+
+  // Simulate someone deleting the row via the D1 console while the isolate
+  // stays warm. A later re-evaluation must see the deletion and re-create.
+  store.accounts.length = 0;
+  const second = await applySuperAdminBootstrap(store, environment);
+  assert.deepEqual(second, { ok: true, status: "created" });
+  assert.equal(store.accounts.length, 1);
+  assert.equal(store.accounts[0].email, "owner@example.com");
+  assert.equal((await verifyAdminPassword("first bootstrap passphrase", store.accounts[0].passwordHash)).valid, true);
+});
+
+test("bootstrap recovers a deactivated super admin with the current secret", async () => {
+  const store = bootstrapStore([
+    { id: "owner", email: "owner@example.com", role: "SUPER_ADMIN", isActive: false, passwordHash: "forgotten-hash" },
+  ]);
+  const result = await applySuperAdminBootstrap(store, {
+    ADMIN_SUPER_EMAIL: "owner@example.com",
+    ADMIN_SUPER_PASSWORD: "fresh recovery passphrase",
+  });
+  assert.deepEqual(result, { ok: true, status: "recovered" });
+  assert.equal(store.accounts[0].isActive, true);
+  assert.equal((await verifyAdminPassword("fresh recovery passphrase", store.accounts[0].passwordHash)).valid, true);
+  assert.deepEqual(store.revokedEmails, ["owner@example.com"]);
+  assert.equal(store.audits.at(-1).action, "SUPER_ADMIN_RECOVERED");
+});
+
+test("recovery is refused while another active super admin exists", async () => {
+  const store = bootstrapStore([
+    { id: "owner", email: "owner@example.com", role: "SUPER_ADMIN", isActive: false, passwordHash: "old-hash" },
+    { id: "other", email: "other@example.com", role: "SUPER_ADMIN", isActive: true, passwordHash: "other-hash" },
+  ]);
+  const result = await applySuperAdminBootstrap(store, {
+    ADMIN_SUPER_EMAIL: "owner@example.com",
+    ADMIN_SUPER_PASSWORD: "fresh recovery passphrase",
+  });
+  assert.deepEqual(result, { ok: false, status: "conflict" });
+  assert.equal(store.accounts[0].passwordHash, "old-hash");
+  assert.equal(store.accounts[0].isActive, false);
+});
+
+test("a STAFF account holding the configured email stays a conflict, never escalates", () => {
+  const config = { ok: true, email: "owner@example.com", password: "correct horse battery staple" };
+  assert.equal(
+    decideSuperAdminBootstrap(
+      [{ id: "staff", email: "owner@example.com", role: "STAFF", isActive: false }],
+      config,
+    ).kind,
+    "conflict",
+  );
 });

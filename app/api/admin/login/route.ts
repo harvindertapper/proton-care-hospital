@@ -3,7 +3,7 @@ import {
   audit,
   checkRateLimit,
   createAdminSession,
-  getAdminBootstrapStatus,
+  ensureSuperAdminBootstrap,
   getClientIp,
   hashPassword,
   json,
@@ -29,6 +29,15 @@ export async function POST(request: Request) {
     return json({ error: "Admin session secret is not configured." }, { status: 503 });
   }
 
+  // Re-evaluate the bootstrap against live D1 state on every login attempt.
+  // Warm isolates skip the getD1() init block, so relying on the module-level
+  // status captured at cold start hides external changes (e.g. a super admin
+  // row deleted or deactivated via the D1 console). This is rate limited above.
+  const bootstrap = await ensureSuperAdminBootstrap();
+  if (!bootstrap.ok) {
+    return json({ error: "Admin configuration requires review." }, { status: 503 });
+  }
+
   const rows = await query<{
     email: string;
     role: "SUPER_ADMIN" | "STAFF";
@@ -40,10 +49,6 @@ export async function POST(request: Request) {
      FROM admin_users WHERE lower(email) = lower(?) LIMIT 1`,
     email
   );
-  const bootstrap = getAdminBootstrapStatus();
-  if (!bootstrap.ok) {
-    return json({ error: "Admin configuration requires review." }, { status: 503 });
-  }
   const account = rows.results?.[0];
 
   const verification = account
