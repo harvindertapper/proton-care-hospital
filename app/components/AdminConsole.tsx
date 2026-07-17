@@ -290,6 +290,73 @@ export function AdminLoginForm() {
   );
 }
 
+export function AdminErStatusForm({
+  csrf,
+  onMessage,
+}: {
+  csrf: string;
+  onMessage?: (message: string) => void;
+}) {
+  const [form, setForm] = useState({ status: "Open", waitTime: "Under 10 mins" });
+  const [message, setMessage] = useState("");
+  const [infoMessage, setInfoMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/er-status")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.status) {
+          setForm({ status: data.status, waitTime: data.waitTime || "" });
+        }
+      })
+      .catch((err) => console.error("Failed to load initial ER status:", err));
+  }, []);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    setInfoMessage("");
+    try {
+      const response = await fetch("/api/er-status", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-csrf-token": csrf },
+        body: JSON.stringify(form),
+      });
+      const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) throw new Error(String(data.error || "Failed to update ER status."));
+      setInfoMessage("Emergency room status updated successfully.");
+      onMessage?.("Emergency room status updated.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Failed to update ER status.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="admin-form" onSubmit={submit}>
+      <label>
+        ER Operational Status
+        <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} style={{ width: "100%" }}>
+          <option value="Open">Open & Operational</option>
+          <option value="Busy">High Patient Load (Busy)</option>
+          <option value="Diverting">Diverting to Alternative Facilities</option>
+          <option value="Closed">Temporarily Closed</option>
+        </select>
+      </label>
+      <label>
+        Estimated Waiting Time
+        <input type="text" value={form.waitTime} onChange={(e) => setForm({ ...form, waitTime: e.target.value })} placeholder="e.g. Under 10 mins, 45 mins" required style={{ width: "100%" }} />
+      </label>
+      <button className="button primary" disabled={busy} type="submit">Update ER Status</button>
+      {message && <p style={{ color: "red", fontSize: 13, margin: "10px 0 0 0" }}>{message}</p>}
+      {infoMessage && <p style={{ color: "green", fontSize: 13, margin: "10px 0 0 0" }}>{infoMessage}</p>}
+    </form>
+  );
+}
+
 export function AdminPasswordChangeForm({
   csrf,
   mandatory = false,
@@ -1244,6 +1311,11 @@ export function AdminConsole({
         ) : null}
         {active === "Security" ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
+            <div style={{ background: "white", padding: 32, borderRadius: 12, border: "1px solid var(--border)" }}>
+              <h3 style={{ margin: "0 0 20px 0", fontSize: 20 }}>Emergency Room Status</h3>
+              <AdminErStatusForm csrf={session.csrf} onMessage={setNotice} />
+            </div>
+
             <div style={{ background: "white", padding: 32, borderRadius: 12, border: "1px solid var(--border)" }}>
               <h3 style={{ margin: "0 0 20px 0", fontSize: 20 }}>Change Password</h3>
               <AdminPasswordChangeForm csrf={session.csrf} onMessage={setNotice} />

@@ -1,3 +1,6 @@
+"use client";
+
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -16,12 +19,36 @@ import {
 import { formatWhatsApp, hospital, publicNav } from "@/app/lib/data";
 
 export function Header() {
+  const [erStatus, setErStatus] = useState({ status: "Open", waitTime: "Under 10 mins" });
+
+  useEffect(() => {
+    fetch("/api/analytics", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ eventType: "pageview", path: window.location.pathname }),
+    }).catch(() => {});
+
+    fetch("/api/er-status")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.status) {
+          setErStatus(data);
+        }
+      })
+      .catch((err) => console.error("Failed to load ER wait time", err));
+  }, []);
+
   return (
     <header className="site-header">
       <div className="topbar">
         <a href={hospital.phoneHref} className="topbar-link emergency">
           <Phone size={16} aria-hidden="true" /> {hospital.emergency}: {hospital.phone}
         </a>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "#ffedd5", fontWeight: 500 }}>
+          <span>|</span>
+          <span>ER Room: {erStatus.status} (Wait: {erStatus.waitTime})</span>
+          <span>|</span>
+        </div>
         <a href={hospital.mapsUrl} className="topbar-link">
           <MapPin size={16} aria-hidden="true" /> Sector 11, Gurugram
         </a>
