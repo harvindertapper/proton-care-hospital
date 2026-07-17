@@ -368,6 +368,10 @@ async function applyAction(action: string, payload: Record<string, unknown>, act
   if (action === "appointment.create") return applyCreateAppointment(payload, actorEmail);
   if (action === "closure.add") return applyAddClosure(payload, actorEmail);
   if (action === "closure.delete") return applyDeleteClosure(payload, actorEmail);
+  if (action === "doctor.delete") return applyDeleteDoctor(payload, actorEmail);
+  if (action === "blog.delete") return applyDeleteBlog(payload, actorEmail);
+  if (action === "career.delete") return applyDeleteCareer(payload, actorEmail);
+  if (action === "video.delete") return applyDeleteVideo(payload, actorEmail);
   throw new Error(`Unsupported admin action: ${action}`);
 }
 
@@ -757,4 +761,32 @@ async function applyDeleteClosure(payload: Record<string, unknown>, actorEmail: 
 
   await run("DELETE FROM department_closures WHERE id = ?", id);
   await audit(actorEmail, "CLOSURE_DELETED", "DepartmentClosure", id, `Deleted closure`);
+}
+
+async function applyDeleteDoctor(payload: Record<string, unknown>, actorEmail: string) {
+  const slug = clean(payload.slug, 120);
+  if (!slug) throw new Error("Doctor slug is required.");
+  await run("DELETE FROM doctor_profiles WHERE slug = ?", slug);
+  await audit(actorEmail, "DOCTOR_DELETED", "DoctorProfile", slug, `Deleted doctor profile with slug: ${slug}`);
+}
+
+async function applyDeleteBlog(payload: Record<string, unknown>, actorEmail: string) {
+  const slug = clean(payload.slug, 120);
+  if (!slug) throw new Error("Blog slug is required.");
+  await run("DELETE FROM blog_posts WHERE slug = ?", slug);
+  await audit(actorEmail, "BLOG_DELETED", "BlogPost", slug, `Deleted blog post with slug: ${slug}`);
+}
+
+async function applyDeleteCareer(payload: Record<string, unknown>, actorEmail: string) {
+  const slug = clean(payload.slug, 120);
+  if (!slug) throw new Error("Career job slug is required.");
+  await run("DELETE FROM career_jobs WHERE slug = ?", slug);
+  await audit(actorEmail, "CAREER_DELETED", "CareerJob", slug, `Deleted job listing with slug: ${slug}`);
+}
+
+async function applyDeleteVideo(payload: Record<string, unknown>, actorEmail: string) {
+  const id = clean(payload.id, 120);
+  if (!id) throw new Error("Video ID is required.");
+  await run("DELETE FROM patient_videos WHERE id = ?", id);
+  await audit(actorEmail, "VIDEO_DELETED", "PatientVideo", id, `Deleted video with ID: ${id}`);
 }

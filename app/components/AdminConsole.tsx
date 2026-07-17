@@ -1110,7 +1110,14 @@ export function AdminConsole({
         ) : null}
 
         {active === "Doctors" ? (
-          <DoctorManager rows={adminData.doctors} departments={departments} staticDoctors={staticDoctors} busy={busy} onSave={(payload) => mutate({ action: "doctor.save", payload }, "Doctor profile saved or sent for approval.")} />
+          <DoctorManager
+            rows={adminData.doctors}
+            departments={departments}
+            staticDoctors={staticDoctors}
+            busy={busy}
+            onSave={(payload) => mutate({ action: "doctor.save", payload }, "Doctor profile saved or sent for approval.")}
+            onDelete={(slug) => mutate({ action: "doctor.delete", slug }, "Doctor deleted successfully.")}
+          />
         ) : null}
 
         {active === "Media" ? <MediaManager busy={busy} rows={adminData.media} onUpload={uploadMedia} onDelete={deleteMedia} /> : null}
@@ -1260,9 +1267,33 @@ export function AdminConsole({
           </div>
         ) : null}
 
-        {active === "Blogs" ? <BlogForm busy={busy} onSave={(payload) => mutate({ action: "blog.save", payload }, "Blog saved or sent for approval.")} onVisibility={(slug, isVisible) => mutate({ action: "blog.visibility", payload: { slug, isVisible } }, isVisible ? "Blog shown publicly." : "Blog hidden from public site.")} rows={adminData.blogs} /> : null}
-        {active === "Careers" ? <CareerForm busy={busy} onSave={(payload) => mutate({ action: "career.save", payload }, "Job saved or sent for approval.")} onVisibility={(slug, isVisible) => mutate({ action: "career.visibility", payload: { slug, isVisible } }, isVisible ? "Job shown publicly." : "Job hidden from public site.")} rows={adminData.jobs} /> : null}
-        {active === "Videos" ? <VideoForm busy={busy} onSave={(payload) => mutate({ action: "video.save", payload }, "Patient video saved or sent for approval.")} onVisibility={(id, isVisible) => mutate({ action: "video.visibility", payload: { id, isVisible } }, isVisible ? "Video shown publicly." : "Video hidden from public site.")} rows={adminData.videos} /> : null}
+        {active === "Blogs" ? (
+          <BlogForm
+            busy={busy}
+            onSave={(payload) => mutate({ action: "blog.save", payload }, "Blog saved or sent for approval.")}
+            onVisibility={(slug, isVisible) => mutate({ action: "blog.visibility", payload: { slug, isVisible } }, isVisible ? "Blog shown publicly." : "Blog hidden from public site.")}
+            onDelete={(slug) => mutate({ action: "blog.delete", slug }, "Blog deleted successfully.")}
+            rows={adminData.blogs}
+          />
+        ) : null}
+        {active === "Careers" ? (
+          <CareerForm
+            busy={busy}
+            onSave={(payload) => mutate({ action: "career.save", payload }, "Job saved or sent for approval.")}
+            onVisibility={(slug, isVisible) => mutate({ action: "career.visibility", payload: { slug, isVisible } }, isVisible ? "Job shown publicly." : "Job hidden from public site.")}
+            onDelete={(slug) => mutate({ action: "career.delete", slug }, "Job listing deleted successfully.")}
+            rows={adminData.jobs}
+          />
+        ) : null}
+        {active === "Videos" ? (
+          <VideoForm
+            busy={busy}
+            onSave={(payload) => mutate({ action: "video.save", payload }, "Patient video saved or sent for approval.")}
+            onVisibility={(id, isVisible) => mutate({ action: "video.visibility", payload: { id, isVisible } }, isVisible ? "Video shown publicly." : "Video hidden from public site.")}
+            onDelete={(id) => mutate({ action: "video.delete", id }, "Video deleted successfully.")}
+            rows={adminData.videos}
+          />
+        ) : null}
 
         {active === "Reviews" ? (
           <DataTable
@@ -1812,12 +1843,14 @@ function DoctorManager({
   staticDoctors,
   busy,
   onSave,
+  onDelete,
 }: {
   rows: Record<string, string | number | null>[];
   departments: Department[];
   staticDoctors: Doctor[];
   busy: boolean;
   onSave: (payload: Record<string, unknown>) => void;
+  onDelete?: (slug: string) => void;
 }) {
   const source = rows.length ? rows : staticDoctors.map((item) => ({
     slug: item.slug,
@@ -1906,7 +1939,24 @@ function DoctorManager({
           <input type="checkbox" checked={form.isVisible === "1"} onChange={(event) => setForm({ ...form, isVisible: event.target.checked ? "1" : "0" })} />
           <span>Visible on public doctors page after approval</span>
         </label>
-        <button className="button primary" disabled={busy}><UserCog size={17} aria-hidden="true" /> Save Doctor</button>
+        <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+          <button className="button primary" style={{ flex: 1 }} disabled={busy}><UserCog size={17} aria-hidden="true" /> Save Doctor</button>
+          {form.slug && (
+            <button
+              type="button"
+              className="button danger"
+              style={{ background: "#e11d48", color: "white" }}
+              disabled={busy}
+              onClick={() => {
+                if (window.confirm(`Are you sure you want to delete ${form.name}?`)) {
+                  onDelete?.(form.slug);
+                }
+              }}
+            >
+              Delete Doctor
+            </button>
+          )}
+        </div>
       </form>
       <DataTable 
         rows={rows} 
@@ -1921,11 +1971,13 @@ function BlogForm({
   busy,
   onSave,
   onVisibility,
+  onDelete,
   rows,
 }: {
   busy: boolean;
   onSave: (payload: Record<string, unknown>) => void;
   onVisibility?: (slug: string, isVisible: number) => void;
+  onDelete?: (slug: string) => void;
   rows: AdminData["blogs"];
 }) {
   const [form, setForm] = useState({ title: "", slug: "", excerpt: "", body: "" });
@@ -1944,7 +1996,24 @@ function BlogForm({
         <label>Slug<input value={form.slug} onChange={(event) => setForm({ ...form, slug: slugify(event.target.value) })} /></label>
         <label>Excerpt<textarea rows={3} value={form.excerpt} onChange={(event) => setForm({ ...form, excerpt: event.target.value })} /></label>
         <label>Body<textarea rows={7} value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} /></label>
-        <button className="button primary" disabled={busy}><Newspaper size={17} aria-hidden="true" /> Save Blog</button>
+        <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+          <button className="button primary" style={{ flex: 1 }} disabled={busy}><Newspaper size={17} aria-hidden="true" /> Save Blog</button>
+          {form.slug && (
+            <button
+              type="button"
+              className="button danger"
+              style={{ background: "#e11d48", color: "white" }}
+              disabled={busy}
+              onClick={() => {
+                if (window.confirm(`Are you sure you want to delete the blog "${form.title}"?`)) {
+                  onDelete?.(form.slug);
+                }
+              }}
+            >
+              Delete Blog
+            </button>
+          )}
+        </div>
       </form>
       <DataTable
         rows={rows}
@@ -1974,11 +2043,13 @@ function CareerForm({
   busy,
   onSave,
   onVisibility,
+  onDelete,
   rows,
 }: {
   busy: boolean;
   onSave: (payload: Record<string, unknown>) => void;
   onVisibility?: (slug: string, isVisible: number) => void;
+  onDelete?: (slug: string) => void;
   rows: AdminData["jobs"];
 }) {
   const [form, setForm] = useState({ title: "", slug: "", department: "", employmentType: "Full-time", description: "" });
@@ -1997,7 +2068,24 @@ function CareerForm({
         <label>Department<input value={form.department} onChange={(event) => setForm({ ...form, department: event.target.value })} /></label>
         <label>Employment type<input value={form.employmentType} onChange={(event) => setForm({ ...form, employmentType: event.target.value })} /></label>
         <label>Description<textarea rows={6} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
-        <button className="button primary" disabled={busy}><FileText size={17} aria-hidden="true" /> Save Job</button>
+        <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+          <button className="button primary" style={{ flex: 1 }} disabled={busy}><FileText size={17} aria-hidden="true" /> Save Job</button>
+          {form.slug && (
+            <button
+              type="button"
+              className="button danger"
+              style={{ background: "#e11d48", color: "white" }}
+              disabled={busy}
+              onClick={() => {
+                if (window.confirm(`Are you sure you want to delete the job listing "${form.title}"?`)) {
+                  onDelete?.(form.slug);
+                }
+              }}
+            >
+              Delete Job
+            </button>
+          )}
+        </div>
       </form>
       <DataTable
         rows={rows}
@@ -2028,21 +2116,23 @@ function VideoForm({
   busy,
   onSave,
   onVisibility,
+  onDelete,
   rows,
 }: {
   busy: boolean;
   onSave: (payload: Record<string, unknown>) => void;
   onVisibility?: (id: string, isVisible: number) => void;
+  onDelete?: (id: string) => void;
   rows: AdminData["videos"];
 }) {
-  const [form, setForm] = useState({ title: "", youtubeUrl: "", consentNote: "" });
+  const [form, setForm] = useState({ id: "", title: "", youtubeUrl: "", consentNote: "" });
   return (
     <div className="admin-panel-grid">
       <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave(form); }}>
-        {rows.some(v => v.youtube_url === form.youtubeUrl && form.youtubeUrl) && (
+        {form.id && (
           <div style={{ background: "#e0f2fe", color: "#0369a1", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
             <span>✏️ Editing video entry: <strong>{form.title}</strong></span>
-            <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({ title: "", youtubeUrl: "", consentNote: "" })}>
+            <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({ id: "", title: "", youtubeUrl: "", consentNote: "" })}>
               Create New
             </button>
           </div>
@@ -2050,12 +2140,30 @@ function VideoForm({
         <label>Video title<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
         <label>YouTube URL<input value={form.youtubeUrl} onChange={(event) => setForm({ ...form, youtubeUrl: event.target.value })} /></label>
         <label>Consent/source note<textarea rows={4} value={form.consentNote} onChange={(event) => setForm({ ...form, consentNote: event.target.value })} /></label>
-        <button className="button primary" disabled={busy}><Video size={17} aria-hidden="true" /> Save Video</button>
+        <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+          <button className="button primary" style={{ flex: 1 }} disabled={busy}><Video size={17} aria-hidden="true" /> Save Video</button>
+          {form.id && (
+            <button
+              type="button"
+              className="button danger"
+              style={{ background: "#e11d48", color: "white" }}
+              disabled={busy}
+              onClick={() => {
+                if (window.confirm(`Are you sure you want to delete the video "${form.title}"?`)) {
+                  onDelete?.(form.id);
+                }
+              }}
+            >
+              Delete Video
+            </button>
+          )}
+        </div>
       </form>
       <DataTable
         rows={rows}
         columns={["title", "youtube_url", "status", "is_visible", "created_at"]}
         onRowClick={(row) => setForm({
+          id: String(row.id || ""),
           title: String(row.title || ""),
           youtubeUrl: String(row.youtube_url || ""),
           consentNote: String(row.consent_note || ""),
