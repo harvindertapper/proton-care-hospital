@@ -36,13 +36,13 @@ async function dashboardData(session: AdminSession) {
   ] = await Promise.all([
     query<Record<string, unknown>>("SELECT * FROM appointments ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM department_timings ORDER BY department_name"),
-    query("SELECT * FROM doctor_profiles ORDER BY name"),
+    query("SELECT * FROM doctor_profiles WHERE is_deleted = 0 ORDER BY name"),
     query("SELECT * FROM content_revisions ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM feedback ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM contact_messages ORDER BY created_at DESC LIMIT 100"),
-    query("SELECT * FROM blog_posts ORDER BY created_at DESC LIMIT 100"),
-    query("SELECT * FROM career_jobs ORDER BY created_at DESC LIMIT 100"),
-    query("SELECT * FROM patient_videos ORDER BY created_at DESC LIMIT 100"),
+    query("SELECT * FROM blog_posts WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 100"),
+    query("SELECT * FROM career_jobs WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 100"),
+    query("SELECT * FROM patient_videos WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM media_assets ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 120"),
     query(
@@ -766,27 +766,27 @@ async function applyDeleteClosure(payload: Record<string, unknown>, actorEmail: 
 async function applyDeleteDoctor(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 120);
   if (!slug) throw new Error("Doctor slug is required.");
-  await run("DELETE FROM doctor_profiles WHERE slug = ?", slug);
-  await audit(actorEmail, "DOCTOR_DELETED", "DoctorProfile", slug, `Deleted doctor profile with slug: ${slug}`);
+  await run("UPDATE doctor_profiles SET is_deleted = 1 WHERE slug = ?", slug);
+  await audit(actorEmail, "DOCTOR_DELETED", "DoctorProfile", slug, `Soft deleted doctor profile with slug: ${slug}`);
 }
 
 async function applyDeleteBlog(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 120);
   if (!slug) throw new Error("Blog slug is required.");
-  await run("DELETE FROM blog_posts WHERE slug = ?", slug);
-  await audit(actorEmail, "BLOG_DELETED", "BlogPost", slug, `Deleted blog post with slug: ${slug}`);
+  await run("UPDATE blog_posts SET is_deleted = 1 WHERE slug = ?", slug);
+  await audit(actorEmail, "BLOG_DELETED", "BlogPost", slug, `Soft deleted blog post with slug: ${slug}`);
 }
 
 async function applyDeleteCareer(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 120);
   if (!slug) throw new Error("Career job slug is required.");
-  await run("DELETE FROM career_jobs WHERE slug = ?", slug);
-  await audit(actorEmail, "CAREER_DELETED", "CareerJob", slug, `Deleted job listing with slug: ${slug}`);
+  await run("UPDATE career_jobs SET is_deleted = 1 WHERE slug = ?", slug);
+  await audit(actorEmail, "CAREER_DELETED", "CareerJob", slug, `Soft deleted job listing with slug: ${slug}`);
 }
 
 async function applyDeleteVideo(payload: Record<string, unknown>, actorEmail: string) {
   const id = clean(payload.id, 120);
   if (!id) throw new Error("Video ID is required.");
-  await run("DELETE FROM patient_videos WHERE id = ?", id);
-  await audit(actorEmail, "VIDEO_DELETED", "PatientVideo", id, `Deleted video with ID: ${id}`);
+  await run("UPDATE patient_videos SET is_deleted = 1 WHERE id = ?", id);
+  await audit(actorEmail, "VIDEO_DELETED", "PatientVideo", id, `Soft deleted video with ID: ${id}`);
 }

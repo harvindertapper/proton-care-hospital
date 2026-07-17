@@ -49,7 +49,7 @@ function dbDoctorToPublic(row: Record<string, unknown>): Doctor {
 export async function getPublicDoctors() {
   try {
     const rows = await query<Record<string, unknown>>(
-      "SELECT slug, name, speciality, qualification, department_slug, photo_url FROM doctor_profiles WHERE status = 'APPROVED' AND is_visible = 1 ORDER BY name",
+      "SELECT slug, name, speciality, qualification, department_slug, photo_url FROM doctor_profiles WHERE status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 ORDER BY name",
     );
     if (rows.results?.length) return rows.results.map(dbDoctorToPublic);
   } catch {
@@ -61,7 +61,7 @@ export async function getPublicDoctors() {
 export async function getPublishedBlogs() {
   try {
     const rows = await query<PublicBlog>(
-      "SELECT id, slug, title, excerpt, body, created_at FROM blog_posts WHERE status = 'APPROVED' AND is_visible = 1 ORDER BY created_at DESC",
+      "SELECT id, slug, title, excerpt, body, created_at FROM blog_posts WHERE status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 ORDER BY created_at DESC",
     );
     if (rows.results?.length) return rows.results;
   } catch {
@@ -73,7 +73,7 @@ export async function getPublishedBlogs() {
 export async function getPublishedJobs() {
   try {
     const rows = await query<PublicJob>(
-      "SELECT id, slug, title, department, employment_type, description FROM career_jobs WHERE status = 'APPROVED' AND is_visible = 1 ORDER BY created_at DESC",
+      "SELECT id, slug, title, department, employment_type, description FROM career_jobs WHERE status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 ORDER BY created_at DESC",
     );
     if (rows.results?.length) return rows.results;
   } catch {
@@ -96,7 +96,7 @@ export async function getPublishedReviews() {
 export async function getPublishedVideos() {
   try {
     const rows = await query<PublicVideo>(
-      "SELECT id, title, youtube_url, youtube_id, consent_note FROM patient_videos WHERE status = 'APPROVED' AND is_visible = 1 ORDER BY created_at DESC LIMIT 12",
+      "SELECT id, title, youtube_url, youtube_id, consent_note FROM patient_videos WHERE status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 ORDER BY created_at DESC LIMIT 12",
     );
     return rows.results || [];
   } catch {
@@ -107,7 +107,7 @@ export async function getPublishedVideos() {
 export async function getBlogBySlug(slug: string): Promise<PublicBlog | null> {
   try {
     const rows = await query<PublicBlog>(
-      "SELECT id, slug, title, excerpt, body, created_at FROM blog_posts WHERE slug = ? AND status = 'APPROVED' AND is_visible = 1",
+      "SELECT id, slug, title, excerpt, body, created_at FROM blog_posts WHERE slug = ? AND status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0",
       [slug]
     );
     if (rows.results?.length) return rows.results[0];
@@ -122,7 +122,7 @@ export async function getBlogBySlug(slug: string): Promise<PublicBlog | null> {
 export async function getJobBySlug(slug: string): Promise<PublicJob | null> {
   try {
     const rows = await query<PublicJob>(
-      "SELECT id, slug, title, department, employment_type, description FROM career_jobs WHERE slug = ? AND status = 'APPROVED' AND is_visible = 1",
+      "SELECT id, slug, title, department, employment_type, description FROM career_jobs WHERE slug = ? AND status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0",
       [slug]
     );
     if (rows.results?.length) return rows.results[0];
@@ -137,7 +137,7 @@ export async function getJobBySlug(slug: string): Promise<PublicJob | null> {
 export async function getDoctorBySlug(slug: string): Promise<Doctor | null> {
   try {
     const rows = await query<Record<string, unknown>>(
-      "SELECT slug, name, speciality, qualification, department_slug, photo_url FROM doctor_profiles WHERE slug = ? AND status = 'APPROVED' AND is_visible = 1 LIMIT 1",
+      "SELECT slug, name, speciality, qualification, department_slug, photo_url FROM doctor_profiles WHERE slug = ? AND status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 LIMIT 1",
       [slug]
     );
     if (rows.results?.length) return dbDoctorToPublic(rows.results[0]);

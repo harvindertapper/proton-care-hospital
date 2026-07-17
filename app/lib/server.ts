@@ -108,6 +108,7 @@ const tableStatements = [
     proposed_by TEXT,
     approved_by TEXT,
     blocked_dates TEXT DEFAULT '',
+    is_deleted INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS content_revisions (
@@ -132,6 +133,7 @@ const tableStatements = [
     status TEXT NOT NULL DEFAULT 'NEEDS_REVIEW',
     is_visible INTEGER NOT NULL DEFAULT 0,
     source_note TEXT,
+    is_deleted INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS career_jobs (
@@ -143,6 +145,7 @@ const tableStatements = [
     description TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'NEEDS_REVIEW',
     is_visible INTEGER NOT NULL DEFAULT 0,
+    is_deleted INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS patient_videos (
@@ -153,6 +156,7 @@ const tableStatements = [
     consent_note TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'NEEDS_REVIEW',
     is_visible INTEGER NOT NULL DEFAULT 0,
+    is_deleted INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS media_assets (
@@ -257,6 +261,11 @@ const adminUserMigrationStatements = [
   "CREATE TABLE IF NOT EXISTS site_configs (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
   // Safe migration for existing D1 databases that predate the expires_at column.
   "ALTER TABLE idempotent_requests ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0",
+  // Soft Delete Migrations
+  "ALTER TABLE doctor_profiles ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE blog_posts ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE career_jobs ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE patient_videos ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0",
 ];
 
 export async function getD1() {

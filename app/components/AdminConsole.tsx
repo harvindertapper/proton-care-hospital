@@ -1117,6 +1117,7 @@ export function AdminConsole({
             busy={busy}
             onSave={(payload) => mutate({ action: "doctor.save", payload }, "Doctor profile saved or sent for approval.")}
             onDelete={(slug) => mutate({ action: "doctor.delete", slug }, "Doctor deleted successfully.")}
+            onUpload={uploadMedia}
           />
         ) : null}
 
@@ -1837,6 +1838,187 @@ function TimingManager({
   );
 }
 
+function ImageCropUploader({
+  onUpload,
+  onComplete,
+}: {
+  onUpload: (formData: FormData) => Promise<string>;
+  onComplete: (url: string) => void;
+}) {
+  const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [offsetX, setOffsetX] = useState(0);
+  const [offsetY, setOffsetY] = useState(0);
+  const [rotation, setRotation] = useState(0); // in degrees: 0, 90, 180, 270
+  const [uploading, setUploading] = useState(false);
+  const [message, setMessage] = useState("");
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // When a file is selected
+  function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    if (e.target.files && e.target.files.length > 0) {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      reader.onload = () => {
+        setImageSrc(reader.result as string);
+        setZoom(1);
+        setOffsetX(0);
+        setOffsetY(0);
+        setRotation(0);
+        setMessage("");
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+
+  // Draw image on canvas in real-time
+  useEffect(() => {
+    if (!imageSrc) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const img = new Image();
+    img.src = imageSrc;
+    img.onload = () => {
+      // Clear canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+
+      // Move center of canvas to origin for rotation & zoom
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate((rotation * Math.PI) / 180);
+      ctx.scale(zoom, zoom);
+
+      // Draw the image centered
+      // We want to scale the image to fill the canvas as base
+      const scale = Math.max(canvas.width / img.width, canvas.height / img.height);
+      const iw = img.width * scale;
+      const ih = img.height * scale;
+
+      ctx.drawImage(img, -iw / 2 + offsetX, -ih / 2 + offsetY, iw, ih);
+      ctx.restore();
+    };
+  }, [imageSrc, zoom, offsetX, offsetY, rotation]);
+
+  async function handleCropAndUpload() {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    setUploading(true);
+    setMessage("Optimizing & uploading...");
+    try {
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          throw new Error("Could not crop image.");
+        }
+        const file = new File([blob], "doctor-profile.webp", { type: "image/webp" });
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("category", "doctor-upload");
+
+        const url = await onUpload(formData);
+        onComplete(url);
+        setImageSrc(null); // Reset
+        setMessage("Uploaded successfully!");
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }, "image/webp", 0.85);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 12, padding: 14, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+      <span style={{ display: "block", fontSize: 13, fontWeight: "600", color: "#1e293b", marginBottom: 8 }}>
+        📷 Crop & Upload Doctor Photo (R2 Gateway)
+      </span>
+      <input type="file" accept="image/*" onChange={onFileChange} ref={fileInputRef} style={{ fontSize: 12 }} />
+      {imageSrc && (
+        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+          {/* Canvas for Preview */}
+          <canvas
+            ref={canvasRef}
+            width={200}
+            height={200}
+            style={{ border: "2px solid #cbd5e1", borderRadius: "50%", background: "#f1f5f9", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)" }}
+          />
+
+          {/* Controls */}
+          <div style={{ width: "105%", spaceY: 8 }}>
+            <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "#475569" }}>
+              Zoom: {zoom.toFixed(1)}x
+              <input
+                type="range"
+                min="1"
+                max="4"
+                step="0.1"
+                value={zoom}
+                onChange={(e) => setZoom(parseFloat(e.target.value))}
+                style={{ width: "65%" }}
+              />
+            </label>
+            <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "#475569", marginTop: 6 }}>
+              Move Horiz:
+              <input
+                type="range"
+                min="-100"
+                max="100"
+                value={offsetX}
+                onChange={(e) => setOffsetX(parseInt(e.target.value))}
+                style={{ width: "65%" }}
+              />
+            </label>
+            <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "#475569", marginTop: 6 }}>
+              Move Vert:
+              <input
+                type="range"
+                min="-100"
+                max="100"
+                value={offsetY}
+                onChange={(e) => setOffsetY(parseInt(e.target.value))}
+                style={{ width: "65%" }}
+              />
+            </label>
+            <div style={{ display: "flex", gap: 8, marginTop: 10, justifyContent: "center" }}>
+              <button
+                type="button"
+                className="button subtle small"
+                onClick={() => setRotation((r) => (r - 90 + 360) % 360)}
+                style={{ fontSize: 11, padding: "4px 8px" }}
+              >
+                Rotate Left
+              </button>
+              <button
+                type="button"
+                className="button subtle small"
+                onClick={() => setRotation((r) => (r + 90) % 360)}
+                style={{ fontSize: 11, padding: "4px 8px" }}
+              >
+                Rotate Right
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="button primary small"
+            onClick={handleCropAndUpload}
+            disabled={uploading}
+            style={{ width: "100%", marginTop: 8 }}
+          >
+            {uploading ? "Uploading to R2..." : "Crop & Set Photo"}
+          </button>
+        </div>
+      )}
+      {message && <div style={{ fontSize: 11, color: "#0d9488", marginTop: 6 }}>{message}</div>}
+    </div>
+  );
+}
+
 function DoctorManager({
   rows,
   departments,
@@ -1844,6 +2026,7 @@ function DoctorManager({
   busy,
   onSave,
   onDelete,
+  onUpload,
 }: {
   rows: Record<string, string | number | null>[];
   departments: Department[];
@@ -1851,6 +2034,7 @@ function DoctorManager({
   busy: boolean;
   onSave: (payload: Record<string, unknown>) => void;
   onDelete?: (slug: string) => void;
+  onUpload?: (formData: FormData) => Promise<string>;
 }) {
   const source = rows.length ? rows : staticDoctors.map((item) => ({
     slug: item.slug,
@@ -1933,6 +2117,9 @@ function DoctorManager({
           </select>
         </label>
         <label>Photo URL or uploaded media URL<input value={form.photoUrl} onChange={(event) => setForm({ ...form, photoUrl: event.target.value })} /></label>
+        {onUpload && (
+          <ImageCropUploader onUpload={onUpload} onComplete={(url) => setForm({ ...form, photoUrl: url })} />
+        )}
         <label>Profile note<textarea rows={3} value={form.profileNote} onChange={(event) => setForm({ ...form, profileNote: event.target.value })} /></label>
         <label>Blocked Dates / Leaves (comma-separated, e.g. 2026-07-20,2026-07-21)<input placeholder="e.g. 2026-07-20,2026-07-21" value={form.blockedDates} onChange={(event) => setForm({ ...form, blockedDates: event.target.value })} /></label>
         <label className="checkbox-field">
