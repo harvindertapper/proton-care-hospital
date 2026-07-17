@@ -15,6 +15,7 @@ import {
   Video,
 } from "lucide-react";
 import type { Department, Doctor } from "@/app/lib/data";
+import { slugify } from "@/app/lib/utils";
 
 type AdminSession = {
   email: string;
@@ -91,14 +92,6 @@ async function deleteAdminMedia(csrf: string, id: string) {
 
 function cell(value: unknown) {
   return value === null || value === undefined || value === "" ? "-" : String(value);
-}
-
-function slugify(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 90);
 }
 
 export function AdminLoginForm() {

@@ -17,6 +17,7 @@ import {
   validatePhone,
   verifyTurnstile,
 } from "@/app/lib/server";
+import { clean } from "@/app/lib/utils";
 
 const APPOINTMENT_PHONE_DAILY_LIMIT = 3;
 
@@ -25,10 +26,6 @@ if (process.env.NODE_ENV === "production") {
   if (!env.ADMIN_SESSION_SECRET && !env.AUTH_SECRET) {
     throw new Error("Initialization assertion failed: ADMIN_SESSION_SECRET or AUTH_SECRET environment variable is missing.");
   }
-}
-
-function cleanText(value: unknown, max = 1000) {
-  return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
 export async function POST(request: Request) {
@@ -44,18 +41,18 @@ export async function POST(request: Request) {
     return json({ error: "Please wait a couple of minutes before submitting another appointment request." }, { status: 429 });
   }
 
-  const turnstile = await verifyTurnstile(cleanText(body.turnstileToken, 2000), ip);
+  const turnstile = await verifyTurnstile(clean(body.turnstileToken, 2000), ip);
   if (!turnstile.ok) {
     return json({ error: "Security verification failed. Please refresh and try again." }, { status: 403 });
   }
 
-  const patientName = sanitizeHtml(cleanText(body.patientName, 120));
-  const phone = normalizePhone(cleanText(body.phone, 20));
-  const email = sanitizeHtml(cleanText(body.email, 160).toLowerCase());
-  const departmentSlug = cleanText(body.departmentSlug, 120);
-  const requestedDate = cleanText(body.requestedDate, 20);
-  const requestedTime = cleanText(body.requestedTime, 20);
-  const concern = sanitizeHtml(cleanText(body.concern, 1200));
+  const patientName = sanitizeHtml(clean(body.patientName, 120));
+  const phone = normalizePhone(clean(body.phone, 20));
+  const email = sanitizeHtml(clean(body.email, 160).toLowerCase());
+  const departmentSlug = clean(body.departmentSlug, 120);
+  const requestedDate = clean(body.requestedDate, 20);
+  const requestedTime = clean(body.requestedTime, 20);
+  const concern = sanitizeHtml(clean(body.concern, 1200));
   const consent = body.consent === true;
 
   if (departmentSlug === "emergency-medicine") {
@@ -85,7 +82,7 @@ export async function POST(request: Request) {
     concern,
     consent,
   };
-  const clientKey = request.headers.get("idempotency-key") || cleanText(body.idempotencyKey, 100);
+  const clientKey = request.headers.get("idempotency-key") || clean(body.idempotencyKey, 100);
   const idempotencyKey = clientKey
     ? `client:${clientKey}`
     : `server:${await sha256(JSON.stringify(idempotencyPayload))}`;

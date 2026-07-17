@@ -5,7 +5,7 @@ import { getPublishedJobs } from "@/app/lib/public-data";
 import { PageHero, PageShell, SectionHeader } from "@/app/components/SiteShell";
 import Link from "next/link";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 export const metadata: Metadata = {
   title: "Careers",

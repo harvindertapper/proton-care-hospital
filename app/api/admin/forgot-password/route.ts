@@ -8,14 +8,7 @@ import {
   run,
 } from "@/app/lib/server";
 import { sendEmail, getOtpEmailTemplate } from "@/app/lib/resend";
-
-async function hashOtp(otp: string): Promise<string> {
-  const msgBuffer = new TextEncoder().encode(otp);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
-  return Array.from(new Uint8Array(hashBuffer))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
+import { hashOtp } from "@/app/lib/utils";
 
 export async function POST(request: Request) {
   const ip = getClientIp(request);

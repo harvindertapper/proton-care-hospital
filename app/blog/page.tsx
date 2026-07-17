@@ -5,7 +5,7 @@ import { getPublishedBlogs } from "@/app/lib/public-data";
 import Link from "next/link";
 import { PageHero, PageShell, SectionHeader } from "@/app/components/SiteShell";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 export const metadata: Metadata = {
   title: "Blog & Wellness Hub",

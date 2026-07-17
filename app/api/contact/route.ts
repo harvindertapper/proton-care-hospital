@@ -14,16 +14,13 @@ import {
   validatePhone,
   verifyTurnstile,
 } from "@/app/lib/server";
+import { clean } from "@/app/lib/utils";
 
 // Assert production environment secrets on route load
 if (process.env.NODE_ENV === "production") {
   if (!env.ADMIN_SESSION_SECRET && !env.AUTH_SECRET) {
     throw new Error("Initialization assertion failed: ADMIN_SESSION_SECRET or AUTH_SECRET environment variable is missing.");
   }
-}
-
-function clean(value: unknown, max = 1000) {
-  return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
 export async function POST(request: Request) {

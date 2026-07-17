@@ -6,7 +6,7 @@ import { PageShell } from "@/app/components/SiteShell";
 import Link from "next/link";
 import { ArrowLeft, BriefcaseBusiness, Mail, MapPin } from "lucide-react";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 type Props = {
   params: Promise<{ slug: string }>;

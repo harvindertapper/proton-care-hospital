@@ -10,12 +10,9 @@ import {
   validatePhone,
   verifyTurnstile,
 } from "@/app/lib/server";
+import { clean } from "@/app/lib/utils";
 
 const FEEDBACK_PHONE_DAILY_LIMIT = 3;
-
-function clean(value: unknown, max = 1000) {
-  return typeof value === "string" ? value.trim().slice(0, max) : "";
-}
 
 export async function POST(request: Request) {
   const ip = getClientIp(request);

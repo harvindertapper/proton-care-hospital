@@ -7,7 +7,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { getDoctorBySlug } from "@/app/lib/public-data";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 type Props = {
   params: Promise<{ slug: string }>;

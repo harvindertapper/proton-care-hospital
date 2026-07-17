@@ -14,20 +14,9 @@ import {
 import { departmentBySlug } from "@/app/lib/data";
 import { validateStaffAccountInput } from "@/app/lib/adminAuth";
 import { sendEmail, getStaffOnboardingTemplate } from "@/app/lib/resend";
+import { clean, slugify } from "@/app/lib/utils";
 
 type AdminSession = { email: string; role: "SUPER_ADMIN" | "STAFF" };
-
-function clean(value: unknown, max = 1000) {
-  return typeof value === "string" ? value.trim().slice(0, max) : "";
-}
-
-function slugify(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 90);
-}
 
 async function dashboardData(session: AdminSession) {
   const [
