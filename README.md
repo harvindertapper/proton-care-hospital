@@ -77,8 +77,7 @@ Set the values in `.env.example` before launch:
 - `NEXT_PUBLIC_TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY`
 - `RESEND_API_KEY` (for transactional admin emails)
 
-Firebase Phone Auth and Turnstile are production adapters, but live launch proof
-remains blocked until their credentials and test flows are verified.
+Turnstile is the production security adapter, but live launch proof remains blocked until credential and testing configurations are fully verified.
 
 `ADMIN_SUPER_PASSWORD` is used only when the first super admin is created (or when the one known legacy fallback account is migrated). Later password changes are stored in D1 and are never overwritten by the environment value. Staff accounts are created by the super admin in the admin console; no `ADMIN_STAFF_*`, `ADMIN_EMAIL`, or `ADMIN_PASSWORD` variables are used.
 
