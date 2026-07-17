@@ -1743,6 +1743,21 @@ button:disabled {
   }
 }
 
+.triage-widget-float {
+  position: fixed;
+  bottom: 148px;
+  right: 20px;
+  z-index: 9999;
+  font-family: 'Outfit', sans-serif;
+}
+@media (min-width: 768px) {
+  .triage-widget-float {
+    bottom: 110px;
+    right: 30px;
+  }
+}
+
+
 /* Admin/Staff Professional Login rewrite enhancements */
 .password-input-container {
   display: flex;

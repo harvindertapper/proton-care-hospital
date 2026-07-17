@@ -36,13 +36,13 @@ export default function AboutPage() {
               {/* Trust Badges & Clinical Metrics */}
               <div className="grid grid-cols-2 gap-4 pt-4">
                 <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl text-center">
-                  <strong className="text-3xl font-extrabold text-teal-600 block mb-1">10,000+</strong>
-                  <span className="text-sm text-slate-600 font-medium block">patients treated</span>
-                  <small className="text-xs text-slate-500 block mt-1">Patient visits recorded as of July 2026, based on hospital records.</small>
+                  <strong className="text-3xl font-extrabold text-teal-600 block mb-1">1,000+</strong>
+                  <span className="text-sm text-slate-600 font-medium block">Unique Patients Served</span>
+                  <small className="text-xs text-slate-500 block mt-1">As of July 2026, based on hospital records.</small>
                 </div>
                 <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl text-center">
                   <strong className="text-3xl font-extrabold text-teal-600 block mb-1">15+</strong>
-                  <span className="text-sm text-slate-600 font-medium block">medical specialties</span>
+                  <span className="text-sm text-slate-600 font-medium block">Medical Specialties</span>
                   <small className="text-xs text-slate-500 block mt-1">Covering outpatient (OPD) and inpatient (IPD) clinical services.</small>
                 </div>
               </div>

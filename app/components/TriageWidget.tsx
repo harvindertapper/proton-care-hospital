@@ -120,7 +120,7 @@ export function TriageWidget() {
   }
 
   return (
-    <div style={{ position: "fixed", bottom: "24px", right: "24px", zIndex: 9999, fontFamily: "'Outfit', sans-serif" }}>
+    <div className="triage-widget-float">
       {!isOpen && (
         <button
           onClick={() => {

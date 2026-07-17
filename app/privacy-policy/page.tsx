@@ -41,7 +41,7 @@ export default function PrivacyPolicyPage() {
                 <li><strong>Appointment Requests:</strong> Name, phone number, email address, preferred department, date, time, and patient concerns.</li>
                 <li><strong>Feedback/Testimonials:</strong> Patient name, rating, clinical experience testimonial, and consent flags.</li>
                 <li><strong>Contact Inquiries:</strong> Name, contact details, and the text of your query.</li>
-                <li><strong>Technical Logs:</strong> IP addresses, browser user-agents, OTP validation status, cookies, and rate-limit metadata (collected to prevent abuse and ensure security).</li>
+                <li><strong>Technical Logs:</strong> IP address, browser information, cookies and security logs.</li>
               </ul>
               <p className="mt-2">
                 <strong>Purpose:</strong> To coordinate outpatient appointments, process feedback, respond to contact inquiries, prevent cyber abuse, and verify mobile numbers via One-Time Passwords (OTP). We do not collect medical records or carry out financial transactions on this public site.
@@ -51,13 +51,8 @@ export default function PrivacyPolicyPage() {
             <section style={{ marginBottom: 24 }}>
               <h2 className="text-xl font-bold text-slate-800 mb-2">3. Third-Party Processors & Data Transfers</h2>
               <p>
-                We do not sell or lease personal data. To provide this website, we use the following third-party processors:
+                We use authorised hosting, communication, security and analytics service providers to operate this website, verify contact details, prevent misuse and respond to patient enquiries. These providers process information only for authorised purposes and subject to applicable contractual and legal safeguards.
               </p>
-              <ul className="list-disc pl-5 mt-2 space-y-1">
-                <li><strong>Hosting Infrastructure:</strong> Cloudflare (including Pages, Workers, D1 Database, and KV Storage) for secure server hosting and performance delivery.</li>
-                <li><strong>Communication & OTP/SMS:</strong> Resend (email communications) and SMS gateway providers for OTP validation.</li>
-                <li><strong>Analytics:</strong> Self-hosted first-party analytics (strictly within the application database; no tracking cookies are shared with third-party advertising networks).</li>
-              </ul>
               <p className="mt-2">
                 Personal data may be processed by authorised technology service providers in India or other jurisdictions, subject to contractual safeguards and applicable Indian law. We do not sell personal data.
               </p>
@@ -95,7 +90,7 @@ export default function PrivacyPolicyPage() {
             <section style={{ marginBottom: 24 }}>
               <h2 className="text-xl font-bold text-slate-800 mb-2">7. Data Breach Response</h2>
               <p>
-                We employ reasonable technical and organisational security measures (including rate-limiting, authentication controls, and query sanitization) to prevent data loss or unauthorised access. In the unlikely event of a data breach, we will notify affected individuals and regulatory authorities in accordance with applicable laws, including the guidelines issued by the Indian Computer Emergency Response Team (CERT-In).
+                We use reasonable technical and organisational safeguards designed to protect personal information against unauthorised access, misuse, alteration or loss. In the unlikely event of a data breach, we will notify affected individuals and regulatory authorities in accordance with applicable laws, including the guidelines issued by the Indian Computer Emergency Response Team (CERT-In).
               </p>
             </section>
 

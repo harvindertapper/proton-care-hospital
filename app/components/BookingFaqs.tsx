@@ -12,16 +12,16 @@ export function BookingFaqs() {
       a: "If you miss the confirmed time, our staff will try to offer the next available slot, subject to doctor and department availability.",
     },
     {
-      q: "Is online payment required to request?",
-      a: "Absolutely not. Protone Care Hospital does not collect any online payments during slot requests. All payments are done directly at the counter on arrival.",
+      q: "Is online payment required?",
+      a: "No. No payment is required to submit an appointment request. Any applicable consultation charges are communicated separately by the hospital.",
     },
     {
       q: "Can I choose a specific doctor?",
-      a: "To ensure direct clinical triage, appointment requests are made by department. Our team will coordinate your case details and assign the correct clinical specialist upon review.",
+      a: "You may mention your preference when contacted by our team. Doctor availability is subject to confirmation.",
     },
     {
-      q: "What documents are required for check-in?",
-      a: "Please bring a valid photo ID (like Aadhaar card) and any relevant past medical history or prescriptions. If claiming cashless insurance, please bring your TPA card.",
+      q: "What documents are required?",
+      a: "Please carry a valid photo ID, previous prescriptions or reports relevant to your consultation, and applicable insurance/TPA documents.",
     },
   ];
 

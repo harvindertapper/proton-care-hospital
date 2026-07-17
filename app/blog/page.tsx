@@ -18,13 +18,13 @@ export default async function BlogPage() {
   return (
     <PageShell>
       <PageHero
-        eyebrow="Wellness Hub"
-        title="Clinical Updates & Health Articles"
-        body="Expert medical insights, healthcare articles, and wellness guidance curated by our senior consultants."
+        eyebrow="Patient Portal"
+        title="Hospital Guides & Patient Information"
+        body="Find patient guides, appointment instructions, and TPA billing information from Protone Care Hospital."
       />
       <section className="section">
         <div className="container">
-          <SectionHeader eyebrow="Published posts" title="Our Health Articles & Wellness Tips" />
+          <SectionHeader eyebrow="Information Guides" title="Patient Information & Guides" />
           {blogs.length ? (
             <div className="blog-grid">
               {blogs.map((blog) => (
