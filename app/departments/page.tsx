@@ -14,7 +14,7 @@ export default function DepartmentsPage() {
       <PageHero
         eyebrow="Departments"
         title="Specialities & OPD Consultation Schedules"
-        body={`Select a department and your preferred timing window. ${hospital.name} coordindation desk will confirm final appointment details by phone.`}
+        body="Select a department and your preferred time window. The Protone Care Hospital coordination desk will confirm the final appointment details by phone."
       >
         <PrimaryActions />
       </PageHero>

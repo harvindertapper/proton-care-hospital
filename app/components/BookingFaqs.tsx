@@ -9,7 +9,7 @@ export function BookingFaqs() {
   const faqs = [
     {
       q: "What if I miss my allocated time?",
-      a: "No problem. If you miss your preferred slot, our desk will accommodate you in the next available window on arrival.",
+      a: "If you miss the confirmed time, our staff will try to offer the next available slot, subject to doctor and department availability.",
     },
     {
       q: "Is online payment required to request?",

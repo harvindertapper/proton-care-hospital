@@ -78,7 +78,7 @@ export default async function AppointmentPage({ searchParams }: { searchParams: 
             <div className="p-6 bg-white border border-slate-100 rounded-2xl shadow-sm">
               <LockKeyhole size={24} className="text-teal-600 mb-3" aria-hidden="true" />
               <h3 className="font-semibold text-slate-800 text-lg mb-2">Secure & Confidential</h3>
-              <p className="text-slate-655 text-sm">Your personal information and OTP verification process are fully encrypted and kept strictly confidential.</p>
+              <p className="text-slate-655 text-sm">We use reasonable technical and organisational safeguards to protect personal information. However, no method of internet transmission or electronic storage is completely secure.</p>
             </div>
             <div className="p-6 bg-white border border-slate-100 rounded-2xl shadow-sm">
               <h3 className="font-semibold text-slate-800 text-lg mb-2">Emergency notice</h3>

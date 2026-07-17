@@ -30,22 +30,20 @@ export default function AboutPage() {
               <SectionHeader
                 eyebrow="Compassion | Care | Cure"
                 title="Designed for clear access to hospital care"
-                body="Protone Care Hospital is built on a simple foundation: direct clinical access. We provide Gurugram residents with verified OPD slots, 24x7 emergency medical response, and structured patient stay facilities."
+                body="Protone Care Hospital is built on a simple foundation: direct clinical access. We provide Gurugram (Gurgaon) residents with department-based appointment requests, 24x7 emergency medical response, and structured patient stay facilities."
               />
               
               {/* Trust Badges & Clinical Metrics */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 pt-4">
+              <div className="grid grid-cols-2 gap-4 pt-4">
                 <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl text-center">
                   <strong className="text-3xl font-extrabold text-teal-600 block mb-1">10,000+</strong>
-                  <span className="text-sm text-slate-600 font-medium">Patients Treated</span>
+                  <span className="text-sm text-slate-600 font-medium block">patients treated</span>
+                  <small className="text-xs text-slate-500 block mt-1">Patient visits recorded as of July 2026, based on hospital records.</small>
                 </div>
                 <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl text-center">
                   <strong className="text-3xl font-extrabold text-teal-600 block mb-1">15+</strong>
-                  <span className="text-sm text-slate-600 font-medium">Medical Specialties</span>
-                </div>
-                <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl text-center col-span-2 sm:col-span-1">
-                  <strong className="text-3xl font-extrabold text-teal-600 block mb-1">100%</strong>
-                  <span className="text-sm text-slate-600 font-medium">NABH Accreditations</span>
+                  <span className="text-sm text-slate-600 font-medium block">medical specialties</span>
+                  <small className="text-xs text-slate-500 block mt-1">Covering outpatient (OPD) and inpatient (IPD) clinical services.</small>
                 </div>
               </div>
 
@@ -103,12 +101,12 @@ export default function AboutPage() {
                   <h3 className="font-bold text-lg">Cashless Insurance</h3>
                 </div>
                 <p className="text-slate-700 text-sm">
-                  We support cashless claim approvals for all major TPAs and public insurance panels.
+                  Cashless treatment assistance is available for the insurers and TPAs currently listed. Cashless approval is subject to policy terms, exclusions, medical necessity, documentation and insurer/TPA authorisation. Processing times are estimates and cannot be guaranteed.
                 </p>
                 <ul className="text-xs text-slate-750 space-y-2 font-medium">
                   <li className="flex items-center gap-2">✓ Cashless TPA Desk Active</li>
-                  <li className="flex items-center gap-2">✓ Pre-Auth assistance in 2 Hours</li>
-                  <li className="flex items-center gap-2">✓ Post-discharge claim support</li>
+                  <li className="flex items-center gap-2">✓ Pre-Auth Assistance Available</li>
+                  <li className="flex items-center gap-2">✓ Post-discharge claim documentation support</li>
                 </ul>
                 <div className="pt-2">
                   <a

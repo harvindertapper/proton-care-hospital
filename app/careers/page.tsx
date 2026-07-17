@@ -48,6 +48,9 @@ export default async function CareersPage() {
               Our current job openings will appear here. To apply, please send your CV to <a href={hospital.emailHref}>{hospital.email}</a>.
             </div>
           )}
+          <div style={{ marginTop: 40, padding: 20, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 16, fontSize: 13, color: "#475569", lineHeight: 1.6 }}>
+            <strong>Recruitment Notice:</strong> CVs submitted through this website or via email will be used strictly for recruitment and evaluation purposes and retained in accordance with our recruitment data-retention policy. Protone Care Hospital Private Limited does not charge candidates any recruitment, processing, or interview fees. Any such solicitation is fraudulent.
+          </div>
         </div>
       </section>
     </PageShell>

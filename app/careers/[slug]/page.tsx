@@ -110,6 +110,9 @@ export default async function CareerDetailPage({ params }: Props) {
                 <Mail size={18} aria-hidden="true" /> Apply via Email
               </a>
             </div>
+            <div style={{ marginTop: 24, fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
+              <strong>Recruitment Notice:</strong> CVs submitted through this email link will be used strictly for recruitment and evaluation purposes and retained in accordance with our recruitment data-retention policy. Protone Care Hospital Private Limited does not charge candidates any recruitment, processing, or interview fees. Any such solicitation is fraudulent.
+            </div>
           </div>
         </div>
       </div>

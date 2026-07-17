@@ -53,8 +53,8 @@ test("homepage source contains the Protone public experience", async () => {
   ]);
 
   assert.match(page, /Protone Care Hospital/);
-  assert.match(page, /Department-only request/);
-  assert.match(page, /24x7 confirmed/);
+  assert.match(page, /Department-based requests/);
+  assert.match(page, /Open 24\/7/);
   assert.match(shell, /tel:\+919220463438|hospital\.phoneHref/);
   assert.match(shell, /https:\/\/wa\.me\/919220463438|hospital\.whatsappHref/);
   assert.match(data, /1\/23 Laxmi Garden, Sector 11/);

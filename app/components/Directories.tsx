@@ -113,7 +113,7 @@ export function TpaDirectory({ panels }: { panels: TpaPanel[] }) {
       </div>
       <div className="disclaimer-card">
         <ShieldCheck size={20} aria-hidden="true" />
-        <p>Cashless approval is subject to policy terms, insurer/TPA approval, and hospital documentation.</p>
+        <p>Cashless treatment assistance is available for the insurers and TPAs currently listed on this page. Cashless approval is subject to policy terms, exclusions, medical necessity, documentation and insurer/TPA authorisation.</p>
       </div>
     </div>
   );

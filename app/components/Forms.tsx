@@ -83,7 +83,7 @@ export function AppointmentForm({
   initialDepartment?: string;
   turnstileSiteKey?: string;
 }) {
-  const selectableDepartments = departments;
+  const selectableDepartments = departments.filter((d) => d.slug !== "emergency-medicine");
   const [step, setStep] = useState(1);
   const [departmentSlug, setDepartmentSlug] = useState(initialDepartment || selectableDepartments[0]?.slug || "");
   const [slots, setSlots] = useState<string[]>([]);
@@ -284,11 +284,14 @@ export function AppointmentForm({
             <h2 style={{ margin: 0 }}>Emergency Care Required / आपातकालीन देखभाल</h2>
           </div>
           <p style={{ fontSize: 15, lineHeight: 1.5 }}>
-            For life-threatening conditions or urgent medical emergencies, please do not wait for an online appointment request. Call or visit our hospital directly. / आपातकालीन स्थिति में ऑनलाइन अपॉइंटमेंट की प्रतीक्षा न करें, सीधे संपर्क करें।
+            For a life-threatening emergency, call <strong>112</strong> or go to the nearest emergency department immediately. / किसी आपातकालीन स्थिति में तुरंत 112 पर कॉल करें या निकटतम आपातकालीन विभाग में जाएं।
           </p>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 15 }}>
-          <a href={hospital.phoneHref} className="button primary call-button" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: "#dc2626", color: "white" }}>
+          <a href="tel:112" className="button primary call-button" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: "#dc2626", color: "white" }}>
+            <PhoneCall size={20} /> Dial India Emergency: 112
+          </a>
+          <a href={hospital.phoneHref} className="button secondary call-button" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
             <PhoneCall size={20} /> Call Emergency Desk: {hospital.phone}
           </a>
           <a href={hospital.mapsUrl} target="_blank" rel="noopener noreferrer" className="button secondary map-button" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
@@ -490,6 +493,7 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
     company: "",
   });
   const [turnstileToken, setTurnstileToken] = useState("");
+  const [publicConsent, setPublicConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [success, setSuccess] = useState(false);
@@ -556,6 +560,7 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
       setSuccess(true);
       setMessage(String(data.message || "Feedback submitted for review."));
       setForm({ patientName: "", phone: "", rating: "5", message: "", consent: false, company: "" });
+      setPublicConsent(false);
       localStorage.removeItem("pch_feedback_draft");
       localStorage.removeItem("pch_feedback_idempotency");
     } catch (error) {
@@ -595,7 +600,11 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
       <TurnstileBox siteKey={turnstileSiteKey} onToken={setTurnstileToken} />
       <label className="checkbox-field">
         <input type="checkbox" checked={form.consent} onChange={(event) => update("consent", event.target.checked)} required />
-        <span>I consent to Protone Care Hospital reviewing this feedback and contacting me if follow-up is needed. Public display requires hospital approval.</span>
+        <span>I consent to the hospital reviewing this feedback and contacting me regarding my concerns.</span>
+      </label>
+      <label className="checkbox-field" style={{ marginTop: "10px" }}>
+        <input type="checkbox" checked={publicConsent} onChange={(event) => setPublicConsent(event.target.checked)} />
+        <span>I separately consent to the publication of this testimonial on the hospital’s website and social-media channels: [with my name / anonymously]. I understand that I may withdraw publication consent by contacting protonecare@gmail.com.</span>
       </label>
       <button className="button primary full" type="submit" disabled={busy || !form.consent || !turnstileToken}>
         <Send size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Submit Feedback"}
@@ -702,7 +711,10 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
       <button className="button primary full" type="submit" disabled={busy || (turnstileSiteKey ? !turnstileToken : false)}>
         <MessageCircle size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Send Message"}
       </button>
-      <p className="field-hint">For emergencies, call <a href={hospital.phoneHref}>{hospital.phone}</a>.</p>
+      <p style={{ fontSize: "11px", color: "#64748b", marginTop: "12px", lineHeight: "1.4", textAlign: "center" }}>
+        By submitting this form, you consent to Protone Care Hospital using the information provided to respond to your enquiry in accordance with its <a href="/privacy-policy" style={{ textDecoration: "underline", color: "var(--navy)" }}>Privacy Policy</a>. Do not use this form for emergencies or to send detailed medical records.
+      </p>
+      <p className="field-hint" style={{ marginTop: "8px" }}>For emergencies, call <a href={hospital.phoneHref}>{hospital.phone}</a>.</p>
       <FieldMessage message={notice} success={success} />
     </form>
   );

@@ -115,11 +115,11 @@ export default function GalleryClient() {
         <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between border-b border-slate-200 pb-4">
           <div>
             <h2 className="text-2xl font-bold text-slate-800">Our Medical Facilities & Technology</h2>
-            <p className="text-slate-600 text-sm mt-1">Take a virtual tour of the clinical environments designed for patient safety and healing.</p>
+            <p className="text-slate-600 text-sm mt-1">View selected photographs of our patient-care areas, operation theatres and diagnostic facilities. Equipment and service availability may change; please contact the hospital for confirmation.</p>
           </div>
           <div className="mt-4 md:mt-0">
             <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-teal-50 text-teal-700 border border-teal-200">
-              NABH Accredited Standards
+              Clinical Quality Standards
             </span>
           </div>
         </div>

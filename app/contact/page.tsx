@@ -22,7 +22,7 @@ export default function ContactPage() {
       <section className="section">
         <div className="container flow-layout">
           <div>
-            <SectionHeader eyebrow="Message desk" title="Send a contact message" body="Send us a message using the form below, and our administration team will get back to you shortly." />
+            <SectionHeader eyebrow="Message desk" title="Send a contact message" body="Send us a message using the form below, and our administration team will respond as soon as reasonably practicable." />
             <ContactForm turnstileSiteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY} />
           </div>
           <aside className="contact-card">

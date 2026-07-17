@@ -56,9 +56,9 @@ export default function Home() {
             </p>
             <PrimaryActions />
             <div className="hero-metrics" aria-label="Hospital service highlights">
-              <div><span>Emergency</span><strong>24x7 confirmed</strong></div>
-              <div><span>Appointment</span><strong>Department-only request</strong></div>
-              <div><span>Insurance</span><strong>{tpaPanels.length} TPA panels</strong></div>
+              <div><span>Emergency</span><strong>Open 24/7</strong></div>
+              <div><span>Appointments</span><strong>Department-based requests</strong></div>
+              <div><span>Insurance</span><strong>{tpaPanels.length} listed panels, subject to current empanelment</strong></div>
             </div>
           </div>
         </div>
@@ -78,7 +78,7 @@ export default function Home() {
               <article className="quick-card">
                 <HeartPulse size={26} aria-hidden="true" />
                 <h3>Emergency & Critical Care</h3>
-                <p>24x7 emergency support with ICU, NICU, and HDU capabilities.</p>
+                <p>Emergency medical assessment and stabilization, with critical care support subject to availability.</p>
                 <ArrowLink href="/contact">Reach emergency desk</ArrowLink>
               </article>
               <article className="quick-card">
