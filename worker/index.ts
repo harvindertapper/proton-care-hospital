@@ -6,8 +6,8 @@ interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
   MEDIA: R2Bucket;
-  IMAGES: {
-    input(stream: ReadableStream): {
+  IMAGES?: {
+    input(stream: ReadableStream | ArrayBuffer | Uint8Array): {
       transform(options: Record<string, unknown>): {
         output(options: { format: string; quality: number }): Promise<{ response(): Response }>;
       };
@@ -35,6 +35,9 @@ const worker = {
       return handleImageOptimization(request, {
         fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
         transformImage: async (body, { width, format, quality }) => {
+          if (!env.IMAGES) {
+            return new Response(body);
+          }
           const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
           return result.response();
         },

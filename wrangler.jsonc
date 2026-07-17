@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "proton-care-hospital",
-  "account_id": "5cdbb9a7f936d4903ba1cd69fffb368f",
+  "account_id": "b9b4b7e42c3b44d04fcd759ce96aea36",
   "main": "./worker/index.ts",
   "compatibility_date": "2026-07-15",
   "compatibility_flags": ["nodejs_compat"],
@@ -11,7 +11,7 @@
     {
       "binding": "DB",
       "database_name": "site-creator-d1",
-      "database_id": "b06c58cc-fdc6-4706-9bc6-9786e180d74e"
+      "database_id": "085be1f3-8d4a-459c-86b2-5f5d0d0f964f"
     }
   ],
   "r2_buckets": [
@@ -20,9 +20,6 @@
       "bucket_name": "pch"
     }
   ],
-  "images": {
-    "binding": "IMAGES"
-  },
   "secrets": {
     "required": [
       "ADMIN_SESSION_SECRET",
