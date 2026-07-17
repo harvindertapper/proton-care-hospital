@@ -30,8 +30,7 @@
       "RESEND_API_KEY",
       "ADMIN_SUPER_EMAIL",
       "ADMIN_SUPER_PASSWORD",
-      "TURNSTILE_SECRET_KEY",
-      "ENABLE_SUPER_ADMIN_RECOVERY"
+      "TURNSTILE_SECRET_KEY"
     ]
   },
   "observability": {

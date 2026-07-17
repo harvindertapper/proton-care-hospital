@@ -49,7 +49,8 @@ Worker; all five are listed so a fresh setup is reproducible.
 
 ```bash
 npx wrangler secret put ADMIN_SESSION_SECRET
-npx wrangler secret put OTP_HASH_SECRET
+npx wrangler secret put AUTH_SECRET
+npx wrangler secret put RESEND_API_KEY
 npx wrangler secret put TURNSTILE_SECRET_KEY
 npx wrangler secret put ADMIN_SUPER_EMAIL
 npx wrangler secret put ADMIN_SUPER_PASSWORD
@@ -58,6 +59,10 @@ npx wrangler secret put ADMIN_SUPER_PASSWORD
 `ADMIN_SUPER_PASSWORD` is bootstrap-only. After the first successful admin
 login creates the D1 account, remove it from the Worker and from
 `secrets.required` in `wrangler.jsonc`.
+
+These six secrets are the `secrets.required` set in `wrangler.jsonc`. The
+`ENABLE_SUPER_ADMIN_RECOVERY` flag is **optional** — leave it unset in steady
+state and set it only during a verified lockout-recovery window (see below).
 
 Put the `NEXT_PUBLIC_*` build-time values from `.env.example` in an ignored
 `.env.production.local` file. The production deploy command validates those
@@ -70,7 +75,7 @@ Set the values in `.env.example` before launch:
 - `ADMIN_SESSION_SECRET` or `AUTH_SECRET`
 - `ADMIN_SUPER_EMAIL` and the Cloudflare secret `ADMIN_SUPER_PASSWORD` (15-128 characters)
 - `NEXT_PUBLIC_TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY`
-- `OTP_HASH_SECRET`
+- `RESEND_API_KEY` (for transactional admin emails)
 
 Firebase Phone Auth and Turnstile are production adapters, but live launch proof
 remains blocked until their credentials and test flows are verified.
@@ -87,10 +92,14 @@ attempt (rate limited), so it is immune to warm Worker isolates caching an
    console: `UPDATE admin_users SET is_active = 0 WHERE email = '<super admin email>';`
 2. Set a fresh credential: `npx wrangler secret put ADMIN_SUPER_PASSWORD`
    (and `ADMIN_SUPER_EMAIL` if it was removed after first launch).
-3. Load `/admin/login` and sign in with the new secret. The next login attempt
-   reactivates the account with the new password hash, revokes any old
-   sessions for that email, and records a `SUPER_ADMIN_RECOVERED` audit entry.
-4. Optionally remove the two secrets again once you are back in.
+3. **Explicitly open a recovery window** by setting the secret
+   `ENABLE_SUPER_ADMIN_RECOVERY=true` (e.g. `npx wrangler secret put ENABLE_SUPER_ADMIN_RECOVERY`).
+   Recovery is a high-privilege, MFA-bypassing operation, so it is **refused** unless
+   this flag is `"true"`. With the flag set, loading `/admin/login` and signing in
+   with the new secret reactivates the account with the new password hash, revokes
+   any old sessions for that email, and records a `SUPER_ADMIN_RECOVERED` audit entry.
+4. **Close the window** by removing the secret (`npx wrangler secret delete ENABLE_SUPER_ADMIN_RECOVERY`)
+   once you are back in. Never leave recovery enabled in steady state.
 
 Recovery only triggers while there is no *other* active `SUPER_ADMIN` row;
 otherwise it is treated as a conflict and nothing is mutated. Deleting the row
