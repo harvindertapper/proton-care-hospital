@@ -3,6 +3,7 @@ import {
   audit,
   checkIdempotency,
   checkRateLimit,
+  cleanupExpiredIdempotency,
   getClientIp,
   getD1,
   getDepartment,
@@ -153,6 +154,9 @@ export async function POST(request: Request) {
   if (idempotencyKey) {
     await saveIdempotency(idempotencyKey, idempotencyPayload, responseData);
   }
+
+  // Best-effort background cleanup of expired idempotency rows (throttled internally).
+  void cleanupExpiredIdempotency();
 
   return json(responseData);
 }

@@ -58,7 +58,10 @@ async function dashboardData(session: AdminSession) {
     const sensitiveSlugs = new Set(["psychiatry", "obstetrics-and-gynecology", "emergency-triage", "emergency-medicine"]);
     rawAppointments = rawAppointments.map((app) => ({
       ...app,
-      concern: sensitiveSlugs.has(app.department_slug) ? "[REDACTED - SENSITIVE DEPT]" : app.concern,
+      concern:
+        typeof app.department_slug === "string" && sensitiveSlugs.has(app.department_slug)
+          ? "[REDACTED - SENSITIVE DEPT]"
+          : app.concern,
     }));
   }
 

@@ -18,8 +18,10 @@ import {
 } from "lucide-react";
 import { formatWhatsApp, hospital, publicNav } from "@/app/lib/data";
 
+type ErStatus = { status: string; waitTime: string };
+
 export function Header() {
-  const [erStatus, setErStatus] = useState({ status: "Open", waitTime: "Under 10 mins" });
+  const [erStatus, setErStatus] = useState<ErStatus>({ status: "Open", waitTime: "Under 10 mins" });
 
   useEffect(() => {
     fetch("/api/analytics", {
@@ -30,9 +32,10 @@ export function Header() {
 
     fetch("/api/er-status")
       .then((res) => res.json())
-      .then((data) => {
-        if (data && data.status) {
-          setErStatus(data);
+      .then((data: unknown) => {
+        const d = data as Partial<ErStatus> | null;
+        if (d && typeof d.status === "string") {
+          setErStatus({ status: d.status, waitTime: typeof d.waitTime === "string" ? d.waitTime : "Under 10 mins" });
         }
       })
       .catch((err) => console.error("Failed to load ER wait time", err));

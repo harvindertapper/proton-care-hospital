@@ -45,13 +45,13 @@ export default function StatusClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ requestId: id, phoneLast4: phone })
       });
-      const json = await res.json();
-      
+      const json = (await res.json()) as { error?: string; data?: StatusData };
+
       if (!res.ok) {
         throw new Error(json.error || "Failed to fetch status");
       }
-      
-      setData(json.data);
+
+      setData(json.data ?? null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "An unexpected error occurred.");
     } finally {

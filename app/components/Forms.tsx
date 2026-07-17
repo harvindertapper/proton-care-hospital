@@ -127,7 +127,7 @@ export function AppointmentForm({
       import("@/app/lib/cryptoStorage").then((m) => {
         m.getAndDecrypt("pch_appointment_idempotency").then((savedKey) => {
           if (savedKey) {
-            setIdempotencyKey(savedKey);
+            setIdempotencyKey(typeof savedKey === "string" ? savedKey : String(savedKey));
           } else {
             const newKey = crypto.randomUUID();
             setIdempotencyKey(newKey);
@@ -147,7 +147,7 @@ export function AppointmentForm({
       });
       m.getAndDecrypt("pch_appointment_dept").then((savedDept) => {
         if (savedDept) {
-          setDepartmentSlug(savedDept);
+          setDepartmentSlug(typeof savedDept === "string" ? savedDept : "");
         }
       });
     });
@@ -193,14 +193,15 @@ export function AppointmentForm({
     if (!departmentSlug || isEmergency || !form.requestedDate) return;
     fetch(`/api/department-slots?departmentSlug=${encodeURIComponent(departmentSlug)}&date=${encodeURIComponent(form.requestedDate)}`)
       .then((response) => response.json())
-      .then((data: SlotsResponse) => {
+      .then((data: unknown) => {
+        const d = data as SlotsResponse;
         if (cancelled) return;
-        if (data.error) {
-          setSlotError(data.error);
+        if (d.error) {
+          setSlotError(d.error);
           setSlots([]);
         } else {
           setSlotError("");
-          setSlots(data.slots || []);
+          setSlots(d.slots || []);
         }
       })
       .catch(() => {
@@ -501,7 +502,7 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
       import("@/app/lib/cryptoStorage").then((m) => {
         m.getAndDecrypt("pch_feedback_idempotency").then((savedKey) => {
           if (savedKey) {
-            setIdempotencyKey(savedKey);
+            setIdempotencyKey(typeof savedKey === "string" ? savedKey : String(savedKey));
           } else {
             const newKey = crypto.randomUUID();
             setIdempotencyKey(newKey);
@@ -619,7 +620,7 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
       import("@/app/lib/cryptoStorage").then((m) => {
         m.getAndDecrypt("pch_contact_idempotency").then((savedKey) => {
           if (savedKey) {
-            setIdempotencyKey(savedKey);
+            setIdempotencyKey(typeof savedKey === "string" ? savedKey : String(savedKey));
           } else {
             const newKey = crypto.randomUUID();
             setIdempotencyKey(newKey);

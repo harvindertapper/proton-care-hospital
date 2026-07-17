@@ -198,7 +198,8 @@ const tableStatements = [
     id TEXT PRIMARY KEY,
     payload_hash TEXT NOT NULL,
     response_body TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS admin_email_otps (
     id TEXT PRIMARY KEY,
@@ -254,6 +255,8 @@ const adminUserMigrationStatements = [
   "CREATE INDEX IF NOT EXISTS idx_analytics_event ON site_analytics(event_type)",
   "CREATE TABLE IF NOT EXISTS admin_webhooks (id TEXT PRIMARY KEY, url TEXT NOT NULL, event_trigger TEXT NOT NULL, secret TEXT, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
   "CREATE TABLE IF NOT EXISTS site_configs (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+  // Safe migration for existing D1 databases that predate the expires_at column.
+  "ALTER TABLE idempotent_requests ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0",
 ];
 
 export async function getD1() {
@@ -332,7 +335,7 @@ export async function verifyPasswordWithUpgrade(password: string, storedHash: st
 }
 
 async function seedAdminUsers(db: D1Database) {
-  await applySuperAdminBootstrap(superAdminBootstrapStore(db), env);
+  await applySuperAdminBootstrap(superAdminBootstrapStore(db), env as unknown as Record<string, string | undefined>);
 }
 
 /**
@@ -348,7 +351,7 @@ async function seedAdminUsers(db: D1Database) {
  */
 export async function ensureSuperAdminBootstrap(): Promise<SuperAdminBootstrapResult> {
   const db = await getD1();
-  return applySuperAdminBootstrap(superAdminBootstrapStore(db), env);
+  return applySuperAdminBootstrap(superAdminBootstrapStore(db), env as unknown as Record<string, string | undefined>);
 }
 
 function superAdminBootstrapStore(db: D1Database) {
@@ -488,9 +491,11 @@ export async function run(statement: string, ...binds: unknown[]) {
 
 export async function checkIdempotency(key: string, body: Record<string, unknown>) {
   const hash = await sha256(JSON.stringify(body));
+  const now = Math.floor(Date.now() / 1000);
   const rows = await query<{ payload_hash: string; response_body: string }>(
-    "SELECT payload_hash, response_body FROM idempotent_requests WHERE id = ? LIMIT 1",
+    "SELECT payload_hash, response_body FROM idempotent_requests WHERE id = ? AND expires_at > ? LIMIT 1",
     key,
+    now,
   );
   const row = rows.results?.[0];
   if (!row) return null;
@@ -500,17 +505,35 @@ export async function checkIdempotency(key: string, body: Record<string, unknown
   return JSON.parse(row.response_body) as Record<string, unknown>;
 }
 
+const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
+
 export async function saveIdempotency(key: string, body: Record<string, unknown>, response: Record<string, unknown>) {
   const hash = await sha256(JSON.stringify(body));
   const resStr = JSON.stringify(response);
   const now = Math.floor(Date.now() / 1000);
+  const expiresAt = now + IDEMPOTENCY_TTL_SECONDS;
   await run(
-    "INSERT OR REPLACE INTO idempotent_requests (id, payload_hash, response_body, created_at) VALUES (?, ?, ?, ?)",
+    "INSERT OR REPLACE INTO idempotent_requests (id, payload_hash, response_body, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
     key,
     hash,
     resStr,
     now,
+    expiresAt,
   );
+}
+
+let lastIdempotencyCleanup = 0;
+
+export async function cleanupExpiredIdempotency() {
+  // Run at most once every 10 minutes per isolate to bound D1 write volume.
+  const now = Math.floor(Date.now() / 1000);
+  if (now - lastIdempotencyCleanup < 10 * 60) return;
+  lastIdempotencyCleanup = now;
+  try {
+    await run("DELETE FROM idempotent_requests WHERE expires_at <= ?", now);
+  } catch (err) {
+    console.error("Failed to clean up expired idempotency records:", err);
+  }
 }
 
 export function getR2() {

@@ -13,7 +13,7 @@ export async function sendEmail({ to, subject, html }: SendEmailParams) {
   try {
     // Dynamic import to avoid Node link-time crash during testing
     const { env } = await import("cloudflare:workers");
-    apiKey = (env as Record<string, string | undefined>).RESEND_API_KEY;
+    apiKey = (env as unknown as Record<string, string | undefined>).RESEND_API_KEY;
   } catch {
     // Fallback for local testing environments if process.env is populated
     apiKey = typeof process !== "undefined" ? process.env?.RESEND_API_KEY : undefined;
@@ -36,7 +36,8 @@ export async function sendEmail({ to, subject, html }: SendEmailParams) {
         // TODO: After verifying protonecarehospital.com DNS in Resend, switch the
         // sender to "Protone Care Hospital <noreply@protonecarehospital.com>" so
         // production emails are not sent from the unverified Resend sandbox domain.
-        // Until then, onboarding@resend.dev is used and some providers may reject it.
+        // Until DNS is verified, onboarding@resend.dev is used; some providers may
+        // reject it, but a hard failure here would block password-reset/OTP emails.
         from: "Protone Care Hospital <onboarding@resend.dev>",
         to: [to],
         subject,

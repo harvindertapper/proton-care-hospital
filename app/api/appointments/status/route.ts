@@ -9,8 +9,9 @@ export async function POST(request: Request) {
       return json({ error: "Too many status requests. Please try again later." }, { status: 429 });
     }
 
-    const body = await request.json().catch(() => ({}));
-    const { requestId, phoneLast4 } = body;
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const requestId = typeof body.requestId === "string" ? body.requestId : "";
+    const phoneLast4 = typeof body.phoneLast4 === "string" ? body.phoneLast4 : "";
 
     if (!requestId || typeof requestId !== "string" || !requestId.startsWith("PCH-")) {
       return json({ error: "Invalid Request ID format. Use format: PCH-YYYY-XXXX" }, { status: 400 });

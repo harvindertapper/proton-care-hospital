@@ -29,6 +29,7 @@ async function loadData(session: { email: string; role: string }) {
     audits,
     sessionsData,
     staffData,
+    closuresData,
   ] = await Promise.all([
     rows("SELECT * FROM appointments ORDER BY created_at DESC LIMIT 100"),
     rows("SELECT * FROM department_timings ORDER BY department_name"),
@@ -51,6 +52,7 @@ async function loadData(session: { email: string; role: string }) {
            FROM admin_users WHERE role = 'STAFF' ORDER BY name`,
         )
       : Promise.resolve([]),
+    rows("SELECT * FROM department_closures ORDER BY closed_date DESC LIMIT 200"),
   ]);
   return {
     appointments,
@@ -66,6 +68,7 @@ async function loadData(session: { email: string; role: string }) {
     audits,
     sessions: sessionsData,
     staff: staffData,
+    closures: closuresData,
   };
 }
 
@@ -79,7 +82,10 @@ export default async function AdminPage() {
     const sensitiveSlugs = new Set(["psychiatry", "obstetrics-and-gynecology", "emergency-triage", "emergency-medicine"]);
     data.appointments = data.appointments.map((app) => ({
       ...app,
-      concern: sensitiveSlugs.has(app.department_slug) ? "[REDACTED - SENSITIVE DEPT]" : app.concern,
+      concern:
+        typeof app.department_slug === "string" && sensitiveSlugs.has(app.department_slug)
+          ? "[REDACTED - SENSITIVE DEPT]"
+          : app.concern,
     }));
   }
   return <AdminConsole session={session} data={data} departments={departments} staticDoctors={doctors} />;

@@ -64,7 +64,7 @@ export default function GalleryClient() {
     async function fetchGallery() {
       try {
         const res = await fetch("/api/gallery");
-        const data = await res.json();
+        const data = (await res.json()) as { success?: boolean; assets?: ApiGalleryAsset[] };
         if (data.success && data.assets && data.assets.length > 0) {
           const formatted = data.assets.map((asset: ApiGalleryAsset) => ({
             url: `/api/media/${asset.r2_key}`,

@@ -17,35 +17,29 @@ const SYMPTOM_TREE: Record<string, SymptomNode> = {
   start: {
     question: "Welcome to Protone Triage. What main symptom describes your condition best?",
     options: [
-      { text: "Chest Pain / Heart Concerns", next: "cardiac" },
+      // TODO: Add Cardiology and Dermatology departments to data.ts, then
+      // re-enable these triage branches. They are hidden until the matching
+      // department slugs exist so "Book Appointment" never mis-routes.
       { text: "Bone, Joint, or Muscle Pain", next: "ortho" },
       { text: "For a Child (under 18)", next: "child" },
       { text: "Pregnancy or Women's Health", next: "women" },
-      { text: "Skin Rashes / Acne / Hair Loss", next: "skin" },
       { text: "Anxiety, Stress, or Mood Changes", next: "mental" },
       { text: "Fever, Cold, Cough, General Checkup", next: "general" },
       { text: "Sudden Severe Injury or Trauma", next: "trauma" }
     ]
   },
-  cardiac: {
-    question: "Is the chest pain accompanied by pain in the left arm, sweating, or severe shortness of breath?",
-    options: [
-      { text: "Yes, this is severe/sudden", emergency: true },
-      { text: "No, it's a mild or chronic concern", dept: { name: "Cardiology", slug: "cardiology" } }
-    ]
-  },
   ortho: {
     question: "Did this pain occur after a recent fall, accident, or sudden twist?",
     options: [
-      { text: "Yes, there is swelling or possible fracture", dept: { name: "Orthopedics", slug: "orthopedics" } },
-      { text: "No, it is a chronic joint ache or stiffness", dept: { name: "Orthopedics", slug: "orthopedics" } }
+      { text: "Yes, there is swelling or possible fracture", dept: { name: "Orthopedics", slug: "orthopaedic-surgery" } },
+      { text: "No, it is a chronic joint ache or stiffness", dept: { name: "Orthopedics", slug: "orthopaedic-surgery" } }
     ]
   },
   child: {
     question: "What is the primary concern for the child?",
     options: [
-      { text: "Fever, cold, or general pediatrics", dept: { name: "Pediatrics", slug: "pediatrics" } },
-      { text: "Vaccination or growth checkup", dept: { name: "Pediatrics", slug: "pediatrics" } }
+      { text: "Fever, cold, or general pediatrics", dept: { name: "Pediatrics", slug: "paediatrics" } },
+      { text: "Vaccination or growth checkup", dept: { name: "Pediatrics", slug: "paediatrics" } }
     ]
   },
   women: {
@@ -53,13 +47,6 @@ const SYMPTOM_TREE: Record<string, SymptomNode> = {
     options: [
       { text: "Pregnancy checkups or maternity care", dept: { name: "Obstetrics & Gynecology", slug: "obstetrics-and-gynecology" } },
       { text: "General women's health / menstrual issues", dept: { name: "Obstetrics & Gynecology", slug: "obstetrics-and-gynecology" } }
-    ]
-  },
-  skin: {
-    question: "Is the rash spreading rapidly or painful?",
-    options: [
-      { text: "Yes, it is painful / spreading fast", dept: { name: "Dermatology", slug: "dermatology" } },
-      { text: "No, it's a chronic concern or acne issue", dept: { name: "Dermatology", slug: "dermatology" } }
     ]
   },
   mental: {
@@ -80,7 +67,7 @@ const SYMPTOM_TREE: Record<string, SymptomNode> = {
     question: "Is there active heavy bleeding, loss of consciousness, or severe burns?",
     options: [
       { text: "Yes, this is an emergency", emergency: true },
-      { text: "No, minor wound / sprain", dept: { name: "Emergency Triage", slug: "emergency-triage" } }
+      { text: "No, minor wound / sprain", dept: { name: "Emergency Medicine", slug: "emergency-medicine" } }
     ]
   }
 };

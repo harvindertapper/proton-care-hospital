@@ -39,6 +39,7 @@ type AdminData = {
   audits: Record<string, string | number | null>[];
   sessions: Record<string, string | number | null>[];
   staff: Record<string, string | number | null>[];
+  closures: Record<string, string | number | null>[];
 };
 
 const tabs = [
@@ -298,9 +299,10 @@ export function AdminErStatusForm({
   useEffect(() => {
     fetch("/api/er-status")
       .then((res) => res.json())
-      .then((data) => {
-        if (data && data.status) {
-          setForm({ status: data.status, waitTime: data.waitTime || "" });
+      .then((data: unknown) => {
+        const d = data as { status?: string; waitTime?: string } | null;
+        if (d && typeof d.status === "string") {
+          setForm({ status: d.status, waitTime: d.waitTime || "" });
         }
       })
       .catch((err) => console.error("Failed to load initial ER status:", err));
@@ -650,7 +652,7 @@ export function AdminConsole({
     if (!silent) setBusy(true);
     try {
       const response = await fetch("/api/admin/data?action=REFRESH");
-      const resJson = await response.json();
+      const resJson = (await response.json()) as { success?: boolean; data?: AdminData };
       if (resJson.success && resJson.data) {
         setAdminData(resJson.data);
       }
@@ -1651,7 +1653,7 @@ export function AdminConsole({
                   headers: { "content-type": "application/json", "x-csrf-token": session.csrf },
                   body: JSON.stringify(replyForm),
                 });
-                const data = await response.json();
+                const data = (await response.json()) as { error?: string };
                 if (!response.ok) throw new Error(data.error || "Failed to send reply email.");
                 setNotice("Reply email sent successfully and message status updated.");
                 setShowReplyModal(false);
