@@ -604,7 +604,7 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
       </label>
       <label className="checkbox-field" style={{ marginTop: "10px" }}>
         <input type="checkbox" checked={publicConsent} onChange={(event) => setPublicConsent(event.target.checked)} />
-        <span>I separately consent to the publication of this testimonial on the hospital’s website and social-media channels: [with my name / anonymously]. I understand that I may withdraw publication consent by contacting protonecare@gmail.com.</span>
+        <span>I separately consent to the publication of this feedback on the hospital’s website or social-media pages, either with my name or anonymously as selected by me. I understand that I may withdraw this consent.</span>
       </label>
       <button className="button primary full" type="submit" disabled={busy || !form.consent || !turnstileToken}>
         <Send size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Submit Feedback"}

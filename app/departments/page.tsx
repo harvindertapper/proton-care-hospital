@@ -31,7 +31,13 @@ export default function DepartmentsPage() {
                 <span className="hindi-label">{department.hindi}</span>
                 <h3>{department.name}</h3>
                 <p>{department.summary}</p>
-                <p><strong>{department.timing ? department.timing.label : "Call for OPD availability"}</strong></p>
+                <p>
+                  {department.slug === "emergency-medicine" ? (
+                    <strong style={{ color: "#e11d48" }}>24x7 Emergency Care (No OPD)</strong>
+                  ) : (
+                    <strong>{department.timing ? department.timing.label : "Call for OPD availability"}</strong>
+                  )}
+                </p>
                 <ArrowLink href={`/departments/${department.slug}`}>Open department</ArrowLink>
               </article>
             ))}

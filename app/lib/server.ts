@@ -134,6 +134,8 @@ const tableStatements = [
     is_visible INTEGER NOT NULL DEFAULT 0,
     source_note TEXT,
     is_deleted INTEGER NOT NULL DEFAULT 0,
+    author TEXT,
+    reviewer TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS career_jobs (
@@ -266,6 +268,9 @@ const adminUserMigrationStatements = [
   "ALTER TABLE blog_posts ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE career_jobs ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE patient_videos ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0",
+  // Blog metadata migrations
+  "ALTER TABLE blog_posts ADD COLUMN author TEXT",
+  "ALTER TABLE blog_posts ADD COLUMN reviewer TEXT",
 ];
 
 export async function getD1() {

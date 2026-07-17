@@ -19,6 +19,18 @@ const faqs = [
       {
         q: "Do I need a referral to see a specialist?",
         a: "No, a referral is not mandatory. You can directly book an appointment with any of our specialists. However, if you are claiming insurance, your provider might require one."
+      },
+      {
+        q: "Is online payment required?",
+        a: "No. Protone Care Hospital does not collect any online payments during slot requests. All payments are done directly at the counter on arrival."
+      },
+      {
+        q: "Can I choose a specific doctor?",
+        a: "To ensure direct clinical triage, appointment requests are made by department. Our team will coordinate your case details and assign the correct clinical specialist upon review."
+      },
+      {
+        q: "What documents are required for check-in?",
+        a: "Please bring a valid photo ID (like Aadhaar card) and any relevant past medical history or prescriptions. If claiming cashless insurance, please bring your TPA card."
       }
     ]
   },

@@ -63,7 +63,7 @@ export default function TermsDisclaimerPage() {
             <section style={{ marginBottom: 24 }}>
               <h2 className="text-xl font-bold text-slate-800 mb-2">6. Permitted Website Use & Intellectual Property</h2>
               <p>
-                You may access this website solely for personal, non-commercial purposes to learn about our services and request clinical consultations. All content, logo, graphics, design, text, and structure are the intellectual property of Protone Care Hospital Private Limited and protected by copyright and trademark laws.
+                You may access this website solely for personal, non-commercial purposes to learn about our services and request clinical consultations. All content, logo, graphics, design, text, and structure are the intellectual property of Protone Care Hospital Private Limited and protected by copyright and trademark laws, except third-party names, logos and trademarks, which belong to their respective owners.
               </p>
             </section>
 
@@ -94,8 +94,8 @@ export default function TermsDisclaimerPage() {
                 In compliance with the Information Technology Act, 2000 and Digital Personal Data Protection (DPDP) standards, the Grievance Officer details are:
               </p>
               <ul className="mt-2 space-y-1 text-xs text-slate-700">
-                <li><strong>Name:</strong> Mr. Harvinder Singh</li>
-                <li><strong>Designation:</strong> Grievance Officer, Protone Care Hospital</li>
+                <li><strong>Name:</strong> Protone Care Hospital Administration</li>
+                <li><strong>Designation:</strong> Grievance Officer</li>
                 <li><strong>Address:</strong> 1/23 Laxmi Garden, Sector 11, Gurugram, Haryana 122001</li>
                 <li><strong>Email:</strong> protonecare@gmail.com (Mark subject: "Grievance Redressal")</li>
                 <li><strong>Response Timeframe:</strong> Grievances will be acknowledged within 36 hours and resolved within 30 days.</li>

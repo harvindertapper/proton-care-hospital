@@ -86,6 +86,16 @@ export default async function DoctorPage({ params }: Props) {
                       <span>{doctor.qualification}</span>
                     </div>
                   )}
+                  {doctor.consultantType && (
+                    <div style={{ fontSize: 13, color: "var(--navy)", fontWeight: 550 }}>
+                      📋 {doctor.consultantType}
+                    </div>
+                  )}
+                  {doctor.regNo && (
+                    <div style={{ fontSize: 12, color: "var(--muted)", fontStyle: "italic" }}>
+                      Medical Council Reg No: {doctor.regNo}
+                    </div>
+                  )}
                 </div>
                 
                 <div style={{ marginTop: 24, padding: "16px", background: "var(--soft)", borderRadius: 8, border: "1px solid var(--line)" }}>

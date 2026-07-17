@@ -54,12 +54,12 @@ export default function PrivacyPolicyPage() {
                 We do not sell or lease personal data. To provide this website, we use the following third-party processors:
               </p>
               <ul className="list-disc pl-5 mt-2 space-y-1">
-                <li><strong>Hosting Infrastructure:</strong> Cloudflare (including Pages, Workers, D1 Database, and KV Storage) for secure server hosting and performance delivery within India region.</li>
+                <li><strong>Hosting Infrastructure:</strong> Cloudflare (including Pages, Workers, D1 Database, and KV Storage) for secure server hosting and performance delivery.</li>
                 <li><strong>Communication & OTP/SMS:</strong> Resend (email communications) and SMS gateway providers for OTP validation.</li>
                 <li><strong>Analytics:</strong> Self-hosted first-party analytics (strictly within the application database; no tracking cookies are shared with third-party advertising networks).</li>
               </ul>
               <p className="mt-2">
-                No personal or sensitive personal data is transferred cross-border. All operations are localized within our hosting infrastructure.
+                Personal data may be processed by authorised technology service providers in India or other jurisdictions, subject to contractual safeguards and applicable Indian law. We do not sell personal data.
               </p>
             </section>
 
@@ -105,8 +105,8 @@ export default function PrivacyPolicyPage() {
                 For any complaints or concerns regarding data privacy, please contact our designated Grievance Officer:
               </p>
               <ul className="mt-2 space-y-1 text-xs text-slate-700">
-                <li><strong>Name:</strong> Mr. Harvinder Singh</li>
-                <li><strong>Designation:</strong> Grievance Officer, Protone Care Hospital</li>
+                <li><strong>Name:</strong> Protone Care Hospital Administration</li>
+                <li><strong>Designation:</strong> Grievance Officer</li>
                 <li><strong>Address:</strong> 1/23 Laxmi Garden, Sector 11, Gurugram, Haryana 122001</li>
                 <li><strong>Email:</strong> protonecare@gmail.com</li>
                 <li><strong>Resolution Time:</strong> Acknowledged within 36 hours and resolved within 30 days.</li>

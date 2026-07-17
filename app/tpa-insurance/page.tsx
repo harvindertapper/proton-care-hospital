@@ -27,15 +27,11 @@ export default function TpaInsurancePage() {
       <section className="section">
         <div className="container">
           <SectionHeader
-            eyebrow={`${tpaPanels.length} Active Panels (Last updated: July 2026)`}
+            eyebrow={`${tpaPanels.length} listed insurance/TPA panels — last verified on July 2026. Empanelment and cashless availability are subject to confirmation.`}
             title="Search TPA / Insurance Support"
             body="Cashless treatment assistance is available for the insurers and TPAs currently listed on this page. Cashless approval is subject to policy terms, exclusions, medical necessity, documentation and insurer/TPA authorisation. Processing times are estimates and cannot be guaranteed."
           />
           <TpaDirectory panels={tpaPanels} />
-          <div className="safety-note" style={{ marginTop: 18 }}>
-            <FileCheck2 size={20} aria-hidden="true" />
-            <p>Cashless treatment assistance is available for the insurers and TPAs currently listed on this page. Cashless approval is subject to policy terms, exclusions, medical necessity, documentation and insurer/TPA authorisation.</p>
-          </div>
         </div>
       </section>
     </PageShell>
