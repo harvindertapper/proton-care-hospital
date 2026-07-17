@@ -21,7 +21,7 @@ import { formatWhatsApp, hospital, publicNav } from "@/app/lib/data";
 type ErStatus = { status: string; waitTime: string };
 
 export function Header() {
-  const [erStatus, setErStatus] = useState<ErStatus>({ status: "Open", waitTime: "Under 10 mins" });
+  const [_erStatus, setErStatus] = useState<ErStatus>({ status: "Open", waitTime: "Under 10 mins" });
 
   useEffect(() => {
     fetch("/api/analytics", {

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { hospital, SITE_URL } from "@/app/lib/data";
+import { SITE_URL } from "@/app/lib/data";
 import { PageHero, PageShell, SectionHeader } from "@/app/components/SiteShell";
 
 export const metadata: Metadata = {
@@ -25,7 +25,7 @@ export default function TermsDisclaimerPage() {
             <section style={{ marginBottom: 24 }}>
               <h2 className="text-xl font-bold text-slate-800 mb-2">1. Legal Entity & Website Operator</h2>
               <p>
-                This website is operated by <strong>Protone Care Hospital Private Limited</strong>, located at 1/23 Laxmi Garden, Sector 11, Gurugram (Gurgaon), Haryana 122001. All references to "hospital", "we", "us", or "our" refer to this legal entity.
+                This website is operated by <strong>Protone Care Hospital Private Limited</strong>, located at 1/23 Laxmi Garden, Sector 11, Gurugram (Gurgaon), Haryana 122001. All references to &quot;hospital&quot;, &quot;we&quot;, &quot;us&quot;, or &quot;our&quot; refer to this legal entity.
               </p>
             </section>
 
@@ -70,7 +70,7 @@ export default function TermsDisclaimerPage() {
             <section style={{ marginBottom: 24 }}>
               <h2 className="text-xl font-bold text-slate-800 mb-2">7. Third-Party Links & WhatsApp Disclaimer</h2>
               <p>
-                This website may contain links to third-party sites or external tools (such as WhatsApp). We do not control or endorse the content or privacy policies of third-party platforms. Any data sent over WhatsApp is subject to WhatsApp's own end-to-end encryption protocols and terms of service.
+                This website may contain links to third-party sites or external tools (such as WhatsApp). We do not control or endorse the content or privacy policies of third-party platforms. Any data sent over WhatsApp is subject to WhatsApp&apos;s own end-to-end encryption protocols and terms of service.
               </p>
             </section>
 
@@ -97,7 +97,7 @@ export default function TermsDisclaimerPage() {
                 <li><strong>Name:</strong> Sunil Sharma</li>
                 <li><strong>Designation:</strong> Grievance Officer</li>
                 <li><strong>Address:</strong> 1/23 Laxmi Garden, Sector 11, Gurugram, Haryana 122001</li>
-                <li><strong>Email:</strong> protonecare@gmail.com (Mark subject: "Grievance Redressal")</li>
+                <li><strong>Email:</strong> protonecare@gmail.com (Mark subject: &quot;Grievance Redressal&quot;)</li>
                 <li><strong>Response Timeframe:</strong> Grievances will be acknowledged within 36 hours and resolved within 30 days.</li>
               </ul>
             </section>

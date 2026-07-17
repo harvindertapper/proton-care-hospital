@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { departments, hospital, SITE_URL } from "@/app/lib/data";
+import { departments, SITE_URL } from "@/app/lib/data";
 import { ArrowLink, PageHero, PageShell, PrimaryActions, SectionHeader, TimingNote } from "@/app/components/SiteShell";
 
 export const metadata: Metadata = {

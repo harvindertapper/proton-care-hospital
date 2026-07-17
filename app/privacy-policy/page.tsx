@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { hospital, SITE_URL } from "@/app/lib/data";
+import { SITE_URL } from "@/app/lib/data";
 import { PageHero, PageShell, SectionHeader } from "@/app/components/SiteShell";
 
 export const metadata: Metadata = {
@@ -25,7 +25,7 @@ export default function PrivacyPolicyPage() {
             <section style={{ marginBottom: 24 }}>
               <h2 className="text-xl font-bold text-slate-800 mb-2">1. Legal Entity & Scope</h2>
               <p>
-                This Privacy Policy describes how <strong>Protone Care Hospital Private Limited</strong> ("we", "us", or "our"), having its registered office at 1/23 Laxmi Garden, Sector 11, Gurugram (Gurgaon), Haryana 122001, collects, handles, stores, and protects personal information through its public website (<a href={SITE_URL}>{SITE_URL}</a>). 
+                This Privacy Policy describes how <strong>Protone Care Hospital Private Limited</strong> (&quot;we&quot;, &quot;us&quot;, or &quot;our&quot;), having its registered office at 1/23 Laxmi Garden, Sector 11, Gurugram (Gurgaon), Haryana 122001, collects, handles, stores, and protects personal information through its public website (<a href={SITE_URL}>{SITE_URL}</a>). 
               </p>
               <p className="mt-2 text-amber-800 bg-amber-50 p-3 rounded-lg border border-amber-100">
                 <strong>Important Patient Notice:</strong> Please do not submit prescriptions, diagnostic reports or detailed medical records through public website forms. Information voluntarily entered in message or feedback fields may include health-related information and will be handled only for the stated purpose.
@@ -61,7 +61,7 @@ export default function PrivacyPolicyPage() {
             <section style={{ marginBottom: 24 }}>
               <h2 className="text-xl font-bold text-slate-800 mb-2">4. Minor Patients</h2>
               <p>
-                We do not knowingly collect personal data from individuals under 18 years of age without parental or guardian consent. If a parent or legal guardian submits an appointment request on behalf of a minor, they consent to the processing of the minor's data for scheduling purposes.
+                We do not knowingly collect personal data from individuals under 18 years of age without parental or guardian consent. If a parent or legal guardian submits an appointment request on behalf of a minor, they consent to the processing of the minor&apos;s data for scheduling purposes.
               </p>
             </section>
 
@@ -83,7 +83,7 @@ export default function PrivacyPolicyPage() {
                 You have the right to access, correct, or request the deletion of your personal data held by us. You may also withdraw your consent for processing at any time. To exercise these rights:
               </p>
               <p className="mt-2">
-                Send an email to our Grievance Redressal Officer at <strong>protonecare@gmail.com</strong> with the subject line "Data Principal Rights". Upon validation of your identity, we will process your request within 30 days.
+                Send an email to our Grievance Redressal Officer at <strong>protonecare@gmail.com</strong> with the subject line &quot;Data Principal Rights&quot;. Upon validation of your identity, we will process your request within 30 days.
               </p>
             </section>
 

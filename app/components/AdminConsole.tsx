@@ -1948,7 +1948,7 @@ function ImageCropUploader({
           />
 
           {/* Controls */}
-          <div style={{ width: "105%", spaceY: 8 }}>
+          <div style={{ width: "105%", display: "flex", flexDirection: "column", gap: 8 }}>
             <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "#475569" }}>
               Zoom: {zoom.toFixed(1)}x
               <input

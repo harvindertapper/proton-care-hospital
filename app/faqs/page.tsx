@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { SITE_URL } from "@/app/lib/data";
-import { PageHero, PageShell, SectionHeader } from "@/app/components/SiteShell";
+import { PageHero, PageShell } from "@/app/components/SiteShell";
 
 export const metadata: Metadata = {
   title: "Frequently Asked Questions",
@@ -89,7 +89,7 @@ export default function FaqsPage() {
       />
       <section className="section">
         <div className="container" style={{ maxWidth: 840 }}>
-          {faqs.map((category, idx) => (
+          {faqs.map((category) => (
             <div key={category.category} style={{ marginBottom: 48 }}>
               <h2 style={{ fontSize: 28, color: "var(--navy)", marginBottom: 24, paddingBottom: 12, borderBottom: "1px solid var(--line)" }}>
                 {category.category}

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { BriefcaseBusiness, Mail } from "lucide-react";
+import { BriefcaseBusiness } from "lucide-react";
 import { hospital, SITE_URL } from "@/app/lib/data";
 import { getPublishedJobs } from "@/app/lib/public-data";
 import { PageHero, PageShell, SectionHeader } from "@/app/components/SiteShell";

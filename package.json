@@ -7,10 +7,12 @@
   },
   "scripts": {
     "dev": "vinext dev",
+    "typecheck": "tsc --noEmit",
+    "prebuild": "npm run typecheck && npm run lint",
     "build": "npm run deploy:check-env && vinext build",
     "start": "vinext start",
     "test": "npm run build && node --experimental-strip-types --test tests/*.test.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern worker-configuration.d.ts",
+    "lint": "eslint . --max-warnings=0 --ignore-pattern dist --ignore-pattern .next --ignore-pattern worker-configuration.d.ts",
     "cf:whoami": "wrangler whoami",
     "cf:types": "wrangler types",
     "deploy:check-env": "node scripts/validate-cloudflare-deploy-env.mjs",

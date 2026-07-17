@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { type Metadata } from "next";
 import { SITE_URL } from "@/app/lib/data";
-import { getBlogBySlug, getPublishedBlogs } from "@/app/lib/public-data";
+import { getBlogBySlug } from "@/app/lib/public-data";
 import { PageShell } from "@/app/components/SiteShell";
 import Link from "next/link";
 import { CalendarDays, ArrowLeft } from "lucide-react";

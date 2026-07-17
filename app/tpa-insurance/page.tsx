@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { FileCheck2, MessageCircle, Phone } from "lucide-react";
+import { MessageCircle, Phone } from "lucide-react";
 import { hospital, SITE_URL, tpaPanels } from "@/app/lib/data";
 import { TpaDirectory } from "@/app/components/Directories";
 import { PageHero, PageShell, SectionHeader, Breadcrumbs } from "@/app/components/SiteShell";

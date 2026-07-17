@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { query, checkRateLimit, getClientIp, json } from "@/app/lib/server";
 
 export async function POST(request: Request) {
@@ -37,7 +36,7 @@ export async function POST(request: Request) {
     }
 
     // Exclude the raw phone number from the returned data
-    const { phone, ...publicData } = appointment;
+    const { phone: _phone, ...publicData } = appointment;
     return json({ data: publicData });
   } catch (err) {
     console.error("Status check error:", err);
