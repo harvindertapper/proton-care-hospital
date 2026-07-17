@@ -43,9 +43,6 @@ export function Header() {
 
   return (
     <header className="site-header">
-      <div style={{ background: "#0f172a", color: "#f8fafc", padding: "6px 20px", textAlign: "center", fontSize: "11px", fontWeight: "500", borderBottom: "1px solid #1e293b", lineHeight: "1.4" }}>
-        🚨 <strong>Emergency Department: Open 24/7.</strong> Patients are assessed according to clinical urgency. Waiting times may vary and cannot be guaranteed.
-      </div>
       <div className="topbar">
         <a href={hospital.phoneHref} className="topbar-link emergency">
           <Phone size={16} aria-hidden="true" /> {hospital.emergency}: {hospital.phone}
