@@ -62,8 +62,10 @@ export async function POST(request: Request) {
     return json({ error: "Too many OTP requests. Please wait and try again." }, { status: 429 });
   }
 
-  // Generate 6-digit OTP
-  const otp = String(Math.floor(100000 + Math.random() * 900000));
+  // Generate 6-digit OTP using a cryptographically secure source.
+  const otpArray = new Uint32Array(1);
+  crypto.getRandomValues(otpArray);
+  const otp = String(otpArray[0] % 1_000_000).padStart(6, "0");
   const otpHash = await hashOtp(otp);
   const expiresAt = Math.floor(Date.now() / 1000) + 10 * 60; // 10 mins
 

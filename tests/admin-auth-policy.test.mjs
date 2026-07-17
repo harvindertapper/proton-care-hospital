@@ -257,7 +257,25 @@ test("bootstrap re-creates the super admin after external row deletion (warm-iso
   assert.equal((await verifyAdminPassword("first bootstrap passphrase", store.accounts[0].passwordHash)).valid, true);
 });
 
-test("bootstrap recovers a deactivated super admin with the current secret", async () => {
+test("bootstrap recovers a deactivated super admin only when recovery is explicitly enabled", async () => {
+  const store = bootstrapStore([
+    { id: "owner", email: "owner@example.com", role: "SUPER_ADMIN", isActive: false, passwordHash: "forgotten-hash" },
+  ]);
+  const environment = {
+    ADMIN_SUPER_EMAIL: "owner@example.com",
+    ADMIN_SUPER_PASSWORD: "fresh recovery passphrase",
+    ENABLE_SUPER_ADMIN_RECOVERY: "true",
+  };
+  const result = await applySuperAdminBootstrap(store, environment);
+  assert.deepEqual(result, { ok: true, status: "recovered" });
+  assert.equal(store.accounts[0].isActive, true);
+  assert.equal((await verifyAdminPassword("fresh recovery passphrase", store.accounts[0].passwordHash)).valid, true);
+  assert.deepEqual(store.revokedEmails, ["owner@example.com"]);
+  assert.equal(store.audits.at(-1).action, "SUPER_ADMIN_RECOVERED");
+  assert.match(store.audits.at(-1).details, /HIGH-SEVERITY/);
+});
+
+test("bootstrap refuses super admin recovery when the recovery flag is absent", async () => {
   const store = bootstrapStore([
     { id: "owner", email: "owner@example.com", role: "SUPER_ADMIN", isActive: false, passwordHash: "forgotten-hash" },
   ]);
@@ -265,11 +283,9 @@ test("bootstrap recovers a deactivated super admin with the current secret", asy
     ADMIN_SUPER_EMAIL: "owner@example.com",
     ADMIN_SUPER_PASSWORD: "fresh recovery passphrase",
   });
-  assert.deepEqual(result, { ok: true, status: "recovered" });
-  assert.equal(store.accounts[0].isActive, true);
-  assert.equal((await verifyAdminPassword("fresh recovery passphrase", store.accounts[0].passwordHash)).valid, true);
-  assert.deepEqual(store.revokedEmails, ["owner@example.com"]);
-  assert.equal(store.audits.at(-1).action, "SUPER_ADMIN_RECOVERED");
+  assert.deepEqual(result, { ok: false, status: "conflict" });
+  assert.equal(store.accounts[0].isActive, false);
+  assert.equal(store.accounts[0].passwordHash, "forgotten-hash");
 });
 
 test("recovery is refused while another active super admin exists", async () => {

@@ -249,6 +249,14 @@ export async function applySuperAdminBootstrap(
   }
 
   if (decision.kind === "recover") {
+    // Recovery is a high-privilege, MFA-bypassing operation: it overwrites the
+    // super-admin password using only an env secret. Never auto-fire it on every
+    // login. An operator must explicitly enable a recovery window via
+    // ENABLE_SUPER_ADMIN_RECOVERY=true (set manually, e.g. via `wrangler secret
+    // put` or CI only during a verified incident), otherwise treat it as conflict.
+    if (environment.ENABLE_SUPER_ADMIN_RECOVERY !== "true") {
+      return { ok: false, status: "conflict" };
+    }
     await store.reactivateSuperAdmin({
       id: decision.id,
       passwordHash: await hashAdminPassword(config.password),
@@ -259,7 +267,9 @@ export async function applySuperAdminBootstrap(
       action: "SUPER_ADMIN_RECOVERED",
       entityType: "AdminUser",
       entityId: config.email,
-      details: "Reactivated the deactivated super admin with the environment-configured credential.",
+      details:
+        "HIGH-SEVERITY: Super admin reactivated via env-secret recovery (ENABLE_SUPER_ADMIN_RECOVERY=true). " +
+        "This bypasses OTP/MFA. Confirm this was an authorized incident-recovery window.",
     });
     return { ok: true, status: "recovered" };
   }
