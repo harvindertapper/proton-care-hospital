@@ -1,6 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, type FormEvent } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef, type FormEvent } from "react";
+
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (el: HTMLElement, opts: {
+        sitekey: string;
+        callback: (token: string) => void;
+        "expired-callback"?: () => void;
+        "error-callback"?: () => void;
+      }) => string;
+      remove: (id: string) => void;
+      reset: (id?: string) => void;
+    };
+  }
+}
 import { AlertCircle, CheckCircle2, LockKeyhole, MessageCircle, PhoneCall, Send, Sunrise, Sun } from "lucide-react";
 import type { Department } from "@/app/lib/data";
 import { consentText, emergencyNotice, hospital } from "@/app/lib/data";
@@ -28,26 +43,67 @@ function FieldMessage({ message, success }: { message: string; success?: boolean
   );
 }
 
-function TurnstileBox({ siteKey, onToken }: { siteKey?: string; onToken: (token: string) => void }) {
+function TurnstileBox({
+  siteKey,
+  onToken,
+}: {
+  siteKey?: string;
+  onToken: (token: string) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const widgetIdRef = useRef<string | null>(null);
+
   useEffect(() => {
+    // No key configured (preview/local): auto-pass exactly as before.
     if (!siteKey) {
       onToken("preview-turnstile");
       return;
     }
 
-    const callbackName = "pchTurnstile";
-    (window as unknown as Record<string, (token: string) => void>)[callbackName] = onToken;
-    const existing = document.querySelector<HTMLScriptElement>("script[data-pch-turnstile]");
-    if (!existing) {
+    let cancelled = false;
+
+    // Load the script once, in EXPLICIT render mode.
+    const SCRIPT_SELECTOR = "script[data-pch-turnstile]";
+    if (!document.querySelector(SCRIPT_SELECTOR)) {
       const script = document.createElement("script");
-      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js";
+      script.src =
+        "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
       script.async = true;
       script.defer = true;
       script.dataset.pchTurnstile = "true";
       document.head.appendChild(script);
     }
+
+    // Poll until the API is ready, then explicitly render into OUR container.
+    const start = Date.now();
+    const timer = window.setInterval(() => {
+      if (cancelled) return;
+      if (
+        window.turnstile &&
+        containerRef.current &&
+        widgetIdRef.current === null
+      ) {
+        widgetIdRef.current = window.turnstile.render(containerRef.current, {
+          sitekey: siteKey,
+          callback: (token: string) => onToken(token),
+          "expired-callback": () => onToken(""),
+          "error-callback": () => onToken(""),
+        });
+        window.clearInterval(timer);
+      } else if (Date.now() - start > 15000) {
+        window.clearInterval(timer);
+      }
+    }, 100);
+
     return () => {
-      delete (window as unknown as Record<string, unknown>)[callbackName];
+      cancelled = true;
+      window.clearInterval(timer);
+      if (widgetIdRef.current !== null && window.turnstile) {
+        try {
+          window.turnstile.remove(widgetIdRef.current);
+        } catch {}
+      }
+      widgetIdRef.current = null;
     };
   }, [siteKey, onToken]);
 
@@ -60,7 +116,7 @@ function TurnstileBox({ siteKey, onToken }: { siteKey?: string; onToken: (token:
     );
   }
 
-  return <div className="cf-turnstile" data-sitekey={siteKey} data-callback="pchTurnstile" />;
+  return <div ref={containerRef} className="cf-turnstile-container" />;
 }
 
 async function postJson(url: string, payload: Record<string, unknown>) {
@@ -99,6 +155,10 @@ export function AppointmentForm({
     company: "",
   });
   const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileNonce, setTurnstileNonce] = useState(0);
+  const handleTurnstileToken = useCallback((token: string) => {
+    setTurnstileToken(token);
+  }, []);
   const [message, setMessage] = useState("");
   const [success, setSuccess] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -275,11 +335,15 @@ export function AppointmentForm({
         consent: false,
         company: "",
       });
+      setTurnstileToken("");
+      setTurnstileNonce((n) => n + 1);
       localStorage.removeItem("pch_appointment_draft");
       localStorage.removeItem("pch_appointment_dept");
       localStorage.removeItem("pch_appointment_idempotency");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not submit appointment request.");
+      setTurnstileToken("");
+      setTurnstileNonce((n) => n + 1);
     } finally {
       setBusy(false);
     }
@@ -476,15 +540,20 @@ export function AppointmentForm({
             <span>{form.requestedDate} · {form.requestedTime}</span>
             <p>Hospital staff will call to confirm final availability.</p>
           </div>
-          <TurnstileBox siteKey={turnstileSiteKey} onToken={setTurnstileToken} />
+          <TurnstileBox key={turnstileNonce} siteKey={turnstileSiteKey} onToken={handleTurnstileToken} />
           <label className="checkbox-field">
             <input type="checkbox" checked={form.consent} onChange={(event) => update("consent", event.target.checked)} required />
             <span>{consentText}</span>
           </label>
           <p className="field-hint warning">{emergencyNotice}</p>
-          <button className="button primary full" disabled={busy || !form.consent || !turnstileToken} type="submit">
+          <button className="button primary full" disabled={busy || !form.consent || (turnstileSiteKey ? !turnstileToken : false)} type="submit">
             <Send size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Submit Request"}
           </button>
+          {!busy && (!form.consent || (turnstileSiteKey && !turnstileToken)) ? (
+            <p role="status" aria-live="polite" style={{ fontSize: "12px", color: "#dc2626", marginTop: "6px" }}>
+              {!form.consent ? "Please accept the consent checkbox to continue." : "Please complete the verification above."}
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -503,6 +572,10 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
     company: "",
   });
   const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileNonce, setTurnstileNonce] = useState(0);
+  const handleTurnstileToken = useCallback((token: string) => {
+    setTurnstileToken(token);
+  }, []);
   const [publicConsent, setPublicConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -551,9 +624,9 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
     }
   }, [form, mounted]);
 
-  function update(name: keyof typeof form, value: string | boolean) {
+  const update = useCallback((name: keyof typeof form, value: string | boolean) => {
     setForm((current) => ({ ...current, [name]: value }));
-  }
+  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -571,10 +644,14 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
       setMessage(String(data.message || "Feedback submitted for review."));
       setForm({ patientName: "", phone: "", rating: "5", message: "", consent: false, company: "" });
       setPublicConsent(false);
+      setTurnstileToken("");
+      setTurnstileNonce((n) => n + 1);
       localStorage.removeItem("pch_feedback_draft");
       localStorage.removeItem("pch_feedback_idempotency");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not submit feedback.");
+      setTurnstileToken("");
+      setTurnstileNonce((n) => n + 1);
     } finally {
       setBusy(false);
     }
@@ -607,18 +684,23 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
         Feedback
         <textarea rows={5} value={form.message} onChange={(event) => update("message", event.target.value)} required />
       </label>
-      <TurnstileBox siteKey={turnstileSiteKey} onToken={setTurnstileToken} />
+      <TurnstileBox key={turnstileNonce} siteKey={turnstileSiteKey} onToken={handleTurnstileToken} />
       <label className="checkbox-field">
         <input type="checkbox" checked={form.consent} onChange={(event) => update("consent", event.target.checked)} required />
         <span>I consent to the hospital reviewing this feedback and contacting me regarding my concerns.</span>
       </label>
       <label className="checkbox-field" style={{ marginTop: "10px" }}>
         <input type="checkbox" checked={publicConsent} onChange={(event) => setPublicConsent(event.target.checked)} />
-        <span>I separately consent to the publication of this feedback on the hospital’s website or social-media pages, either with my name or anonymously as selected by me. I understand that I may withdraw this consent.</span>
+        <span>I separately consent to the publication of this feedback on the hospital&apos;s website or social-media pages, either with my name or anonymously as selected by me. I understand that I may withdraw this consent.</span>
       </label>
-      <button className="button primary full" type="submit" disabled={busy || !form.consent || !turnstileToken}>
+      <button className="button primary full" type="submit" disabled={busy || !form.consent || (turnstileSiteKey ? !turnstileToken : false)}>
         <Send size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Submit Feedback"}
       </button>
+      {!busy && (!form.consent || (turnstileSiteKey && !turnstileToken)) ? (
+        <p role="status" aria-live="polite" style={{ fontSize: "12px", color: "#dc2626", marginTop: "6px" }}>
+          {!form.consent ? "Please accept the consent checkbox to continue." : "Please complete the verification above."}
+        </p>
+      ) : null}
       <FieldMessage message={message} success={success} />
     </form>
   );
@@ -627,6 +709,10 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
 export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string }) {
   const [form, setForm] = useState({ name: "", phone: "", email: "", subject: "", message: "", company: "" });
   const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileNonce, setTurnstileNonce] = useState(0);
+  const handleTurnstileToken = useCallback((token: string) => {
+    setTurnstileToken(token);
+  }, []);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [success, setSuccess] = useState(false);
@@ -668,9 +754,9 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
     }
   }, [form, mounted]);
 
-  function update(name: keyof typeof form, value: string) {
+  const update = useCallback((name: keyof typeof form, value: string) => {
     setForm((current) => ({ ...current, [name]: value }));
-  }
+  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -683,10 +769,13 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
       setNotice(String(data.message || "Message received."));
       setForm({ name: "", phone: "", email: "", subject: "", message: "", company: "" });
       setTurnstileToken("");
+      setTurnstileNonce((n) => n + 1);
       localStorage.removeItem("pch_contact_draft");
       localStorage.removeItem("pch_contact_idempotency");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Could not send message.");
+      setTurnstileToken("");
+      setTurnstileNonce((n) => n + 1);
     } finally {
       setBusy(false);
     }
@@ -717,10 +806,15 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
         Message
         <textarea rows={5} value={form.message} onChange={(event) => update("message", event.target.value)} required />
       </label>
-      <TurnstileBox siteKey={turnstileSiteKey} onToken={setTurnstileToken} />
+      <TurnstileBox key={turnstileNonce} siteKey={turnstileSiteKey} onToken={handleTurnstileToken} />
       <button className="button primary full" type="submit" disabled={busy || (turnstileSiteKey ? !turnstileToken : false)}>
         <MessageCircle size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Send Message"}
       </button>
+      {!busy && turnstileSiteKey && !turnstileToken ? (
+        <p role="status" aria-live="polite" style={{ fontSize: "12px", color: "#dc2626", marginTop: "6px" }}>
+          Please complete the verification above.
+        </p>
+      ) : null}
       <p style={{ fontSize: "11px", color: "#64748b", marginTop: "12px", lineHeight: "1.4", textAlign: "center" }}>
         By submitting this form, you consent to Protone Care Hospital using the information provided to respond to your enquiry in accordance with its <a href="/privacy-policy" style={{ textDecoration: "underline", color: "var(--navy)" }}>Privacy Policy</a>. Do not use this form for emergencies or to send detailed medical records.
       </p>
