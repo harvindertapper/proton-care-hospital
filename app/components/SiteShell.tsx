@@ -45,22 +45,14 @@ export function Header() {
     <header className="site-header">
       <div className="topbar">
         <a href={hospital.phoneHref} className="topbar-link emergency">
-          <Phone size={16} aria-hidden="true" /> Emergency Support: {hospital.phone}
+          <Phone size={16} aria-hidden="true" /> {hospital.emergency}: {hospital.phone}
         </a>
-        <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "#ffedd5", fontWeight: 500 }}>
-          <span>|</span>
-          <span>Emergency Department: Open 24/7</span>
-          <span>|</span>
-        </div>
         <a href={hospital.mapsUrl} className="topbar-link">
           <MapPin size={16} aria-hidden="true" /> Sector 11, Gurugram
         </a>
         <a href={hospital.emailHref} className="topbar-link">
           <Mail size={16} aria-hidden="true" /> {hospital.email}
         </a>
-      </div>
-      <div style={{ background: "#fff5f5", borderBottom: "1px solid #fed7d7", padding: "6px 20px", textAlign: "center", fontSize: "11px", color: "#c53030", lineHeight: "1.4" }}>
-        <strong>Emergency Care Notice:</strong> Patients are assessed according to clinical urgency. Waiting times may vary and cannot be guaranteed. For a life-threatening emergency, call <strong>112</strong> or go directly to the nearest emergency department.
       </div>
       <div className="nav-shell">
         <Link href="/" className="brand" aria-label="Protone Care Hospital home">
