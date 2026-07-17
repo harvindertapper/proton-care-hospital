@@ -67,6 +67,8 @@ export default async function DepartmentDetailPage({ params }: { params: Promise
                 <p>
                   {department.slug === "emergency-medicine"
                     ? "24x7 emergency medical assessment and stabilisation. Admission or transfer to critical care is clinically indicated and subject to bed availability."
+                    : department.slug === "clinical-biochemistry" || department.slug === "clinical-pathology"
+                    ? "Contact the laboratory desk for test availability, sample requirements and reporting timelines."
                     : department.timing
                     ? `${department.timing.days} · ${department.timing.label}`
                     : "Please call the hospital desk to confirm current availability."}

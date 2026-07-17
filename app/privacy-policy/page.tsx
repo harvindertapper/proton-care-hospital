@@ -100,7 +100,7 @@ export default function PrivacyPolicyPage() {
                 For any complaints or concerns regarding data privacy, please contact our designated Grievance Officer:
               </p>
               <ul className="mt-2 space-y-1 text-xs text-slate-700">
-                <li><strong>Name:</strong> Protone Care Hospital Administration</li>
+                <li><strong>Name:</strong> Sunil Sharma</li>
                 <li><strong>Designation:</strong> Grievance Officer</li>
                 <li><strong>Address:</strong> 1/23 Laxmi Garden, Sector 11, Gurugram, Haryana 122001</li>
                 <li><strong>Email:</strong> protonecare@gmail.com</li>

@@ -73,7 +73,7 @@ export default async function AppointmentPage({ searchParams }: { searchParams: 
             <div className="p-6 bg-white border border-slate-100 rounded-2xl shadow-sm">
               <ShieldCheck size={24} className="text-teal-600 mb-3" aria-hidden="true" />
               <h3 className="font-semibold text-slate-800 text-lg mb-2">Privacy-First Policy</h3>
-              <p className="text-slate-650 text-sm">We only collect minimal required contact details. No medical records, prescriptions, or payment information are requested online.</p>
+              <p className="text-slate-650 text-sm">We collect the contact and appointment details needed to process your request. Please do not submit prescriptions, diagnostic reports or detailed medical information through this form.</p>
             </div>
             <div className="p-6 bg-white border border-slate-100 rounded-2xl shadow-sm">
               <LockKeyhole size={24} className="text-teal-600 mb-3" aria-hidden="true" />

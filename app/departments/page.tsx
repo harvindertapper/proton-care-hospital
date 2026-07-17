@@ -31,13 +31,21 @@ export default function DepartmentsPage() {
                 <span className="hindi-label">{department.hindi}</span>
                 <h3>{department.name}</h3>
                 <p>{department.summary}</p>
-                <p>
+                <div style={{ fontSize: 13, marginTop: 12, marginBottom: 12 }}>
                   {department.slug === "emergency-medicine" ? (
-                    <strong style={{ color: "#e11d48" }}>24x7 Emergency Care (No OPD)</strong>
+                    <span style={{ color: "#e11d48", fontWeight: 650, display: "block", lineHeight: 1.4 }}>
+                      Emergency services are available 24/7 and do not require an online appointment. Critical-care admission is subject to clinical assessment and bed availability.
+                    </span>
+                  ) : department.slug === "clinical-biochemistry" || department.slug === "clinical-pathology" ? (
+                    <span style={{ color: "var(--navy)", fontWeight: 600, display: "block", lineHeight: 1.4 }}>
+                      Contact the laboratory desk for test availability, sample requirements and reporting timelines.
+                    </span>
                   ) : (
-                    <strong>{department.timing ? department.timing.label : "Call for OPD availability"}</strong>
+                    <strong style={{ display: "block" }}>
+                      {department.timing ? department.timing.label : "Call for OPD availability"}
+                    </strong>
                   )}
-                </p>
+                </div>
                 <ArrowLink href={`/departments/${department.slug}`}>Open department</ArrowLink>
               </article>
             ))}

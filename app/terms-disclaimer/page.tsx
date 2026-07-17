@@ -94,7 +94,7 @@ export default function TermsDisclaimerPage() {
                 In compliance with the Information Technology Act, 2000 and Digital Personal Data Protection (DPDP) standards, the Grievance Officer details are:
               </p>
               <ul className="mt-2 space-y-1 text-xs text-slate-700">
-                <li><strong>Name:</strong> Protone Care Hospital Administration</li>
+                <li><strong>Name:</strong> Sunil Sharma</li>
                 <li><strong>Designation:</strong> Grievance Officer</li>
                 <li><strong>Address:</strong> 1/23 Laxmi Garden, Sector 11, Gurugram, Haryana 122001</li>
                 <li><strong>Email:</strong> protonecare@gmail.com (Mark subject: "Grievance Redressal")</li>

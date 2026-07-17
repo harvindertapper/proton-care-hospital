@@ -67,7 +67,7 @@ export default function AboutPage() {
                   <div>
                     <HeartHandshake className="text-teal-600 mb-3" size={26} aria-hidden="true" />
                     <h3 className="font-semibold text-slate-800 text-lg mb-2">Patient Support</h3>
-                    <p className="text-slate-600 text-sm">Our cashless insurance assistance and support services are designed to ensure direct and hassle-free patient check-ins.</p>
+                    <p className="text-slate-600 text-sm">Our cashless insurance assistance and patient-support services are intended to make the check-in process clearer and more convenient.</p>
                   </div>
                 </article>
               </div>

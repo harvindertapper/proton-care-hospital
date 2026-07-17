@@ -66,12 +66,22 @@ export default async function BlogDetailPage({ params }: Props) {
             {blog.title}
           </h1>
           
-          {blog.created_at && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--muted)", marginBottom: 32 }}>
-              <CalendarDays size={18} />
-              <span>{new Date(blog.created_at).toLocaleDateString("en-IN", { year: 'numeric', month: 'long', day: 'numeric' })}</span>
-            </div>
-          )}
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13, color: "var(--muted)", marginBottom: 32, alignItems: "center" }}>
+            {blog.created_at && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <CalendarDays size={16} />
+                {new Date(blog.created_at).toLocaleDateString("en-IN", { year: 'numeric', month: 'long', day: 'numeric' })}
+              </span>
+            )}
+            {blog.author && (
+              <span>By: <strong>{blog.author}</strong></span>
+            )}
+            {blog.reviewer && (
+              <span style={{ padding: "2px 8px", background: "var(--soft)", border: "1px solid var(--line)", borderRadius: 4 }}>
+                Medically Reviewed by: <strong>{blog.reviewer}</strong>
+              </span>
+            )}
+          </div>
           
           <div style={{ fontSize: 20, lineHeight: 1.6, color: "var(--muted)", fontWeight: 500, marginBottom: 48, paddingBottom: 32, borderBottom: "1px solid var(--line)" }}>
             {blog.excerpt}

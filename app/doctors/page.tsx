@@ -19,7 +19,7 @@ export default async function DoctorsPage() {
       <PageHero
         eyebrow="Doctors"
         title="Our Senior Medical Consultants & Specialists"
-        body="Meet our team of highly qualified clinical experts, surgeons, and physicians dedicated to delivering compassionate care at Gurugram."
+        body="Meet our team of highly qualified clinical experts, surgeons, and physicians dedicated to delivering compassionate care in Gurugram."
       >
         <PrimaryActions />
       </PageHero>
