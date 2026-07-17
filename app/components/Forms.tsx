@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, useCallback, type FormEvent } from "react";
 import { AlertCircle, CheckCircle2, LockKeyhole, MessageCircle, PhoneCall, Send, Sunrise, Sun } from "lucide-react";
 import type { Department } from "@/app/lib/data";
 import { consentText, emergencyNotice, hospital } from "@/app/lib/data";
@@ -122,6 +122,10 @@ export function AppointmentForm({
 
   const [mounted] = useState(() => typeof window !== "undefined");
 
+  const update = useCallback((name: keyof typeof form, value: string | boolean) => {
+    setForm((current) => ({ ...current, [name]: value }));
+  }, []);
+
   useEffect(() => {
     if (mounted) {
       import("@/app/lib/cryptoStorage").then((m) => {
@@ -182,11 +186,19 @@ export function AppointmentForm({
 
   useEffect(() => {
     if (isUntimed) {
-      update("requestedTime", "Manual Allocation");
+      if (form.requestedTime !== "Manual Allocation") {
+        const timer = setTimeout(() => {
+          update("requestedTime", "Manual Allocation");
+        }, 0);
+        return () => clearTimeout(timer);
+      }
     } else if (form.requestedTime === "Manual Allocation") {
-      update("requestedTime", "");
+      const timer = setTimeout(() => {
+        update("requestedTime", "");
+      }, 0);
+      return () => clearTimeout(timer);
     }
-  }, [isUntimed]);
+  }, [isUntimed, form.requestedTime, update]);
 
   useEffect(() => {
     let cancelled = false;
@@ -220,9 +232,7 @@ export function AppointmentForm({
     setDepartmentSlug(slug);
   }
 
-  function update(name: keyof typeof form, value: string | boolean) {
-    setForm((current) => ({ ...current, [name]: value }));
-  }
+
 
 
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Image from "next/image";
 import { ArrowLeft, ArrowRight, X, ZoomIn } from "lucide-react";
 
@@ -84,15 +84,15 @@ export default function GalleryClient() {
     fetchGallery();
   }, []);
 
-  function handlePrev() {
+  const handlePrev = useCallback(() => {
     if (activeIndex === null) return;
     setActiveIndex((prev) => (prev === 0 ? assets.length - 1 : (prev ?? 0) - 1));
-  }
+  }, [activeIndex, assets.length]);
 
-  function handleNext() {
+  const handleNext = useCallback(() => {
     if (activeIndex === null) return;
     setActiveIndex((prev) => (prev === assets.length - 1 ? 0 : (prev ?? 0) + 1));
-  }
+  }, [activeIndex, assets.length]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -107,7 +107,7 @@ export default function GalleryClient() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeIndex, assets.length, triggerEl]);
+  }, [activeIndex, triggerEl, handlePrev, handleNext]);
 
   return (
     <section className="py-12 bg-slate-50 min-h-screen">
