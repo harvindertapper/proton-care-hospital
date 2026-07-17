@@ -304,11 +304,21 @@ export function AppointmentForm({
   return (
     <form className="flow-card appointment-flow" onSubmit={submit}>
       <div className="flow-steps" aria-label="Appointment request steps">
-        {[1, 2, 3].map((item) => (
-          <button type="button" className={step === item ? "active" : ""} key={item} onClick={() => setStep(item)}>
-            {item}
-          </button>
-        ))}
+        {[1, 2, 3].map((item) => {
+          const stepNames = ["Department", "Patient Details", "Confirm"];
+          return (
+            <button
+              type="button"
+              className={step === item ? "active" : ""}
+              key={item}
+              onClick={() => setStep(item)}
+              aria-label={`Step ${item}: ${stepNames[item - 1]}${step === item ? " (current)" : ""}`}
+              aria-current={step === item ? "step" : undefined}
+            >
+              {item}
+            </button>
+          );
+        })}
       </div>
 
       {step === 1 ? (

@@ -39,7 +39,7 @@ export function DoctorDirectory({
       <div className="filter-bar">
         <label className="search-field">
           <Search size={18} aria-hidden="true" />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search doctor, speciality, qualification" />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search doctor, speciality, qualification" aria-label="Search doctors" />
         </label>
         <select value={department} onChange={(event) => setDepartment(event.target.value)} aria-label="Filter doctors by department">
           <option value="all">All departments</option>
@@ -98,7 +98,7 @@ export function TpaDirectory({ panels }: { panels: TpaPanel[] }) {
       <div className="filter-bar single">
         <label className="search-field">
           <Search size={18} aria-hidden="true" />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search insurance / TPA panel" />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search insurance / TPA panel" aria-label="Search TPA panels" />
         </label>
       </div>
 

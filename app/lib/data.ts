@@ -1,9 +1,9 @@
-export const SITE_URL = "https://Protonecarehospital.com";
+export const SITE_URL = "https://protonecarehospital.com";
 
 export const hospital = {
   name: "Protone Care Hospital",
   tagline: "Compassion | Care | Cure",
-  domain: "Protonecarehospital.com",
+  domain: "protonecarehospital.com",
   address: "1/23 Laxmi Garden, Sector 11, Gurgaon / Gurugram, Haryana 122001",
   mapsUrl: "https://maps.app.goo.gl/RphHTd8iKTrHeuxx8?g_st=aw",
   phone: "9220463438",

@@ -192,6 +192,7 @@ const tableStatements = [
   `CREATE UNIQUE INDEX IF NOT EXISTS rate_limits_action_identifier_idx ON rate_limits(action, identifier)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS admin_users_email_idx ON admin_users(email)`,
   `CREATE INDEX IF NOT EXISTS sessions_id_idx ON sessions(id)`,
+  `CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions(expires_at)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_slot ON appointments(department_slug, requested_date, requested_time, phone) WHERE status != 'CANCELLED'`,
   `CREATE TABLE IF NOT EXISTS idempotent_requests (
     id TEXT PRIMARY KEY,
