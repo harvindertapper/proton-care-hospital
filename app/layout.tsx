@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Outfit } from "next/font/google";
+import { Geist, Geist_Mono, Outfit, Plus_Jakarta_Sans, Inter } from "next/font/google";
 import "./globals.css";
 import { hospital, SITE_URL } from "@/app/lib/data";
 
@@ -17,6 +17,18 @@ const geistMono = Geist_Mono({
 
 const outfit = Outfit({
   variable: "--font-outfit",
+  subsets: ["latin"],
+  display: "swap",
+});
+
+const plusJakarta = Plus_Jakarta_Sans({
+  variable: "--font-jakarta",
+  subsets: ["latin"],
+  display: "swap",
+});
+
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
   display: "swap",
 });
@@ -61,7 +73,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} ${outfit.variable} antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} ${outfit.variable} ${plusJakarta.variable} ${inter.variable} antialiased`}
       >
         {children}
         <TriageWidget />
