@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono, Outfit } from "next/font/google";
+import { Geist, Outfit } from "next/font/google";
 import "./globals.css";
 import { hospital, SITE_URL } from "@/app/lib/data";
 
@@ -8,11 +8,7 @@ import { TriageWidget } from "@/app/components/TriageWidget";
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+  display: "swap",
 });
 
 const outfit = Outfit({
@@ -68,7 +64,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} ${outfit.variable} antialiased`}
+        className={`${geistSans.variable} ${outfit.variable} antialiased`}
       >
         <noscript>
           <style>{`.scroll-reveal{opacity:1 !important;transform:none !important;}`}</style>
