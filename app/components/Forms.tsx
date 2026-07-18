@@ -75,6 +75,39 @@ function hasMeaningfulDraft(form: {
   );
 }
 
+// Per-field validation for the appointment form (step 2). Returns an empty
+// string when the field is valid, otherwise a short, user-friendly message.
+function appointmentFieldError(
+  name: "patientName" | "phone" | "email" | "concern",
+  form: { patientName: string; phone: string; email: string; concern: string }
+): string {
+  switch (name) {
+    case "patientName":
+      return form.patientName.trim() ? "" : "Please enter the patient's full name.";
+    case "phone":
+      return /^[6-9]\d{9}$/.test(form.phone.trim())
+        ? ""
+        : "Enter a valid 10-digit mobile number starting with 6-9.";
+    case "email":
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())
+        ? ""
+        : "Enter a valid email address.";
+    case "concern":
+      return form.concern.trim() ? "" : "Please describe the reason for the visit.";
+    default:
+      return "";
+  }
+}
+
+function FieldError({ show, message }: { show: boolean; message: string }) {
+  if (!show || !message) return null;
+  return (
+    <span className="field-error" role="alert">
+      {message}
+    </span>
+  );
+}
+
 function FieldMessage({ message, success }: { message: string; success?: boolean }) {
   if (!message) return null;
   return (
@@ -327,6 +360,7 @@ export function AppointmentForm({
     time: string;
     requestId: string;
   } | null>(null);
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
   const department = useMemo(
     () => selectableDepartments.find((item) => item.slug === departmentSlug),
     [departmentSlug, selectableDepartments]
@@ -453,7 +487,13 @@ export function AppointmentForm({
     setMessage("");
     setForm(emptyForm);
     setStep(1);
+    setTouched({});
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mark a field as "touched" so its inline validation message can appear.
+  const markTouched = useCallback((name: string) => {
+    setTouched((current) => ({ ...current, [name]: true }));
   }, []);
 
   // Auto-save on every change — but never on the initial mount, and only when
@@ -825,20 +865,24 @@ export function AppointmentForm({
           <div className="two-fields">
             <label>
               Patient name
-              <input value={form.patientName} onChange={(event) => update("patientName", event.target.value)} autoComplete="name" autoCapitalize="words" required />
+              <input value={form.patientName} onChange={(event) => update("patientName", event.target.value)} onBlur={() => markTouched("patientName")} aria-invalid={touched.patientName && Boolean(appointmentFieldError("patientName", form))} autoComplete="name" autoCapitalize="words" required />
+              <FieldError show={Boolean(touched.patientName)} message={appointmentFieldError("patientName", form)} />
             </label>
             <label>
               Mobile number
-              <input value={form.phone} onChange={(event) => update("phone", event.target.value)} type="tel" inputMode="numeric" pattern="[6-9][0-9]{9}" maxLength={10} autoComplete="tel" title="Enter a 10-digit mobile number starting with 6-9" required />
+              <input value={form.phone} onChange={(event) => update("phone", event.target.value)} onBlur={() => markTouched("phone")} aria-invalid={touched.phone && Boolean(appointmentFieldError("phone", form))} type="tel" inputMode="numeric" pattern="[6-9][0-9]{9}" maxLength={10} autoComplete="tel" title="Enter a 10-digit mobile number starting with 6-9" required />
+              <FieldError show={Boolean(touched.phone)} message={appointmentFieldError("phone", form)} />
             </label>
           </div>
           <label>
             Email
-            <input value={form.email} onChange={(event) => update("email", event.target.value)} type="email" inputMode="email" autoComplete="email" required />
+            <input value={form.email} onChange={(event) => update("email", event.target.value)} onBlur={() => markTouched("email")} aria-invalid={touched.email && Boolean(appointmentFieldError("email", form))} type="email" inputMode="email" autoComplete="email" required />
+            <FieldError show={Boolean(touched.email)} message={appointmentFieldError("email", form)} />
           </label>
           <label>
             Concern / reason for visit
-            <textarea value={form.concern} onChange={(event) => update("concern", event.target.value)} rows={4} required />
+            <textarea value={form.concern} onChange={(event) => update("concern", event.target.value)} onBlur={() => markTouched("concern")} aria-invalid={touched.concern && Boolean(appointmentFieldError("concern", form))} rows={4} required />
+            <FieldError show={Boolean(touched.concern)} message={appointmentFieldError("concern", form)} />
           </label>
           <div style={{ display: "flex", gap: "10px", marginTop: "16px", flexWrap: "wrap" }}>
             <button
