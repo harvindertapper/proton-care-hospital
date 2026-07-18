@@ -1752,6 +1752,15 @@ button:disabled {
     min-height: 0;
     height: 220px;
   }
+
+  .flow-card {
+    padding: 18px;
+  }
+
+  .flow-card .button,
+  .flow-card .button.primary {
+    width: 100%;
+  }
 }
 
 .scroll-reveal {
@@ -1913,4 +1922,12 @@ video {
   .admin-login-card input {
     font-size: 16px;
   }
+}
+
+.cf-turnstile-container {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.cf-turnstile-container iframe {
+  max-width: 100%;
 }
