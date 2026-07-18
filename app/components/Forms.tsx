@@ -13,11 +13,26 @@ declare global {
         retry?: "auto" | "never";
         "retry-interval"?: number;
         theme?: "auto" | "light" | "dark";
+        "refresh-expired"?: "auto" | "manual" | "never";
       }) => string;
       remove: (id: string) => void;
       reset: (id?: string) => void;
+      getResponse: (id?: string) => string | undefined;
     };
   }
+}
+
+let currentTurnstileWidgetId: string | null = null;
+
+function readLiveTurnstileToken(): string {
+  try {
+    if (currentTurnstileWidgetId && typeof window !== "undefined" && window.turnstile) {
+      return window.turnstile.getResponse(currentTurnstileWidgetId) ?? "";
+    }
+  } catch {
+    /* ignore */
+  }
+  return "";
 }
 import { AlertCircle, CheckCircle2, LockKeyhole, MessageCircle, PhoneCall, Send, Sunrise, Sun, Trash2 } from "lucide-react";
 import type { Department } from "@/app/lib/data";
@@ -101,46 +116,57 @@ function TurnstileBox({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const widgetIdRef = useRef<string | null>(null);
   const autoRetryRef = useRef(0);
+  const onTokenRef = useRef(onToken);
+  const renderRef = useRef<() => void>(() => {});
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
 
-  const renderWidget = useCallback(() => {
-    if (!siteKey || !window.turnstile || !containerRef.current) return;
-    if (widgetIdRef.current !== null) {
-      try { window.turnstile.remove(widgetIdRef.current); } catch {}
-      widgetIdRef.current = null;
-    }
-    widgetIdRef.current = window.turnstile.render(containerRef.current, {
-      sitekey: siteKey,
-      retry: "never",
-      callback: (token: string) => {
-        autoRetryRef.current = 0;
-        setStatus("ready");
-        onToken(token);
-      },
-      "expired-callback": () => {
-        onToken("");
-        if (widgetIdRef.current !== null && window.turnstile) {
-          try { window.turnstile.reset(widgetIdRef.current); } catch {}
-        }
-      },
-      "error-callback": () => {
-        onToken("");
-        if (autoRetryRef.current < 2 && widgetIdRef.current !== null && window.turnstile) {
-          autoRetryRef.current += 1;
-          try { window.turnstile.reset(widgetIdRef.current); } catch {}
-        } else {
-          setStatus("error");
-        }
-      },
-    });
-  }, [siteKey, onToken]);
+  useEffect(() => {
+    onTokenRef.current = onToken;
+  }, [onToken]);
 
   useEffect(() => {
     if (!siteKey) {
-      onToken("preview-turnstile");
+      onTokenRef.current("preview-turnstile");
       return;
     }
     let cancelled = false;
+
+    const renderWidget = () => {
+      if (!window.turnstile || !containerRef.current) return;
+      if (widgetIdRef.current !== null) {
+        try { window.turnstile.remove(widgetIdRef.current); } catch {}
+        widgetIdRef.current = null;
+        currentTurnstileWidgetId = null;
+      }
+      widgetIdRef.current = window.turnstile.render(containerRef.current, {
+        sitekey: siteKey,
+        retry: "never",
+        "refresh-expired": "auto",
+        callback: (token: string) => {
+          autoRetryRef.current = 0;
+          setStatus("ready");
+          onTokenRef.current(token);
+        },
+        "expired-callback": () => {
+          onTokenRef.current("");
+          if (widgetIdRef.current !== null && window.turnstile) {
+            try { window.turnstile.reset(widgetIdRef.current); } catch {}
+          }
+        },
+        "error-callback": () => {
+          onTokenRef.current("");
+          if (autoRetryRef.current < 2 && widgetIdRef.current !== null && window.turnstile) {
+            autoRetryRef.current += 1;
+            try { window.turnstile.reset(widgetIdRef.current); } catch {}
+          } else {
+            setStatus("error");
+          }
+        },
+      });
+      currentTurnstileWidgetId = widgetIdRef.current;
+    };
+    renderRef.current = renderWidget;
+
     const SCRIPT_SELECTOR = "script[data-pch-turnstile]";
     if (!document.querySelector(SCRIPT_SELECTOR)) {
       const script = document.createElement("script");
@@ -150,32 +176,38 @@ function TurnstileBox({
       script.dataset.pchTurnstile = "true";
       document.head.appendChild(script);
     }
+
     const start = Date.now();
     const timer = window.setInterval(() => {
       if (cancelled) return;
       if (window.turnstile && containerRef.current && widgetIdRef.current === null) {
         window.clearInterval(timer);
         renderWidget();
+        setStatus("ready");
       } else if (Date.now() - start > 15000) {
         window.clearInterval(timer);
         if (widgetIdRef.current === null) setStatus("error");
       }
     }, 100);
+
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       if (widgetIdRef.current !== null && window.turnstile) {
         try { window.turnstile.remove(widgetIdRef.current); } catch {}
       }
+      if (currentTurnstileWidgetId === widgetIdRef.current) {
+        currentTurnstileWidgetId = null;
+      }
       widgetIdRef.current = null;
     };
-  }, [siteKey, onToken, renderWidget]);
+  }, [siteKey]);
 
   const manualRetry = useCallback(() => {
     autoRetryRef.current = 0;
     setStatus("ready");
-    renderWidget();
-  }, [renderWidget]);
+    renderRef.current();
+  }, []);
 
   if (!siteKey) {
     return (
@@ -454,6 +486,19 @@ export function AppointmentForm({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    let effectiveToken = turnstileToken;
+    if (turnstileSiteKey && !effectiveToken) {
+      effectiveToken = readLiveTurnstileToken();
+      if (effectiveToken) {
+        setTurnstileToken(effectiveToken);
+      }
+    }
+    if (turnstileSiteKey && !effectiveToken) {
+      setMessage("Please complete the verification above and try again.");
+      return;
+    }
+
     setBusy(true);
     setMessage("");
     setSuccess(false);
@@ -468,7 +513,7 @@ export function AppointmentForm({
       const data = await postJson("/api/appointments", {
         ...form,
         departmentSlug,
-        turnstileToken,
+        turnstileToken: effectiveToken,
         idempotencyKey,
       });
       setSuccess(true);
@@ -852,6 +897,19 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    let effectiveToken = turnstileToken;
+    if (turnstileSiteKey && !effectiveToken) {
+      effectiveToken = readLiveTurnstileToken();
+      if (effectiveToken) {
+        setTurnstileToken(effectiveToken);
+      }
+    }
+    if (turnstileSiteKey && !effectiveToken) {
+      setMessage("Please complete the verification above and try again.");
+      return;
+    }
+
     setBusy(true);
     setMessage("");
     setSuccess(false);
@@ -859,7 +917,7 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
       const data = await postJson("/api/feedback", {
         ...form,
         rating: Number(form.rating),
-        turnstileToken,
+        turnstileToken: effectiveToken,
         idempotencyKey,
       });
       setSuccess(true);
@@ -1045,11 +1103,24 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    let effectiveToken = turnstileToken;
+    if (turnstileSiteKey && !effectiveToken) {
+      effectiveToken = readLiveTurnstileToken();
+      if (effectiveToken) {
+        setTurnstileToken(effectiveToken);
+      }
+    }
+    if (turnstileSiteKey && !effectiveToken) {
+      setNotice("Please complete the verification above and try again.");
+      return;
+    }
+
     setBusy(true);
     setNotice("");
     setSuccess(false);
     try {
-      const data = await postJson("/api/contact", { ...form, turnstileToken, idempotencyKey });
+      const data = await postJson("/api/contact", { ...form, turnstileToken: effectiveToken, idempotencyKey });
       setSuccess(true);
       setNotice(String(data.message || "Message received."));
       setForm(emptyForm);
