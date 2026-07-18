@@ -130,44 +130,50 @@ export default function AboutPage() {
             body="Protone Care Hospital is led by a dedicated team committed to compassionate, quality-driven healthcare for Gurugram."
           />
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4">
-            <article className="p-6 bg-slate-50 border border-slate-100 rounded-2xl text-center flex flex-col items-center">
-              <img
-                src="/assets/leadership/sunil-sharma.jpg"
-                alt="Sunil Sharma, Chief Executive Officer"
-                width={128}
-                height={128}
-                loading="lazy"
-                decoding="async"
-                className="w-32 h-32 mb-4 rounded-full object-cover border-4 border-white shadow-md"
-              />
+            <article className="group p-6 bg-slate-50 border border-slate-100 rounded-2xl text-center flex flex-col items-center shadow-sm transition duration-300 hover:shadow-xl hover:-translate-y-1">
+              <div className="mb-5 rounded-full bg-gradient-to-tr from-teal-500 via-teal-400 to-sky-500 p-[3px] shadow-lg transition-transform duration-300 group-hover:scale-105">
+                <img
+                  src="/assets/leadership/sunil-sharma.jpg"
+                  alt="Sunil Sharma, Chief Executive Officer"
+                  width={144}
+                  height={144}
+                  loading="lazy"
+                  decoding="async"
+                  className="w-36 h-36 rounded-full object-cover object-top border-4 border-white"
+                />
+              </div>
               <h3 className="font-bold text-slate-800 text-lg mb-1">Sunil Sharma</h3>
               <p className="text-teal-600 text-sm font-semibold mb-3">Chief Executive Officer (CEO)</p>
               <p className="text-slate-600 text-sm">As Chief Executive Officer, Sunil Sharma leads the hospital&apos;s overall vision, operations, and growth — focused on making quality, patient-first healthcare accessible across Gurugram.</p>
             </article>
-            <article className="p-6 bg-slate-50 border border-slate-100 rounded-2xl text-center flex flex-col items-center">
-              <img
-                src="/assets/leadership/dr-devender-suhag.jpg"
-                alt="Dr Devender Suhag, Medical Director"
-                width={128}
-                height={128}
-                loading="lazy"
-                decoding="async"
-                className="w-32 h-32 mb-4 rounded-full object-cover border-4 border-white shadow-md"
-              />
+            <article className="group p-6 bg-slate-50 border border-slate-100 rounded-2xl text-center flex flex-col items-center shadow-sm transition duration-300 hover:shadow-xl hover:-translate-y-1">
+              <div className="mb-5 rounded-full bg-gradient-to-tr from-teal-500 via-teal-400 to-sky-500 p-[3px] shadow-lg transition-transform duration-300 group-hover:scale-105">
+                <img
+                  src="/assets/leadership/dr-devender-suhag.jpg"
+                  alt="Dr Devender Suhag, Medical Director"
+                  width={144}
+                  height={144}
+                  loading="lazy"
+                  decoding="async"
+                  className="w-36 h-36 rounded-full object-cover object-top border-4 border-white"
+                />
+              </div>
               <h3 className="font-bold text-slate-800 text-lg mb-1">Dr Devender Suhag</h3>
               <p className="text-teal-600 text-sm font-semibold mb-3">Medical Director</p>
               <p className="text-slate-600 text-sm">As Medical Director, Dr Devender Suhag guides the hospital&apos;s clinical strategy, medical quality, and standards of patient care across all departments.</p>
             </article>
-            <article className="p-6 bg-slate-50 border border-slate-100 rounded-2xl text-center flex flex-col items-center">
-              <img
-                src="/assets/leadership/dr-rajeev-kumar.jpg"
-                alt="Dr Rajeev Kumar, Medical Superintendent"
-                width={128}
-                height={128}
-                loading="lazy"
-                decoding="async"
-                className="w-32 h-32 mb-4 rounded-full object-cover border-4 border-white shadow-md"
-              />
+            <article className="group p-6 bg-slate-50 border border-slate-100 rounded-2xl text-center flex flex-col items-center shadow-sm transition duration-300 hover:shadow-xl hover:-translate-y-1">
+              <div className="mb-5 rounded-full bg-gradient-to-tr from-teal-500 via-teal-400 to-sky-500 p-[3px] shadow-lg transition-transform duration-300 group-hover:scale-105">
+                <img
+                  src="/assets/leadership/dr-rajeev-kumar.jpg"
+                  alt="Dr Rajeev Kumar, Medical Superintendent"
+                  width={144}
+                  height={144}
+                  loading="lazy"
+                  decoding="async"
+                  className="w-36 h-36 rounded-full object-cover object-top border-4 border-white"
+                />
+              </div>
               <h3 className="font-bold text-slate-800 text-lg mb-1">Dr Rajeev Kumar</h3>
               <p className="text-teal-600 text-sm font-semibold mb-3">Medical Superintendent</p>
               <p className="text-slate-600 text-sm">As Medical Superintendent, Dr Rajeev Kumar oversees day-to-day clinical operations and inter-department coordination to keep hospital services running smoothly.</p>
