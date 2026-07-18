@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useEffect } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -18,27 +18,13 @@ import {
 } from "lucide-react";
 import { formatWhatsApp, hospital, publicNav } from "@/app/lib/data";
 
-type ErStatus = { status: string; waitTime: string };
-
 export function Header() {
-  const [_erStatus, setErStatus] = useState<ErStatus>({ status: "Open", waitTime: "Under 10 mins" });
-
   useEffect(() => {
     fetch("/api/analytics", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ eventType: "pageview", path: window.location.pathname }),
     }).catch(() => {});
-
-    fetch("/api/er-status")
-      .then((res) => res.json())
-      .then((data: unknown) => {
-        const d = data as Partial<ErStatus> | null;
-        if (d && typeof d.status === "string") {
-          setErStatus({ status: d.status, waitTime: typeof d.waitTime === "string" ? d.waitTime : "Under 10 mins" });
-        }
-      })
-      .catch((err) => console.error("Failed to load ER wait time", err));
   }, []);
 
   return (
