@@ -57,7 +57,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#0f172a",
+  themeColor: "#0b2545",
 };
 
 export default function RootLayout({
@@ -70,6 +70,9 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} ${outfit.variable} antialiased`}
       >
+        <noscript>
+          <style>{`.scroll-reveal{opacity:1 !important;transform:none !important;}`}</style>
+        </noscript>
         {children}
         <TriageWidget />
       </body>

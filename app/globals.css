@@ -1789,6 +1789,13 @@ button:disabled {
   opacity: 1;
   transform: translateY(0);
 }
+@media (prefers-reduced-motion: reduce) {
+  .scroll-reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
 
 .whatsapp-float {
   position: fixed;
