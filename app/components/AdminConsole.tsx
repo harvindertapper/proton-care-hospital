@@ -1916,7 +1916,7 @@ function ImageCropUploader({
         const file = new File([blob], "doctor-profile.webp", { type: "image/webp" });
         const formData = new FormData();
         formData.append("file", file);
-        formData.append("category", "doctor-upload");
+        formData.append("purpose", "doctor-photo");
 
         const url = await onUpload(formData);
         onComplete(url);

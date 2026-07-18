@@ -12,7 +12,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ key
   if (!bucket) return new Response("Media storage is not configured.", { status: 503 });
 
   // Restrict public reads to the public-uploads namespace.
-  const objectKey = `public-uploads/${key.join("/")}`;
+  const objectKey = key.join("/");
   const object = await bucket.get(objectKey);
   if (!object) return new Response("Not found", { status: 404 });
 
