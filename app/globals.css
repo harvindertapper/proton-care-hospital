@@ -1578,6 +1578,10 @@ button:disabled {
   .admin-grid.stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .hero-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 780px) {
@@ -1712,6 +1716,31 @@ button:disabled {
   .admin-top,
   .footer-bottom {
     display: grid;
+  }
+}
+
+@media (max-width: 480px) {
+  .hero-home {
+    min-height: 560px;
+  }
+
+  .hero-home .container {
+    padding: 56px 0 36px;
+  }
+
+  .hero-copy h1,
+  .page-hero h1 {
+    font-size: 32px;
+    line-height: 1.15;
+  }
+
+  .hero-copy p,
+  .page-hero p {
+    font-size: 15px;
+  }
+
+  .section {
+    padding: 44px 0;
   }
 }
 
