@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, Component, type FormEvent, type ReactNode } from "react";
 import {
   Clock3,
   Eye,
@@ -93,6 +93,38 @@ async function deleteAdminMedia(csrf: string, id: string) {
 
 function cell(value: unknown) {
   return value === null || value === undefined || value === "" ? "-" : String(value);
+}
+
+class TabErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean; message: string }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, message: "" };
+  }
+  static getDerivedStateFromError(error: unknown) {
+    return { hasError: true, message: error instanceof Error ? error.message : "Something went wrong." };
+  }
+  componentDidCatch(error: unknown) {
+    console.error("Admin tab crashed:", error);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: "24px", border: "1px solid #fecaca", background: "#fef2f2", borderRadius: "8px", color: "#991b1b" }}>
+          <strong>This section failed to load.</strong>
+          <p style={{ margin: "8px 0", fontSize: "13px" }}>
+            {this.state.message}
+          </p>
+          <button type="button" className="button subtle" onClick={() => this.setState({ hasError: false, message: "" })}>
+            Try again
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 export function AdminLoginForm() {
@@ -819,6 +851,7 @@ export function AdminConsole({
         </header>
         {notice ? <div className="admin-notice">{notice} Refresh to see latest persisted rows.</div> : null}
 
+        <TabErrorBoundary key={active}>
         {active === "Dashboard" ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
             {/* Stat Cards */}
@@ -1514,6 +1547,7 @@ export function AdminConsole({
             />
           </div>
         ) : null}
+        </TabErrorBoundary>
       </div>
 
       {selectedAppointment ? (
@@ -2036,24 +2070,30 @@ function DoctorManager({
   onDelete?: (slug: string) => void;
   onUpload?: (formData: FormData) => Promise<string>;
 }) {
-  const source = rows.length ? rows : staticDoctors.map((item) => ({
-    slug: item.slug,
-    name: item.name,
-    speciality: item.speciality,
-    qualification: item.qualification || "",
-    department_slug: item.departmentSlug,
-    photo_url: item.photo || "",
-    profile_note: "",
-    is_visible: 1,
-    blocked_dates: "",
-  }));
-  const first = source[0];
+  const source = ((rows && rows.length)
+    ? rows
+    : (staticDoctors ?? []).map((item) => {
+        if (!item) return null;
+        return {
+          slug: item.slug || "",
+          name: item.name || "",
+          speciality: item.speciality || "",
+          qualification: item.qualification || "",
+          department_slug: item.departmentSlug || "",
+          photo_url: item.photo || "",
+          profile_note: "",
+          is_visible: 1,
+          blocked_dates: "",
+        };
+      }).filter(Boolean)) as Record<string, string | number | null>[];
+
+  const first = source && source.length > 0 ? source[0] : null;
   const [form, setForm] = useState({
     slug: String(first?.slug || ""),
     name: String(first?.name || ""),
     speciality: String(first?.speciality || ""),
     qualification: String(first?.qualification || ""),
-    departmentSlug: String(first?.department_slug || departments[0]?.slug || ""),
+    departmentSlug: String(first?.department_slug || departments?.[0]?.slug || ""),
     photoUrl: String(first?.photo_url || ""),
     profileNote: String(first?.profile_note || ""),
     isVisible: String(first?.is_visible ?? "1"),
@@ -2061,14 +2101,14 @@ function DoctorManager({
   });
 
   function choose(slug: string) {
-    const row = source.find((item) => item.slug === slug);
+    const row = source ? source.find((item) => item && item.slug === slug) : null;
     if (!row) return;
     setForm({
       slug: String(row.slug || ""),
       name: String(row.name || ""),
       speciality: String(row.speciality || ""),
       qualification: String(row.qualification || ""),
-      departmentSlug: String(row.department_slug || departments[0]?.slug || ""),
+      departmentSlug: String(row.department_slug || departments?.[0]?.slug || ""),
       photoUrl: String(row.photo_url || ""),
       profileNote: String(row.profile_note || ""),
       isVisible: String(row.is_visible ?? "1"),
@@ -2079,7 +2119,7 @@ function DoctorManager({
   return (
     <div className="admin-panel-grid">
       <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave(form); }}>
-        {source.some(d => d.slug === form.slug && form.slug) && (
+        {(source || []).some(d => d && d.slug === form.slug && form.slug) && (
           <div style={{ background: "#e0f2fe", color: "#0369a1", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
             <span>✏️ Editing doctor profile: <strong>{form.name}</strong></span>
             <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({
@@ -2087,7 +2127,7 @@ function DoctorManager({
               name: "",
               speciality: "",
               qualification: "",
-              departmentSlug: departments[0]?.slug || "",
+              departmentSlug: departments?.[0]?.slug || "",
               photoUrl: "",
               profileNote: "",
               isVisible: "1",
@@ -2100,9 +2140,12 @@ function DoctorManager({
         <label>
           Existing doctor
           <select value={form.slug} onChange={(event) => choose(event.target.value)}>
-            {source.map((item) => (
-              <option value={String(item.slug)} key={String(item.slug)}>{String(item.name)}</option>
-            ))}
+            {(source || []).map((item) => {
+              if (!item) return null;
+              return (
+                <option value={String(item.slug || "")} key={String(item.slug || "")}>{String(item.name || "")}</option>
+              );
+            })}
           </select>
         </label>
         <label>Name<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value, slug: form.slug || slugify(event.target.value) })} /></label>
@@ -2146,9 +2189,9 @@ function DoctorManager({
         </div>
       </form>
       <DataTable 
-        rows={rows} 
+        rows={rows || []} 
         columns={["name", "speciality", "qualification", "department_slug", "status", "is_visible", "blocked_dates"]} 
-        onRowClick={(row) => choose(String(row.slug))}
+        onRowClick={(row) => choose(row ? String(row.slug || "") : "")}
       />
     </div>
   );
