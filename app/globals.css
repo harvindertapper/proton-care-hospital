@@ -1663,6 +1663,7 @@ button:disabled {
     border-top: 1px solid var(--line);
     background: white;
     box-shadow: 0 -12px 30px rgba(8, 37, 61, 0.12);
+    padding-bottom: env(safe-area-inset-bottom);
   }
 
   .mobile-action-bar a {
@@ -1680,7 +1681,7 @@ button:disabled {
   }
 
   .footer {
-    padding-bottom: 132px;
+    padding-bottom: calc(132px + env(safe-area-inset-bottom));
   }
 
   .admin-shell {
@@ -1718,7 +1719,7 @@ button:disabled {
 
 .whatsapp-float {
   position: fixed;
-  bottom: 80px;
+  bottom: calc(80px + env(safe-area-inset-bottom));
   right: 20px;
   width: 56px;
   height: 56px;
@@ -1736,7 +1737,7 @@ button:disabled {
 }
 @media (min-width: 768px) {
   .whatsapp-float {
-    bottom: 30px;
+    bottom: calc(30px + env(safe-area-inset-bottom));
     right: 30px;
     width: 64px;
     height: 64px;
@@ -1745,14 +1746,14 @@ button:disabled {
 
 .triage-widget-float {
   position: fixed;
-  bottom: 148px;
+  bottom: calc(148px + env(safe-area-inset-bottom));
   right: 20px;
   z-index: 9999;
   font-family: 'Outfit', sans-serif;
 }
 @media (min-width: 768px) {
   .triage-widget-float {
-    bottom: 110px;
+    bottom: calc(110px + env(safe-area-inset-bottom));
     right: 30px;
   }
 }
@@ -1840,3 +1841,29 @@ button:disabled {
   color: var(--navy);
 }
 
+
+
+/* ---- Mobile foundation (responsive base) ---- */
+html {
+  overflow-x: hidden; /* horizontal-scroll guard */
+}
+body {
+  overflow-wrap: break-word; /* long strings/emails/dept names wrap */
+}
+img,
+video {
+  max-width: 100%;
+}
+
+/* Kill iOS Safari zoom-on-focus: all inputs >=16px on mobile */
+@media (max-width: 780px) {
+  input,
+  select,
+  textarea,
+  .admin-form input,
+  .admin-form select,
+  .admin-form textarea,
+  .admin-login-card input {
+    font-size: 16px;
+  }
+}
