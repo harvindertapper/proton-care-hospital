@@ -16,9 +16,13 @@ declare global {
     };
   }
 }
-import { AlertCircle, CheckCircle2, LockKeyhole, MessageCircle, PhoneCall, Send, Sunrise, Sun } from "lucide-react";
+import { AlertCircle, CheckCircle2, LockKeyhole, MessageCircle, PhoneCall, Send, Sunrise, Sun, Trash2 } from "lucide-react";
 import type { Department } from "@/app/lib/data";
 import { consentText, emergencyNotice, hospital } from "@/app/lib/data";
+
+// Draft persistence: localStorage (encrypted via cryptoStorage), 30-minute TTL.
+// We do NOT auto-populate on mount — instead a banner offers Restore / Start fresh.
+const DRAFT_TTL_MS = 30 * 60 * 1000;
 
 type SlotsResponse = {
   departmentName?: string;
@@ -39,6 +43,47 @@ function FieldMessage({ message, success }: { message: string; success?: boolean
     <div className={success ? "form-message success" : "form-message"}>
       {success ? <CheckCircle2 size={18} aria-hidden="true" /> : <AlertCircle size={18} aria-hidden="true" />}
       <span>{message}</span>
+    </div>
+  );
+}
+
+/** Non-intrusive banner shown when a non-expired draft is found on mount. */
+function DraftBanner({ onRestore, onDiscard }: { onRestore: () => void; onDiscard: () => void }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "10px",
+        padding: "10px 14px",
+        marginBottom: "14px",
+        background: "var(--soft, #f1f5f9)",
+        border: "1px solid var(--border, #e2e8f0)",
+        borderRadius: "8px",
+        fontSize: "13px",
+        color: "var(--text, #1e293b)",
+        flexWrap: "wrap",
+      }}
+    >
+      <span style={{ flex: 1, minWidth: "160px" }}>We found an unsaved draft.</span>
+      <button
+        type="button"
+        className="button primary"
+        style={{ padding: "4px 12px", fontSize: "13px" }}
+        onClick={onRestore}
+      >
+        Restore
+      </button>
+      <button
+        type="button"
+        className="button subtle"
+        style={{ padding: "4px 12px", fontSize: "13px" }}
+        onClick={onDiscard}
+      >
+        Start fresh
+      </button>
     </div>
   );
 }
@@ -130,6 +175,10 @@ async function postJson(url: string, payload: Record<string, unknown>) {
   return data;
 }
 
+// ---------------------------------------------------------------------------
+// AppointmentForm
+// ---------------------------------------------------------------------------
+
 export function AppointmentForm({
   departments,
   initialDepartment,
@@ -140,11 +189,19 @@ export function AppointmentForm({
   turnstileSiteKey?: string;
 }) {
   const selectableDepartments = departments.filter((d) => d.slug !== "emergency-medicine");
-  const [step, setStep] = useState(1);
-  const [departmentSlug, setDepartmentSlug] = useState(initialDepartment || selectableDepartments[0]?.slug || "");
-  const [slots, setSlots] = useState<string[]>([]);
-  const [slotError, setSlotError] = useState("");
-  const [form, setForm] = useState({
+
+  type AppointmentFormState = {
+    patientName: string;
+    phone: string;
+    email: string;
+    requestedDate: string;
+    requestedTime: string;
+    concern: string;
+    consent: boolean;
+    company: string;
+  };
+
+  const emptyForm: AppointmentFormState = {
     patientName: "",
     phone: "",
     email: "",
@@ -153,7 +210,14 @@ export function AppointmentForm({
     concern: "",
     consent: false,
     company: "",
-  });
+  };
+
+  const [step, setStep] = useState(1);
+  const [departmentSlug, setDepartmentSlug] = useState(initialDepartment || selectableDepartments[0]?.slug || "");
+  const [slots, setSlots] = useState<string[]>([]);
+  const [slotError, setSlotError] = useState("");
+  const [form, setForm] = useState<AppointmentFormState>(emptyForm);
+  const [pendingDraft, setPendingDraft] = useState<{ form: AppointmentFormState; dept: string } | null>(null);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileNonce, setTurnstileNonce] = useState(0);
   const handleTurnstileToken = useCallback((token: string) => {
@@ -182,10 +246,11 @@ export function AppointmentForm({
 
   const [mounted] = useState(() => typeof window !== "undefined");
 
-  const update = useCallback((name: keyof typeof form, value: string | boolean) => {
+  const update = useCallback((name: keyof AppointmentFormState, value: string | boolean) => {
     setForm((current) => ({ ...current, [name]: value }));
   }, []);
 
+  // Idempotency key (not PII — keep 24h lifecycle as before)
   useEffect(() => {
     if (mounted) {
       import("@/app/lib/cryptoStorage").then((m) => {
@@ -202,21 +267,73 @@ export function AppointmentForm({
     }
   }, [mounted, success]);
 
+  // On mount: check for a non-expired draft but DO NOT auto-populate.
+  // Instead surface a banner letting the user choose.
   useEffect(() => {
     import("@/app/lib/cryptoStorage").then((m) => {
-      m.getAndDecrypt("pch_appointment_draft").then((savedForm) => {
-        if (savedForm) {
-          setForm((current) => ({ ...current, ...savedForm, otpCode: "" }));
+      Promise.all([
+        m.getAndDecrypt("pch_appointment_draft"),
+        m.getAndDecrypt("pch_appointment_dept"),
+      ]).then(([savedForm, savedDept]) => {
+        // cryptoStorage.getAndDecrypt already enforces its own 24h TTL and
+        // returns null for expired data. We additionally enforce the shorter
+        // 30-min TTL by re-reading the raw timestamp from localStorage.
+        const raw = typeof window !== "undefined" ? localStorage.getItem("pch_appointment_draft") : null;
+        if (!raw || !savedForm) return;
+        try {
+          const parsed = JSON.parse(raw) as { iv: string; ciphertext: string };
+          if (!parsed.iv) return; // malformed
+        } catch {
+          return;
         }
-      });
-      m.getAndDecrypt("pch_appointment_dept").then((savedDept) => {
-        if (savedDept) {
-          setDepartmentSlug(typeof savedDept === "string" ? savedDept : "");
+        // Timestamp is inside the encrypted payload; cryptoStorage decoded it.
+        // We trust getAndDecrypt's 24h check. Now we apply our own 30-min check
+        // via the stored timestamp inside the decrypted payload (not available
+        // directly). We work around this: save a plain "draft_ts" companion key.
+        const tsRaw = localStorage.getItem("pch_appointment_draft_ts");
+        const ts = tsRaw ? Number(tsRaw) : null;
+        if (ts !== null && Date.now() - ts > DRAFT_TTL_MS) {
+          localStorage.removeItem("pch_appointment_draft");
+          localStorage.removeItem("pch_appointment_dept");
+          localStorage.removeItem("pch_appointment_draft_ts");
+          return;
         }
+        // Draft is valid — offer it via banner
+        const draftForm = { ...emptyForm, ...(savedForm as Partial<AppointmentFormState>) };
+        setPendingDraft({
+          form: draftForm,
+          dept: typeof savedDept === "string" ? savedDept : departmentSlug,
+        });
       });
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const restoreDraft = useCallback(() => {
+    if (!pendingDraft) return;
+    setForm(pendingDraft.form);
+    setDepartmentSlug(pendingDraft.dept);
+    setPendingDraft(null);
+  }, [pendingDraft]);
+
+  const discardDraft = useCallback(() => {
+    localStorage.removeItem("pch_appointment_draft");
+    localStorage.removeItem("pch_appointment_dept");
+    localStorage.removeItem("pch_appointment_draft_ts");
+    setPendingDraft(null);
+  }, []);
+
+  const clearForm = useCallback(() => {
+    setForm(emptyForm);
+    setStep(1);
+    localStorage.removeItem("pch_appointment_draft");
+    localStorage.removeItem("pch_appointment_dept");
+    localStorage.removeItem("pch_appointment_draft_ts");
+    setPendingDraft(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto-save on every change; write companion timestamp for 30-min TTL check.
   useEffect(() => {
     if (mounted) {
       import("@/app/lib/cryptoStorage").then((m) => {
@@ -229,6 +346,7 @@ export function AppointmentForm({
           concern: form.concern,
           consent: form.consent,
         });
+        localStorage.setItem("pch_appointment_draft_ts", String(Date.now()));
       });
     }
   }, [form, mounted]);
@@ -292,10 +410,6 @@ export function AppointmentForm({
     setDepartmentSlug(slug);
   }
 
-
-
-
-
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -325,20 +439,13 @@ export function AppointmentForm({
 
       setMessage(`${data.message || "Your appointment request has been registered securely."} Reference ID: ${data.requestId || ""}`);
       setStep(1);
-      setForm({
-        patientName: "",
-        phone: "",
-        email: "",
-        requestedDate: todayIso(),
-        requestedTime: "",
-        concern: "",
-        consent: false,
-        company: "",
-      });
+      setForm(emptyForm);
       setTurnstileToken("");
       setTurnstileNonce((n) => n + 1);
+      // Clear draft on successful submit
       localStorage.removeItem("pch_appointment_draft");
       localStorage.removeItem("pch_appointment_dept");
+      localStorage.removeItem("pch_appointment_draft_ts");
       localStorage.removeItem("pch_appointment_idempotency");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not submit appointment request.");
@@ -381,6 +488,10 @@ export function AppointmentForm({
 
   return (
     <form className="flow-card appointment-flow" onSubmit={submit}>
+      {pendingDraft ? (
+        <DraftBanner onRestore={restoreDraft} onDiscard={discardDraft} />
+      ) : null}
+
       <div className="flow-steps" aria-label="Appointment request steps">
         {[1, 2, 3].map((item) => {
           const stepNames = ["Department", "Patient Details", "Confirm"];
@@ -522,14 +633,24 @@ export function AppointmentForm({
             Concern / reason for visit
             <textarea value={form.concern} onChange={(event) => update("concern", event.target.value)} rows={4} required />
           </label>
-          <button
-            className="button primary mt-4"
-            type="button"
-            onClick={() => setStep(3)}
-            disabled={!form.patientName.trim() || !form.phone.trim() || !form.email.trim() || !form.concern.trim()}
-          >
-            Continue
-          </button>
+          <div style={{ display: "flex", gap: "10px", marginTop: "16px", flexWrap: "wrap" }}>
+            <button
+              className="button primary"
+              type="button"
+              onClick={() => setStep(3)}
+              disabled={!form.patientName.trim() || !form.phone.trim() || !form.email.trim() || !form.concern.trim()}
+            >
+              Continue
+            </button>
+            <button
+              type="button"
+              className="button subtle"
+              style={{ display: "flex", alignItems: "center", gap: "6px" }}
+              onClick={clearForm}
+            >
+              <Trash2 size={14} aria-hidden="true" /> Clear form
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -546,9 +667,19 @@ export function AppointmentForm({
             <span>{consentText}</span>
           </label>
           <p className="field-hint warning">{emergencyNotice}</p>
-          <button className="button primary full" disabled={busy || !form.consent || (turnstileSiteKey ? !turnstileToken : false)} type="submit">
-            <Send size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Submit Request"}
-          </button>
+          <div style={{ display: "flex", gap: "10px", marginTop: "4px", flexWrap: "wrap" }}>
+            <button className="button primary full" disabled={busy || !form.consent || (turnstileSiteKey ? !turnstileToken : false)} type="submit" style={{ flex: 1 }}>
+              <Send size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Submit Request"}
+            </button>
+            <button
+              type="button"
+              className="button subtle"
+              style={{ display: "flex", alignItems: "center", gap: "6px" }}
+              onClick={clearForm}
+            >
+              <Trash2 size={14} aria-hidden="true" /> Clear
+            </button>
+          </div>
           {!busy && (!form.consent || (turnstileSiteKey && !turnstileToken)) ? (
             <p role="status" aria-live="polite" style={{ fontSize: "12px", color: "#dc2626", marginTop: "6px" }}>
               {!form.consent ? "Please accept the consent checkbox to continue." : "Please complete the verification above."}
@@ -562,15 +693,31 @@ export function AppointmentForm({
   );
 }
 
+// ---------------------------------------------------------------------------
+// FeedbackForm
+// ---------------------------------------------------------------------------
+
 export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }) {
-  const [form, setForm] = useState({
+  type FeedbackFormState = {
+    patientName: string;
+    phone: string;
+    rating: string;
+    message: string;
+    consent: boolean;
+    company: string;
+  };
+
+  const emptyForm: FeedbackFormState = {
     patientName: "",
     phone: "",
     rating: "5",
     message: "",
     consent: false,
     company: "",
-  });
+  };
+
+  const [form, setForm] = useState<FeedbackFormState>(emptyForm);
+  const [pendingDraft, setPendingDraft] = useState<FeedbackFormState | null>(null);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileNonce, setTurnstileNonce] = useState(0);
   const handleTurnstileToken = useCallback((token: string) => {
@@ -583,6 +730,10 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
 
   const [idempotencyKey, setIdempotencyKey] = useState("");
   const [mounted] = useState(() => typeof window !== "undefined");
+
+  const update = useCallback((name: keyof FeedbackFormState, value: string | boolean) => {
+    setForm((current) => ({ ...current, [name]: value }));
+  }, []);
 
   useEffect(() => {
     if (mounted) {
@@ -600,16 +751,48 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
     }
   }, [mounted, success]);
 
+  // On mount: check for a non-expired draft, offer banner — do not auto-fill.
   useEffect(() => {
     import("@/app/lib/cryptoStorage").then((m) => {
       m.getAndDecrypt("pch_feedback_draft").then((saved) => {
-        if (saved) {
-          setForm((current) => ({ ...current, ...saved, otpCode: "" }));
+        if (!saved) return;
+        const raw = typeof window !== "undefined" ? localStorage.getItem("pch_feedback_draft") : null;
+        if (!raw) return;
+        const tsRaw = localStorage.getItem("pch_feedback_draft_ts");
+        const ts = tsRaw ? Number(tsRaw) : null;
+        if (ts !== null && Date.now() - ts > DRAFT_TTL_MS) {
+          localStorage.removeItem("pch_feedback_draft");
+          localStorage.removeItem("pch_feedback_draft_ts");
+          return;
         }
+        setPendingDraft({ ...emptyForm, ...(saved as Partial<FeedbackFormState>) });
       });
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const restoreDraft = useCallback(() => {
+    if (!pendingDraft) return;
+    setForm(pendingDraft);
+    setPendingDraft(null);
+  }, [pendingDraft]);
+
+  const discardDraft = useCallback(() => {
+    localStorage.removeItem("pch_feedback_draft");
+    localStorage.removeItem("pch_feedback_draft_ts");
+    setPendingDraft(null);
+  }, []);
+
+  const clearForm = useCallback(() => {
+    setForm(emptyForm);
+    setPublicConsent(false);
+    localStorage.removeItem("pch_feedback_draft");
+    localStorage.removeItem("pch_feedback_draft_ts");
+    setPendingDraft(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto-save with 30-min companion timestamp.
   useEffect(() => {
     if (mounted) {
       import("@/app/lib/cryptoStorage").then((m) => {
@@ -620,13 +803,10 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
           message: form.message,
           consent: form.consent,
         });
+        localStorage.setItem("pch_feedback_draft_ts", String(Date.now()));
       });
     }
   }, [form, mounted]);
-
-  const update = useCallback((name: keyof typeof form, value: string | boolean) => {
-    setForm((current) => ({ ...current, [name]: value }));
-  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -642,11 +822,13 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
       });
       setSuccess(true);
       setMessage(String(data.message || "Feedback submitted for review."));
-      setForm({ patientName: "", phone: "", rating: "5", message: "", consent: false, company: "" });
+      setForm(emptyForm);
       setPublicConsent(false);
       setTurnstileToken("");
       setTurnstileNonce((n) => n + 1);
+      // Clear draft on successful submit
       localStorage.removeItem("pch_feedback_draft");
+      localStorage.removeItem("pch_feedback_draft_ts");
       localStorage.removeItem("pch_feedback_idempotency");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not submit feedback.");
@@ -659,6 +841,9 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
 
   return (
     <form className="flow-card" onSubmit={submit}>
+      {pendingDraft ? (
+        <DraftBanner onRestore={restoreDraft} onDiscard={discardDraft} />
+      ) : null}
       <input className="honeypot" value={form.company} onChange={(event) => update("company", event.target.value)} tabIndex={-1} autoComplete="off" aria-hidden="true" />
       <div className="two-fields">
         <label>
@@ -693,9 +878,19 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
         <input type="checkbox" checked={publicConsent} onChange={(event) => setPublicConsent(event.target.checked)} />
         <span>I separately consent to the publication of this feedback on the hospital&apos;s website or social-media pages, either with my name or anonymously as selected by me. I understand that I may withdraw this consent.</span>
       </label>
-      <button className="button primary full" type="submit" disabled={busy || !form.consent || (turnstileSiteKey ? !turnstileToken : false)}>
-        <Send size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Submit Feedback"}
-      </button>
+      <div style={{ display: "flex", gap: "10px", marginTop: "6px", flexWrap: "wrap" }}>
+        <button className="button primary full" type="submit" disabled={busy || !form.consent || (turnstileSiteKey ? !turnstileToken : false)} style={{ flex: 1 }}>
+          <Send size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Submit Feedback"}
+        </button>
+        <button
+          type="button"
+          className="button subtle"
+          style={{ display: "flex", alignItems: "center", gap: "6px" }}
+          onClick={clearForm}
+        >
+          <Trash2 size={14} aria-hidden="true" /> Clear
+        </button>
+      </div>
       {!busy && (!form.consent || (turnstileSiteKey && !turnstileToken)) ? (
         <p role="status" aria-live="polite" style={{ fontSize: "12px", color: "#dc2626", marginTop: "6px" }}>
           {!form.consent ? "Please accept the consent checkbox to continue." : "Please complete the verification above."}
@@ -706,8 +901,24 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
   );
 }
 
+// ---------------------------------------------------------------------------
+// ContactForm
+// ---------------------------------------------------------------------------
+
 export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string }) {
-  const [form, setForm] = useState({ name: "", phone: "", email: "", subject: "", message: "", company: "" });
+  type ContactFormState = {
+    name: string;
+    phone: string;
+    email: string;
+    subject: string;
+    message: string;
+    company: string;
+  };
+
+  const emptyForm: ContactFormState = { name: "", phone: "", email: "", subject: "", message: "", company: "" };
+
+  const [form, setForm] = useState<ContactFormState>(emptyForm);
+  const [pendingDraft, setPendingDraft] = useState<ContactFormState | null>(null);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileNonce, setTurnstileNonce] = useState(0);
   const handleTurnstileToken = useCallback((token: string) => {
@@ -719,6 +930,10 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
 
   const [idempotencyKey, setIdempotencyKey] = useState("");
   const [mounted] = useState(() => typeof window !== "undefined");
+
+  const update = useCallback((name: keyof ContactFormState, value: string) => {
+    setForm((current) => ({ ...current, [name]: value }));
+  }, []);
 
   useEffect(() => {
     if (mounted) {
@@ -736,27 +951,55 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
     }
   }, [mounted, success]);
 
+  // On mount: check for a non-expired draft, offer banner — do not auto-fill.
   useEffect(() => {
     import("@/app/lib/cryptoStorage").then((m) => {
       m.getAndDecrypt("pch_contact_draft").then((saved) => {
-        if (saved) {
-          setForm((current) => ({ ...current, ...saved }));
+        if (!saved) return;
+        const raw = typeof window !== "undefined" ? localStorage.getItem("pch_contact_draft") : null;
+        if (!raw) return;
+        const tsRaw = localStorage.getItem("pch_contact_draft_ts");
+        const ts = tsRaw ? Number(tsRaw) : null;
+        if (ts !== null && Date.now() - ts > DRAFT_TTL_MS) {
+          localStorage.removeItem("pch_contact_draft");
+          localStorage.removeItem("pch_contact_draft_ts");
+          return;
         }
+        setPendingDraft({ ...emptyForm, ...(saved as Partial<ContactFormState>) });
       });
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const restoreDraft = useCallback(() => {
+    if (!pendingDraft) return;
+    setForm(pendingDraft);
+    setPendingDraft(null);
+  }, [pendingDraft]);
+
+  const discardDraft = useCallback(() => {
+    localStorage.removeItem("pch_contact_draft");
+    localStorage.removeItem("pch_contact_draft_ts");
+    setPendingDraft(null);
+  }, []);
+
+  const clearForm = useCallback(() => {
+    setForm(emptyForm);
+    localStorage.removeItem("pch_contact_draft");
+    localStorage.removeItem("pch_contact_draft_ts");
+    setPendingDraft(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto-save with 30-min companion timestamp.
   useEffect(() => {
     if (mounted) {
       import("@/app/lib/cryptoStorage").then((m) => {
         m.encryptAndSave("pch_contact_draft", form);
+        localStorage.setItem("pch_contact_draft_ts", String(Date.now()));
       });
     }
   }, [form, mounted]);
-
-  const update = useCallback((name: keyof typeof form, value: string) => {
-    setForm((current) => ({ ...current, [name]: value }));
-  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -767,10 +1010,12 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
       const data = await postJson("/api/contact", { ...form, turnstileToken, idempotencyKey });
       setSuccess(true);
       setNotice(String(data.message || "Message received."));
-      setForm({ name: "", phone: "", email: "", subject: "", message: "", company: "" });
+      setForm(emptyForm);
       setTurnstileToken("");
       setTurnstileNonce((n) => n + 1);
+      // Clear draft on successful submit
       localStorage.removeItem("pch_contact_draft");
+      localStorage.removeItem("pch_contact_draft_ts");
       localStorage.removeItem("pch_contact_idempotency");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Could not send message.");
@@ -783,6 +1028,9 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
 
   return (
     <form className="flow-card" onSubmit={submit}>
+      {pendingDraft ? (
+        <DraftBanner onRestore={restoreDraft} onDiscard={discardDraft} />
+      ) : null}
       <input className="honeypot" value={form.company} onChange={(event) => update("company", event.target.value)} tabIndex={-1} autoComplete="off" aria-hidden="true" />
       <div className="two-fields">
         <label>
@@ -807,9 +1055,19 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
         <textarea rows={5} value={form.message} onChange={(event) => update("message", event.target.value)} required />
       </label>
       <TurnstileBox key={turnstileNonce} siteKey={turnstileSiteKey} onToken={handleTurnstileToken} />
-      <button className="button primary full" type="submit" disabled={busy || (turnstileSiteKey ? !turnstileToken : false)}>
-        <MessageCircle size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Send Message"}
-      </button>
+      <div style={{ display: "flex", gap: "10px", marginTop: "6px", flexWrap: "wrap" }}>
+        <button className="button primary full" type="submit" disabled={busy || (turnstileSiteKey ? !turnstileToken : false)} style={{ flex: 1 }}>
+          <MessageCircle size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Send Message"}
+        </button>
+        <button
+          type="button"
+          className="button subtle"
+          style={{ display: "flex", alignItems: "center", gap: "6px" }}
+          onClick={clearForm}
+        >
+          <Trash2 size={14} aria-hidden="true" /> Clear
+        </button>
+      </div>
       {!busy && turnstileSiteKey && !turnstileToken ? (
         <p role="status" aria-live="polite" style={{ fontSize: "12px", color: "#dc2626", marginTop: "6px" }}>
           Please complete the verification above.
