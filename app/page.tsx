@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Activity, Building2, FlaskConical, HeartPulse, ShieldCheck, Stethoscope } from "lucide-react";
 import {
   departments,
+  doctors,
   facilityGroups,
   facilities,
   hospital,
@@ -65,6 +66,27 @@ export default function Home() {
       </section>
 
       <EmergencyBand />
+
+      <section className="trust-strip" aria-label="Hospital at a glance">
+        <div className="container trust-grid">
+          <div className="trust-item">
+            <span className="trust-num">24×7</span>
+            <span className="trust-label">Emergency Care</span>
+          </div>
+          <div className="trust-item">
+            <span className="trust-num">{departments.length}</span>
+            <span className="trust-label">Medical Departments</span>
+          </div>
+          <div className="trust-item">
+            <span className="trust-num">{doctors.length}</span>
+            <span className="trust-label">Doctors &amp; Consultants</span>
+          </div>
+          <div className="trust-item">
+            <span className="trust-num">{tpaPanels.length}</span>
+            <span className="trust-label">TPA / Insurance Panels</span>
+          </div>
+        </div>
+      </section>
 
       <section className="section">
         <div className="container">

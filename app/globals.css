@@ -1798,6 +1798,49 @@ button:disabled {
   }
 }
 
+/* Hero trust strip (real facts only) */
+.trust-strip {
+  border-bottom: 1px solid var(--line);
+  background: white;
+}
+.trust-strip .trust-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  padding: 22px 0;
+}
+.trust-strip .trust-item {
+  text-align: center;
+  padding: 6px 8px;
+  border-right: 1px solid var(--line);
+}
+.trust-strip .trust-item:last-child {
+  border-right: 0;
+}
+.trust-strip .trust-num {
+  display: block;
+  font-size: clamp(24px, 3vw, 34px);
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--navy);
+}
+.trust-strip .trust-label {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #475569;
+}
+@media (max-width: 640px) {
+  .trust-strip .trust-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .trust-strip .trust-item:nth-child(2) {
+    border-right: 0;
+  }
+}
+
 /* A11y: skip-to-content link (hidden off-screen until focused by keyboard) */
 .skip-link {
   position: absolute;
