@@ -9,7 +9,6 @@ Fresh single-app build for `Protonecarehospital.com`.
 - `/api/*` endpoints for OTP, appointments, feedback, contact, admin actions, approval review, media upload, and published content support.
 - Cloudflare D1 binding: `DB` (`site-creator-d1`).
 - Cloudflare R2 binding: `MEDIA` (`pch`).
-- Cloudflare Images binding: `IMAGES` for Vinext image optimization.
 
 ## Cloudflare architecture
 
@@ -26,7 +25,6 @@ npm run dev
 npm run lint
 npm test
 npm run build
-npm run db:generate
 npm run cf:types
 ```
 
@@ -45,7 +43,7 @@ npm run deploy
 
 Before the first production deployment, configure the required encrypted
 bindings. The first three commands below are already present on the current
-Worker; all five are listed so a fresh setup is reproducible.
+Worker; all six are listed so a fresh setup is reproducible.
 
 ```bash
 npx wrangler secret put ADMIN_SESSION_SECRET
