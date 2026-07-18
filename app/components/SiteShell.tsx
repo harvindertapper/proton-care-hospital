@@ -156,8 +156,9 @@ export function MobileActionBar() {
 export function PageShell({ children }: { children: React.ReactNode }) {
   return (
     <>
+      <a href="#main-content" className="skip-link">Skip to main content</a>
       <Header />
-      <main>{children}</main>
+      <main id="main-content" tabIndex={-1}>{children}</main>
       <Footer />
       <MobileActionBar />
       <a
