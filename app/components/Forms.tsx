@@ -321,6 +321,12 @@ export function AppointmentForm({
   const [success, setSuccess] = useState(false);
   const [busy, setBusy] = useState(false);
   const [idempotencyKey, setIdempotencyKey] = useState("");
+  const [confirmation, setConfirmation] = useState<{
+    departmentName: string;
+    date: string;
+    time: string;
+    requestId: string;
+  } | null>(null);
   const department = useMemo(
     () => selectableDepartments.find((item) => item.slug === departmentSlug),
     [departmentSlug, selectableDepartments]
@@ -437,6 +443,16 @@ export function AppointmentForm({
     localStorage.removeItem("pch_appointment_dept");
     localStorage.removeItem("pch_appointment_draft_ts");
     setPendingDraft(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Reset back to a fresh, empty form after a successful booking.
+  const bookAnother = useCallback(() => {
+    setConfirmation(null);
+    setSuccess(false);
+    setMessage("");
+    setForm(emptyForm);
+    setStep(1);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -568,6 +584,12 @@ export function AppointmentForm({
         idempotencyKey,
       });
       setSuccess(true);
+      setConfirmation({
+        departmentName: department?.name || "",
+        date: form.requestedDate,
+        time: form.requestedTime,
+        requestId: String(data.requestId || ""),
+      });
 
       fetch("/api/analytics", {
         method: "POST",
@@ -592,6 +614,49 @@ export function AppointmentForm({
     } finally {
       setBusy(false);
     }
+  }
+
+  if (confirmation) {
+    return (
+      <div className="flow-card booking-success" role="status" aria-live="polite">
+        <div className="booking-success-icon">
+          <CheckCircle2 size={40} aria-hidden="true" />
+        </div>
+        <h2 className="booking-success-title">Appointment request received</h2>
+        <p className="booking-success-sub">
+          Our team will call you shortly to confirm your slot. Please keep your Reference ID handy.
+        </p>
+        <dl className="booking-success-summary">
+          {confirmation.requestId ? (
+            <div className="booking-success-row">
+              <dt>Reference ID</dt>
+              <dd>{confirmation.requestId}</dd>
+            </div>
+          ) : null}
+          {confirmation.departmentName ? (
+            <div className="booking-success-row">
+              <dt>Department</dt>
+              <dd>{confirmation.departmentName}</dd>
+            </div>
+          ) : null}
+          {confirmation.date ? (
+            <div className="booking-success-row">
+              <dt>Preferred date</dt>
+              <dd>{confirmation.date}</dd>
+            </div>
+          ) : null}
+          {confirmation.time ? (
+            <div className="booking-success-row">
+              <dt>Preferred time</dt>
+              <dd>{confirmation.time}</dd>
+            </div>
+          ) : null}
+        </dl>
+        <button type="button" className="button primary" onClick={bookAnother}>
+          Book another appointment
+        </button>
+      </div>
+    );
   }
 
   if (isEmergency) {
