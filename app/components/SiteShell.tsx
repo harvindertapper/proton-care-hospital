@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import {
   ArrowRight,
   CalendarDays,
@@ -19,6 +20,9 @@ import {
 import { formatWhatsApp, hospital, publicNav } from "@/app/lib/data";
 
 export function Header() {
+  const pathname = usePathname();
+  const mobileNavRef = useRef<HTMLDetailsElement>(null);
+
   useEffect(() => {
     fetch("/api/analytics", {
       method: "POST",
@@ -26,6 +30,13 @@ export function Header() {
       body: JSON.stringify({ eventType: "pageview", path: window.location.pathname }),
     }).catch(() => {});
   }, []);
+
+  // Auto-close mobile menu on route change
+  useEffect(() => {
+    if (mobileNavRef.current) {
+      mobileNavRef.current.open = false;
+    }
+  }, [pathname]);
 
   return (
     <header className="site-header">
@@ -55,13 +66,19 @@ export function Header() {
             </Link>
           ))}
         </nav>
-        <details className="mobile-nav">
+        <details className="mobile-nav" ref={mobileNavRef}>
           <summary aria-label="Open navigation">
             <Menu size={22} aria-hidden="true" />
           </summary>
           <div>
             {publicNav.map((item) => (
-              <Link href={item.href} key={item.href}>
+              <Link
+                href={item.href}
+                key={item.href}
+                onClick={() => {
+                  if (mobileNavRef.current) mobileNavRef.current.open = false;
+                }}
+              >
                 {item.label}
               </Link>
             ))}

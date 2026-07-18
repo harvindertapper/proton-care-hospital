@@ -288,8 +288,13 @@ button:disabled {
 }
 
 .mobile-nav summary {
-  list-style: none;
+  min-width: 44px;
+  min-height: 44px;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  list-style: none; /* default triangle marker hatao */
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px;
@@ -312,7 +317,10 @@ button:disabled {
 }
 
 .mobile-nav a {
-  padding: 12px;
+  display: block;
+  min-height: 44px;
+  line-height: 44px;
+  padding: 0 12px;
   border-radius: 6px;
 }
 
