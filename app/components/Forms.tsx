@@ -660,16 +660,16 @@ export function AppointmentForm({
           <div className="two-fields">
             <label>
               Patient name
-              <input value={form.patientName} onChange={(event) => update("patientName", event.target.value)} required />
+              <input value={form.patientName} onChange={(event) => update("patientName", event.target.value)} autoComplete="name" autoCapitalize="words" required />
             </label>
             <label>
               Mobile number
-              <input value={form.phone} onChange={(event) => update("phone", event.target.value)} inputMode="tel" required />
+              <input value={form.phone} onChange={(event) => update("phone", event.target.value)} type="tel" inputMode="numeric" pattern="[6-9][0-9]{9}" maxLength={10} autoComplete="tel" title="Enter a 10-digit mobile number starting with 6-9" required />
             </label>
           </div>
           <label>
             Email
-            <input value={form.email} onChange={(event) => update("email", event.target.value)} type="email" required />
+            <input value={form.email} onChange={(event) => update("email", event.target.value)} type="email" inputMode="email" autoComplete="email" required />
           </label>
           <label>
             Concern / reason for visit
@@ -890,11 +890,11 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
       <div className="two-fields">
         <label>
           Patient name
-          <input value={form.patientName} onChange={(event) => update("patientName", event.target.value)} required />
+          <input value={form.patientName} onChange={(event) => update("patientName", event.target.value)} autoComplete="name" autoCapitalize="words" required />
         </label>
         <label>
           Mobile number
-          <input value={form.phone} onChange={(event) => update("phone", event.target.value)} inputMode="tel" required />
+          <input value={form.phone} onChange={(event) => update("phone", event.target.value)} type="tel" inputMode="numeric" pattern="[6-9][0-9]{9}" maxLength={10} autoComplete="tel" title="Enter a 10-digit mobile number starting with 6-9" required />
         </label>
       </div>
       <label>
@@ -1077,20 +1077,20 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
       <div className="two-fields">
         <label>
           Name
-          <input value={form.name} onChange={(event) => update("name", event.target.value)} required />
+          <input value={form.name} onChange={(event) => update("name", event.target.value)} autoComplete="name" autoCapitalize="words" required />
         </label>
         <label>
           Phone
-          <input value={form.phone} onChange={(event) => update("phone", event.target.value)} inputMode="tel" />
+          <input value={form.phone} onChange={(event) => update("phone", event.target.value)} type="tel" inputMode="numeric" pattern="[6-9][0-9]{9}" maxLength={10} autoComplete="tel" title="Enter a 10-digit mobile number starting with 6-9" />
         </label>
       </div>
       <label>
         Email
-        <input value={form.email} onChange={(event) => update("email", event.target.value)} type="email" required />
+        <input value={form.email} onChange={(event) => update("email", event.target.value)} type="email" inputMode="email" autoComplete="email" required />
       </label>
       <label>
         Subject
-        <input value={form.subject} onChange={(event) => update("subject", event.target.value)} />
+        <input value={form.subject} onChange={(event) => update("subject", event.target.value)} autoComplete="off" />
       </label>
       <label>
         Message
