@@ -1798,6 +1798,42 @@ button:disabled {
   }
 }
 
+/* A11y: visible keyboard focus (only shows for keyboard/tab users, not mouse clicks) */
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible,
+.nav-appointment:focus-visible,
+.button:focus-visible,
+.small-button:focus-visible,
+.arrow-link:focus-visible {
+  outline: 3px solid var(--blue);
+  outline-offset: 2px;
+}
+
+/* A11y: respect the OS "reduce motion" setting site-wide */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .facility-card:hover,
+  .department-card:hover,
+  .quick-card:hover,
+  .blog-card:hover,
+  .career-card:hover,
+  .testimonial-card:hover,
+  .button:hover,
+  .small-button:hover,
+  .nav-appointment:hover,
+  .whatsapp-float:hover {
+    transform: none !important;
+  }
+}
+
 .whatsapp-float {
   position: fixed;
   bottom: calc(80px + env(safe-area-inset-bottom));
