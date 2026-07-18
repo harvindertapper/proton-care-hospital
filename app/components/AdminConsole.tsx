@@ -1801,6 +1801,53 @@ function TimingManager({
   );
 }
 
+// Downscale + re-encode an image File in the browser before upload so mobile
+// users don't download full-size desktop images. Zero-cost: runs entirely in the
+// browser at upload time. Non-image files and animated GIFs pass through
+// unchanged, and it falls back to the original file if anything fails or if the
+// re-encoded result is not smaller.
+async function compressImageForUpload(
+  file: File,
+  maxEdge = 1600,
+  quality = 0.8
+): Promise<File> {
+  if (!file.type.startsWith("image/") || file.type === "image/gif") {
+    return file;
+  }
+  try {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(new Error("Could not read file."));
+      reader.readAsDataURL(file);
+    });
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("Could not load image."));
+      image.src = dataUrl;
+    });
+    const longest = Math.max(img.width, img.height);
+    const scale = longest > maxEdge ? maxEdge / longest : 1;
+    const width = Math.round(img.width * scale);
+    const height = Math.round(img.height * scale);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return file;
+    ctx.drawImage(img, 0, 0, width, height);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob((b) => resolve(b), "image/webp", quality)
+    );
+    if (!blob || blob.size >= file.size) return file;
+    const baseName = file.name.replace(/\.[^./\\]+$/, "") || "upload";
+    return new File([blob], `${baseName}.webp`, { type: "image/webp" });
+  } catch {
+    return file;
+  }
+}
+
 function ImageCropUploader({
   onUpload,
   onComplete,
@@ -2370,8 +2417,9 @@ function MediaManager({
     setUploading(true);
     setMessage("");
     try {
+      const optimized = await compressImageForUpload(file);
       const formData = new FormData();
-      formData.append("file", file);
+      formData.append("file", optimized);
       formData.append("purpose", purpose);
       formData.append("consentNote", consentNote);
       await onUpload(formData);
