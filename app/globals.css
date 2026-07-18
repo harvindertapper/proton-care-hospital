@@ -1742,6 +1742,16 @@ button:disabled {
   .section {
     padding: 44px 0;
   }
+
+  .doctor-card {
+    grid-template-columns: 1fr;
+  }
+
+  .doctor-photo img,
+  .doctor-placeholder {
+    min-height: 0;
+    height: 220px;
+  }
 }
 
 .scroll-reveal {
