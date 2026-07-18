@@ -1169,6 +1169,34 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
 // ContactForm
 // ---------------------------------------------------------------------------
 
+// Per-field validation for the contact form. Returns an empty string when the
+// field is valid, otherwise a short, user-friendly message. Phone is optional,
+// but if provided it must be a valid 10-digit Indian mobile number.
+function contactFieldError(
+  name: "name" | "phone" | "email" | "message",
+  form: { name: string; phone: string; email: string; message: string }
+): string {
+  switch (name) {
+    case "name":
+      return form.name.trim() ? "" : "Please enter your name.";
+    case "phone": {
+      const phone = form.phone.trim();
+      if (!phone) return ""; // optional field
+      return /^[6-9]\d{9}$/.test(phone)
+        ? ""
+        : "Enter a valid 10-digit mobile number starting with 6-9.";
+    }
+    case "email":
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())
+        ? ""
+        : "Enter a valid email address.";
+    case "message":
+      return form.message.trim() ? "" : "Please enter a message.";
+    default:
+      return "";
+  }
+}
+
 export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string }) {
   type ContactFormState = {
     name: string;
@@ -1191,6 +1219,10 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [success, setSuccess] = useState(false);
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const markTouched = useCallback((name: string) => {
+    setTouched((current) => ({ ...current, [name]: true }));
+  }, []);
 
   const [idempotencyKey, setIdempotencyKey] = useState("");
   const [mounted] = useState(() => typeof window !== "undefined");
@@ -1288,6 +1320,7 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
       setSuccess(true);
       setNotice(String(data.message || "Message received."));
       setForm(emptyForm);
+      setTouched({});
       setTurnstileToken("");
       setTurnstileNonce((n) => n + 1);
       // Clear draft on successful submit
@@ -1312,16 +1345,19 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
       <div className="two-fields">
         <label>
           Name
-          <input value={form.name} onChange={(event) => update("name", event.target.value)} autoComplete="name" autoCapitalize="words" required />
+          <input value={form.name} onChange={(event) => update("name", event.target.value)} onBlur={() => markTouched("name")} aria-invalid={touched.name && Boolean(contactFieldError("name", form))} autoComplete="name" autoCapitalize="words" required />
+          <FieldError show={Boolean(touched.name)} message={contactFieldError("name", form)} />
         </label>
         <label>
           Phone
-          <input value={form.phone} onChange={(event) => update("phone", event.target.value)} type="tel" inputMode="numeric" pattern="[6-9][0-9]{9}" maxLength={10} autoComplete="tel" title="Enter a 10-digit mobile number starting with 6-9" />
+          <input value={form.phone} onChange={(event) => update("phone", event.target.value)} onBlur={() => markTouched("phone")} aria-invalid={touched.phone && Boolean(contactFieldError("phone", form))} type="tel" inputMode="numeric" pattern="[6-9][0-9]{9}" maxLength={10} autoComplete="tel" title="Enter a 10-digit mobile number starting with 6-9" />
+          <FieldError show={Boolean(touched.phone)} message={contactFieldError("phone", form)} />
         </label>
       </div>
       <label>
         Email
-        <input value={form.email} onChange={(event) => update("email", event.target.value)} type="email" inputMode="email" autoComplete="email" required />
+        <input value={form.email} onChange={(event) => update("email", event.target.value)} onBlur={() => markTouched("email")} aria-invalid={touched.email && Boolean(contactFieldError("email", form))} type="email" inputMode="email" autoComplete="email" required />
+        <FieldError show={Boolean(touched.email)} message={contactFieldError("email", form)} />
       </label>
       <label>
         Subject
@@ -1329,7 +1365,8 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
       </label>
       <label>
         Message
-        <textarea rows={5} value={form.message} onChange={(event) => update("message", event.target.value)} required />
+        <textarea rows={5} value={form.message} onChange={(event) => update("message", event.target.value)} onBlur={() => markTouched("message")} aria-invalid={touched.message && Boolean(contactFieldError("message", form))} required />
+        <FieldError show={Boolean(touched.message)} message={contactFieldError("message", form)} />
       </label>
       <TurnstileBox key={turnstileNonce} siteKey={turnstileSiteKey} onToken={handleTurnstileToken} />
       <div style={{ display: "flex", gap: "10px", marginTop: "6px", flexWrap: "wrap" }}>
