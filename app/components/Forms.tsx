@@ -55,6 +55,26 @@ function todayIso() {
   return now.toISOString().slice(0, 10);
 }
 
+// Returns true only when the appointment form has real user-entered content.
+// Used to avoid persisting — or offering to restore — a blank draft.
+// Note: requestedDate defaults to today and "Manual Allocation" is auto-set for
+// untimed departments, so neither counts as meaningful on its own.
+function hasMeaningfulDraft(form: {
+  patientName: string;
+  phone: string;
+  email: string;
+  requestedTime: string;
+  concern: string;
+}): boolean {
+  return Boolean(
+    form.patientName.trim() ||
+      form.phone.trim() ||
+      form.email.trim() ||
+      form.concern.trim() ||
+      (form.requestedTime.trim() && form.requestedTime !== "Manual Allocation")
+  );
+}
+
 function FieldMessage({ message, success }: { message: string; success?: boolean }) {
   if (!message) return null;
   return (
@@ -372,8 +392,21 @@ export function AppointmentForm({
           localStorage.removeItem("pch_appointment_draft_ts");
           return;
         }
-        // Draft is valid — offer it via banner
-        const draftForm = { ...emptyForm, ...(savedForm as Partial<AppointmentFormState>) };
+        // Draft is valid — but only offer it when it actually has meaningful
+        // content, so we never surface a banner for a blank draft (including
+        // legacy blank drafts saved by the old bug). Consent is reset per
+        // session and must be re-checked by the user.
+        const draftForm = {
+          ...emptyForm,
+          ...(savedForm as Partial<AppointmentFormState>),
+          consent: false,
+        };
+        if (!hasMeaningfulDraft(draftForm)) {
+          localStorage.removeItem("pch_appointment_draft");
+          localStorage.removeItem("pch_appointment_dept");
+          localStorage.removeItem("pch_appointment_draft_ts");
+          return;
+        }
         setPendingDraft({
           form: draftForm,
           dept: typeof savedDept === "string" ? savedDept : departmentSlug,
@@ -407,22 +440,40 @@ export function AppointmentForm({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-save on every change; write companion timestamp for 30-min TTL check.
+  // Auto-save on every change — but never on the initial mount, and only when
+  // the form has meaningful content. This prevents persisting a blank draft
+  // (the old bug) and prevents clobbering a real saved draft that the restore
+  // banner may currently be offering. Writes a companion timestamp for the
+  // 30-min TTL check.
+  const draftHydratedRef = useRef(false);
   useEffect(() => {
-    if (mounted) {
-      import("@/app/lib/cryptoStorage").then((m) => {
-        m.encryptAndSave("pch_appointment_draft", {
-          patientName: form.patientName,
-          phone: form.phone,
-          email: form.email,
-          requestedDate: form.requestedDate,
-          requestedTime: form.requestedTime,
-          concern: form.concern,
-          consent: form.consent,
-        });
-        localStorage.setItem("pch_appointment_draft_ts", String(Date.now()));
-      });
+    if (!mounted) return;
+    // Skip the very first run (mount). At this point `form` is still empty and
+    // the mount-detection effect above may be offering a saved draft to restore;
+    // saving/removing now would clobber that draft or persist a blank one.
+    if (!draftHydratedRef.current) {
+      draftHydratedRef.current = true;
+      return;
     }
+    if (!hasMeaningfulDraft(form)) {
+      // User cleared the form: don't leave a blank draft behind.
+      localStorage.removeItem("pch_appointment_draft");
+      localStorage.removeItem("pch_appointment_dept");
+      localStorage.removeItem("pch_appointment_draft_ts");
+      return;
+    }
+    import("@/app/lib/cryptoStorage").then((m) => {
+      m.encryptAndSave("pch_appointment_draft", {
+        patientName: form.patientName,
+        phone: form.phone,
+        email: form.email,
+        requestedDate: form.requestedDate,
+        requestedTime: form.requestedTime,
+        concern: form.concern,
+        consent: form.consent,
+      });
+      localStorage.setItem("pch_appointment_draft_ts", String(Date.now()));
+    });
   }, [form, mounted]);
 
   useEffect(() => {
