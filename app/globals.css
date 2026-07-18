@@ -1344,6 +1344,7 @@ button:disabled {
   border-radius: 16px;
   background: white;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  -webkit-overflow-scrolling: touch;
 }
 
 .admin-table {
@@ -1760,6 +1761,22 @@ button:disabled {
   .flow-card .button,
   .flow-card .button.primary {
     width: 100%;
+  }
+
+  .admin-grid.stats {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-workspace {
+    padding: 14px;
+  }
+
+  .admin-login-card {
+    padding: 24px;
+  }
+
+  .admin-top h1 {
+    font-size: 22px;
   }
 }
 
