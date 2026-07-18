@@ -20,6 +20,7 @@
   --shadow-premium-hover: 0 20px 40px -10px rgba(11, 37, 69, 0.14);
   --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   --radius-premium: 16px;
+  --radius-control: 10px;
 }
 
 * {
@@ -173,7 +174,7 @@ textarea {
   align-items: center;
   justify-content: center;
   gap: 9px;
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   border: 1px solid transparent;
   font-weight: 700;
   line-height: 1;
@@ -695,7 +696,7 @@ button:disabled {
   gap: 10px;
   padding: 0 14px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   background: white;
   transition: var(--transition-smooth);
 }
@@ -722,7 +723,7 @@ button:disabled {
 .admin-login-card input {
   width: 100%;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   background: white;
   color: var(--ink);
   outline: 0;
@@ -758,9 +759,9 @@ button:disabled {
   min-height: 228px;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-premium);
   background: white;
-  box-shadow: 0 18px 45px rgba(8, 37, 61, 0.06);
+  box-shadow: var(--shadow-premium);
 }
 
 .doctor-photo img,
@@ -829,7 +830,7 @@ button:disabled {
   gap: 10px;
   padding: 16px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-premium);
   background: white;
 }
 
@@ -872,9 +873,9 @@ button:disabled {
 .flow-card {
   padding: 26px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-premium);
   background: white;
-  box-shadow: 0 20px 55px rgba(8, 37, 61, 0.08);
+  box-shadow: var(--shadow-premium);
 }
 
 .flow-card label,
@@ -1017,7 +1018,7 @@ button:disabled {
   display: grid;
   gap: 14px;
   padding: 24px;
-  border-radius: 8px;
+  border-radius: var(--radius-premium);
   color: white;
   background: var(--navy);
 }
