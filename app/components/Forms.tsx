@@ -10,6 +10,9 @@ declare global {
         callback: (token: string) => void;
         "expired-callback"?: () => void;
         "error-callback"?: () => void;
+        retry?: "auto" | "never";
+        "retry-interval"?: number;
+        theme?: "auto" | "light" | "dark";
       }) => string;
       remove: (id: string) => void;
       reset: (id?: string) => void;
@@ -97,71 +100,110 @@ function TurnstileBox({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const widgetIdRef = useRef<string | null>(null);
+  const autoRetryRef = useRef(0);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+
+  const renderWidget = useCallback(() => {
+    if (!siteKey || !window.turnstile || !containerRef.current) return;
+    if (widgetIdRef.current !== null) {
+      try { window.turnstile.remove(widgetIdRef.current); } catch {}
+      widgetIdRef.current = null;
+    }
+    widgetIdRef.current = window.turnstile.render(containerRef.current, {
+      sitekey: siteKey,
+      retry: "never",
+      callback: (token: string) => {
+        autoRetryRef.current = 0;
+        setStatus("ready");
+        onToken(token);
+      },
+      "expired-callback": () => {
+        onToken("");
+        if (widgetIdRef.current !== null && window.turnstile) {
+          try { window.turnstile.reset(widgetIdRef.current); } catch {}
+        }
+      },
+      "error-callback": () => {
+        onToken("");
+        if (autoRetryRef.current < 2 && widgetIdRef.current !== null && window.turnstile) {
+          autoRetryRef.current += 1;
+          try { window.turnstile.reset(widgetIdRef.current); } catch {}
+        } else {
+          setStatus("error");
+        }
+      },
+    });
+  }, [siteKey, onToken]);
 
   useEffect(() => {
-    // No key configured (preview/local): auto-pass exactly as before.
     if (!siteKey) {
       onToken("preview-turnstile");
       return;
     }
-
     let cancelled = false;
-
-    // Load the script once, in EXPLICIT render mode.
     const SCRIPT_SELECTOR = "script[data-pch-turnstile]";
     if (!document.querySelector(SCRIPT_SELECTOR)) {
       const script = document.createElement("script");
-      script.src =
-        "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
       script.async = true;
       script.defer = true;
       script.dataset.pchTurnstile = "true";
       document.head.appendChild(script);
     }
-
-    // Poll until the API is ready, then explicitly render into OUR container.
     const start = Date.now();
     const timer = window.setInterval(() => {
       if (cancelled) return;
-      if (
-        window.turnstile &&
-        containerRef.current &&
-        widgetIdRef.current === null
-      ) {
-        widgetIdRef.current = window.turnstile.render(containerRef.current, {
-          sitekey: siteKey,
-          callback: (token: string) => onToken(token),
-          "expired-callback": () => onToken(""),
-          "error-callback": () => onToken(""),
-        });
+      if (window.turnstile && containerRef.current && widgetIdRef.current === null) {
         window.clearInterval(timer);
+        renderWidget();
       } else if (Date.now() - start > 15000) {
         window.clearInterval(timer);
+        if (widgetIdRef.current === null) setStatus("error");
       }
     }, 100);
-
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       if (widgetIdRef.current !== null && window.turnstile) {
-        try {
-          window.turnstile.remove(widgetIdRef.current);
-        } catch {}
+        try { window.turnstile.remove(widgetIdRef.current); } catch {}
       }
       widgetIdRef.current = null;
     };
-  }, [siteKey, onToken]);
+  }, [siteKey, onToken, renderWidget]);
+
+  const manualRetry = useCallback(() => {
+    autoRetryRef.current = 0;
+    setStatus("ready");
+    renderWidget();
+  }, [renderWidget]);
 
   if (!siteKey) {
     return (
       <div className="turnstile-preview">
         <LockKeyhole size={18} aria-hidden="true" />
-        <span>Security verification active.</span>
+        Security verification active.
       </div>
     );
   }
 
-  return <div ref={containerRef} className="cf-turnstile-container" />;
+  return (
+    <div>
+      <div ref={containerRef} className="cf-turnstile-container" />
+      {status === "error" ? (
+        <p role="status" aria-live="polite" style={{ fontSize: "12px", marginTop: "6px" }}>
+          Verification failed to load.{" "}
+          <button
+            type="button"
+            className="button subtle"
+            style={{ padding: "2px 10px", fontSize: "12px" }}
+            onClick={manualRetry}
+          >
+            Retry
+          </button>
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 async function postJson(url: string, payload: Record<string, unknown>) {
