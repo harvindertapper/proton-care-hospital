@@ -923,24 +923,90 @@ button:disabled {
 
 .flow-steps {
   display: flex;
-  gap: 10px;
-  margin-bottom: 22px;
+  align-items: flex-start;
+  gap: 0;
+  margin-bottom: 26px;
 }
 
-.flow-steps button {
-  width: 36px;
-  height: 36px;
-  border: 1px solid var(--line);
+.flow-step {
+  flex: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+
+/* connector line from the previous step, centered on the dot row */
+.flow-step:not(:first-child)::before {
+  content: "";
+  position: absolute;
+  top: 17px;
+  left: -50%;
+  right: 50%;
+  height: 2px;
+  background: var(--line);
+  z-index: 0;
+}
+
+.flow-step.active:not(:first-child)::before,
+.flow-step.done:not(:first-child)::before {
+  background: var(--blue);
+}
+
+.flow-step-dot {
+  position: relative;
+  z-index: 1;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 999px;
+  border: 2px solid var(--line);
   background: white;
   color: var(--navy);
-  font-weight: 900;
+  font-weight: 800;
+  font-size: 14px;
+  line-height: 1;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
 }
 
-.flow-steps button.active {
-  color: white;
-  background: var(--blue);
+.flow-step.active .flow-step-dot {
   border-color: var(--blue);
+  background: var(--blue);
+  color: white;
+  box-shadow: 0 0 0 4px rgba(2, 132, 199, 0.15);
+}
+
+.flow-step.done .flow-step-dot {
+  border-color: var(--green);
+  background: var(--green);
+  color: white;
+}
+
+.flow-step-label {
+  font-size: 12px;
+  line-height: 1.25;
+  text-align: center;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.flow-step.active .flow-step-label {
+  color: var(--navy);
+  font-weight: 700;
+}
+
+@media (max-width: 480px) {
+  .flow-step-label {
+    font-size: 11px;
+  }
 }
 
 .field-hint {

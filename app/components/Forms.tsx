@@ -698,16 +698,20 @@ export function AppointmentForm({
       <div className="flow-steps" aria-label="Appointment request steps">
         {[1, 2, 3].map((item) => {
           const stepNames = ["Department", "Patient Details", "Confirm"];
+          const status = step === item ? "active" : step > item ? "done" : "";
           return (
             <button
               type="button"
-              className={step === item ? "active" : ""}
+              className={`flow-step ${status}`.trim()}
               key={item}
               onClick={() => setStep(item)}
               aria-label={`Step ${item}: ${stepNames[item - 1]}${step === item ? " (current)" : ""}`}
               aria-current={step === item ? "step" : undefined}
             >
-              {item}
+              <span className="flow-step-dot" aria-hidden="true">
+                {step > item ? "✓" : item}
+              </span>
+              <span className="flow-step-label">{stepNames[item - 1]}</span>
             </button>
           );
         })}
