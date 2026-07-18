@@ -297,9 +297,9 @@ export function ArrowLink({ href, children }: { href: string; children: React.Re
 
 export function Breadcrumbs({ paths }: { paths: { label: string; href?: string }[] }) {
   return (
-    <nav aria-label="Breadcrumb" className="bg-slate-100 border-b border-slate-200/50 py-3 text-sm">
-      <div className="container max-w-7xl mx-auto px-4 flex items-center gap-2 text-slate-500 font-medium">
-        <Link href="/" className="hover:text-teal-600 flex items-center gap-1.5 transition-colors text-decoration-none" style={{ display: "inline-flex", alignItems: "center" }}>
+    <nav aria-label="Breadcrumb" className="bg-[#f8fafc] border-b border-[#e2e8f0] py-3 text-sm">
+      <div className="container max-w-7xl mx-auto px-4 flex items-center gap-2 text-[#475569] font-medium">
+        <Link href="/" className="hover:text-[#0284c7] flex items-center gap-1.5 transition-colors text-decoration-none" style={{ display: "inline-flex", alignItems: "center" }}>
           <Home size={15} />
           <span>Home</span>
         </Link>
@@ -311,7 +311,7 @@ export function Breadcrumbs({ paths }: { paths: { label: string; href?: string }
               {isLast || !p.href ? (
                 <span className="text-slate-800 font-semibold">{p.label}</span>
               ) : (
-                <Link href={p.href} className="hover:text-teal-600 transition-colors text-decoration-none">
+                <Link href={p.href} className="hover:text-[#0284c7] transition-colors text-decoration-none">
                   {p.label}
                 </Link>
               )}
