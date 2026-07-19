@@ -2199,3 +2199,36 @@ video {
 .cf-turnstile-container iframe {
   max-width: 100%;
 }
+
+/* Mobile emergency spacing and floating-action collision fix */
+@media (max-width: 780px) {
+  .emergency-grid {
+    min-height: 0;
+    gap: 14px;
+    padding-top: 26px;
+    padding-bottom: 30px;
+  }
+  .emergency-grid > .button {
+    width: 100%;
+    justify-content: center;
+  }
+  /*
+  WhatsApp is already present in the fixed mobile action bar.
+  Hide the duplicate floating control so it cannot cover page content.
+  */
+  .whatsapp-float {
+    display: none;
+  }
+  /*
+  Keep one accessible Help/Triage launcher above the mobile action bar,
+  but make its resting position more compact and less intrusive.
+  */
+  .triage-widget-float {
+    right: 12px;
+    bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+  .triage-widget-float > button {
+    width: 48px !important;
+    height: 48px !important;
+  }
+}
