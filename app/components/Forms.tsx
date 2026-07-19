@@ -291,14 +291,35 @@ function TurnstileBox({
   );
 }
 
+class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(message: string, status: number, code = "") {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 async function postJson(url: string, payload: Record<string, unknown>) {
   const response = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
   });
+
   const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!response.ok) throw new Error(String(data.error || "Request failed. Please try again."));
+
+  if (!response.ok) {
+    throw new ApiError(
+      String(data.error || "Request failed. Please try again."),
+      response.status,
+      typeof data.code === "string" ? data.code : "",
+    );
+  }
+
   return data;
 }
 
@@ -1178,20 +1199,34 @@ function contactFieldError(
 ): string {
   switch (name) {
     case "name":
-      return form.name.trim() ? "" : "Please enter your name.";
+      return form.name.trim().length >= 2
+        ? ""
+        : "Please enter at least 2 characters for your name.";
+
     case "phone": {
       const phone = form.phone.trim();
-      if (!phone) return ""; // optional field
+
+      if (!phone) return "";
+
       return /^[6-9]\d{9}$/.test(phone)
         ? ""
         : "Enter a valid 10-digit mobile number starting with 6-9.";
     }
-    case "email":
-      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())
+
+    case "email": {
+      const email = form.email.trim().toLowerCase();
+
+      return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) &&
+        email.length <= 160
         ? ""
         : "Enter a valid email address.";
+    }
+
     case "message":
-      return form.message.trim() ? "" : "Please enter a message.";
+      return form.message.trim().length >= 8
+        ? ""
+        : "Please enter at least 8 characters in your message.";
+
     default:
       return "";
   }
@@ -1300,6 +1335,23 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    const requiredContactFields = ["name", "phone", "email", "message"] as const;
+    const contactErrors = requiredContactFields
+      .map((field) => contactFieldError(field, form))
+      .filter(Boolean);
+
+    if (contactErrors.length > 0) {
+      setTouched({
+        name: true,
+        phone: true,
+        email: true,
+        message: true,
+      });
+      setSuccess(false);
+      setNotice(contactErrors[0]);
+      return;
+    }
+
     let effectiveToken = turnstileToken;
     if (turnstileSiteKey && !effectiveToken) {
       effectiveToken = readLiveTurnstileToken();
@@ -1329,8 +1381,15 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
       localStorage.removeItem("pch_contact_idempotency");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Could not send message.");
-      setTurnstileToken("");
-      setTurnstileNonce((n) => n + 1);
+
+      const isContactValidationError =
+        error instanceof ApiError &&
+        error.code === "CONTACT_VALIDATION_FAILED";
+
+      if (!isContactValidationError) {
+        setTurnstileToken("");
+        setTurnstileNonce((n) => n + 1);
+      }
     } finally {
       setBusy(false);
     }
@@ -1345,7 +1404,19 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
       <div className="two-fields">
         <label>
           Name
-          <input value={form.name} onChange={(event) => update("name", event.target.value)} onBlur={() => markTouched("name")} aria-invalid={touched.name && Boolean(contactFieldError("name", form))} autoComplete="name" autoCapitalize="words" required />
+          <input
+            value={form.name}
+            onChange={(event) => update("name", event.target.value)}
+            onBlur={() => markTouched("name")}
+            aria-invalid={
+              touched.name && Boolean(contactFieldError("name", form))
+            }
+            autoComplete="name"
+            autoCapitalize="words"
+            minLength={2}
+            maxLength={100}
+            required
+          />
           <FieldError show={Boolean(touched.name)} message={contactFieldError("name", form)} />
         </label>
         <label>
@@ -1356,7 +1427,19 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
       </div>
       <label>
         Email
-        <input value={form.email} onChange={(event) => update("email", event.target.value)} onBlur={() => markTouched("email")} aria-invalid={touched.email && Boolean(contactFieldError("email", form))} type="email" inputMode="email" autoComplete="email" required />
+        <input
+          value={form.email}
+          onChange={(event) => update("email", event.target.value)}
+          onBlur={() => markTouched("email")}
+          aria-invalid={
+            touched.email && Boolean(contactFieldError("email", form))
+          }
+          type="email"
+          inputMode="email"
+          autoComplete="email"
+          maxLength={160}
+          required
+        />
         <FieldError show={Boolean(touched.email)} message={contactFieldError("email", form)} />
       </label>
       <label>
@@ -1365,7 +1448,18 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
       </label>
       <label>
         Message
-        <textarea rows={5} value={form.message} onChange={(event) => update("message", event.target.value)} onBlur={() => markTouched("message")} aria-invalid={touched.message && Boolean(contactFieldError("message", form))} required />
+        <textarea
+          rows={5}
+          value={form.message}
+          onChange={(event) => update("message", event.target.value)}
+          onBlur={() => markTouched("message")}
+          aria-invalid={
+            touched.message && Boolean(contactFieldError("message", form))
+          }
+          minLength={8}
+          maxLength={1400}
+          required
+        />
         <FieldError show={Boolean(touched.message)} message={contactFieldError("message", form)} />
       </label>
       <TurnstileBox key={turnstileNonce} siteKey={turnstileSiteKey} onToken={handleTurnstileToken} />
