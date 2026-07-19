@@ -63,6 +63,8 @@ const tableStatements = [
     rating INTEGER,
     message TEXT NOT NULL,
     consent INTEGER NOT NULL DEFAULT 0,
+    public_consent INTEGER NOT NULL DEFAULT 0,
+    publication_name TEXT NOT NULL DEFAULT 'anonymous',
     otp_verified INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'NEEDS_REVIEW',
     is_visible INTEGER NOT NULL DEFAULT 0,
@@ -271,6 +273,8 @@ const adminUserMigrationStatements = [
   // Blog metadata migrations
   "ALTER TABLE blog_posts ADD COLUMN author TEXT",
   "ALTER TABLE blog_posts ADD COLUMN reviewer TEXT",
+  "ALTER TABLE feedback ADD COLUMN public_consent INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE feedback ADD COLUMN publication_name TEXT NOT NULL DEFAULT 'anonymous'",
 ];
 
 export async function getD1() {

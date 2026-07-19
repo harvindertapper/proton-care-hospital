@@ -969,6 +969,56 @@ export function AppointmentForm({
 // FeedbackForm
 // ---------------------------------------------------------------------------
 
+function hasMeaningfulFeedbackDraft(form: {
+  patientName: string;
+  phone: string;
+  message: string;
+}): boolean {
+  return Boolean(
+    form.patientName.trim() ||
+      form.phone.trim() ||
+      form.message.trim()
+  );
+}
+
+function feedbackFieldError(
+  name: "patientName" | "phone" | "rating" | "message",
+  form: {
+    patientName: string;
+    phone: string;
+    rating: string;
+    message: string;
+  }
+): string {
+  switch (name) {
+    case "patientName":
+      return form.patientName.trim().length >= 2
+        ? ""
+        : "Please enter at least 2 characters for the patient name.";
+
+    case "phone":
+      return /^[6-9]\d{9}$/.test(form.phone.trim())
+        ? ""
+        : "Enter a valid 10-digit mobile number starting with 6-9.";
+
+    case "rating": {
+      const rating = Number(form.rating);
+
+      return Number.isInteger(rating) && rating >= 1 && rating <= 5
+        ? ""
+        : "Please select a rating from 1 to 5.";
+    }
+
+    case "message":
+      return form.message.trim().length >= 10
+        ? ""
+        : "Please enter at least 10 characters in your feedback.";
+
+    default:
+      return "";
+  }
+}
+
 export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }) {
   type FeedbackFormState = {
     patientName: string;
@@ -996,9 +1046,17 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
     setTurnstileToken(token);
   }, []);
   const [publicConsent, setPublicConsent] = useState(false);
+  const [publicationName, setPublicationName] = useState<
+    "named" | "anonymous"
+  >("anonymous");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [success, setSuccess] = useState(false);
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+
+  const markFeedbackTouched = useCallback((name: string) => {
+    setTouched((current) => ({ ...current, [name]: true }));
+  }, []);
 
   const [idempotencyKey, setIdempotencyKey] = useState("");
   const [mounted] = useState(() => typeof window !== "undefined");
@@ -1037,7 +1095,19 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
           localStorage.removeItem("pch_feedback_draft_ts");
           return;
         }
-        setPendingDraft({ ...emptyForm, ...(saved as Partial<FeedbackFormState>) });
+        const draftForm: FeedbackFormState = {
+          ...emptyForm,
+          ...(saved as Partial<FeedbackFormState>),
+          consent: false,
+        };
+
+        if (!hasMeaningfulFeedbackDraft(draftForm)) {
+          localStorage.removeItem("pch_feedback_draft");
+          localStorage.removeItem("pch_feedback_draft_ts");
+          return;
+        }
+
+        setPendingDraft(draftForm);
       });
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1045,7 +1115,14 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
 
   const restoreDraft = useCallback(() => {
     if (!pendingDraft) return;
-    setForm(pendingDraft);
+
+    setForm({
+      ...pendingDraft,
+      consent: false,
+    });
+    setPublicConsent(false);
+    setPublicationName("anonymous");
+    setTouched({});
     setPendingDraft(null);
   }, [pendingDraft]);
 
@@ -1058,6 +1135,10 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
   const clearForm = useCallback(() => {
     setForm(emptyForm);
     setPublicConsent(false);
+    setPublicationName("anonymous");
+    setTouched({});
+    setMessage("");
+    setSuccess(false);
     localStorage.removeItem("pch_feedback_draft");
     localStorage.removeItem("pch_feedback_draft_ts");
     setPendingDraft(null);
@@ -1065,23 +1146,70 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
   }, []);
 
   // Auto-save with 30-min companion timestamp.
+  const feedbackDraftHydratedRef = useRef(false);
+
   useEffect(() => {
-    if (mounted) {
-      import("@/app/lib/cryptoStorage").then((m) => {
-        m.encryptAndSave("pch_feedback_draft", {
-          patientName: form.patientName,
-          phone: form.phone,
-          rating: form.rating,
-          message: form.message,
-          consent: form.consent,
-        });
-        localStorage.setItem("pch_feedback_draft_ts", String(Date.now()));
-      });
+    if (!mounted) return;
+
+    if (!feedbackDraftHydratedRef.current) {
+      feedbackDraftHydratedRef.current = true;
+      return;
     }
+
+    if (!hasMeaningfulFeedbackDraft(form)) {
+      localStorage.removeItem("pch_feedback_draft");
+      localStorage.removeItem("pch_feedback_draft_ts");
+      return;
+    }
+
+    import("@/app/lib/cryptoStorage").then((storage) => {
+      storage.encryptAndSave("pch_feedback_draft", {
+        patientName: form.patientName,
+        phone: form.phone,
+        rating: form.rating,
+        message: form.message,
+        consent: false,
+        company: "",
+      });
+
+      localStorage.setItem(
+        "pch_feedback_draft_ts",
+        String(Date.now()),
+      );
+    });
   }, [form, mounted]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    const feedbackFields = [
+      "patientName",
+      "phone",
+      "rating",
+      "message",
+    ] as const;
+
+    const feedbackErrors = feedbackFields
+      .map((field) => feedbackFieldError(field, form))
+      .filter(Boolean);
+
+    if (!form.consent) {
+      feedbackErrors.push(
+        "Please accept the review and contact consent checkbox.",
+      );
+    }
+
+    if (feedbackErrors.length > 0) {
+      setTouched({
+        patientName: true,
+        phone: true,
+        rating: true,
+        message: true,
+      });
+      setSuccess(false);
+      setMessage(feedbackErrors[0]);
+      return;
+    }
 
     let effectiveToken = turnstileToken;
     if (turnstileSiteKey && !effectiveToken) {
@@ -1102,13 +1230,20 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
       const data = await postJson("/api/feedback", {
         ...form,
         rating: Number(form.rating),
+        publicConsent,
+        publicationName: publicConsent
+          ? publicationName
+          : "anonymous",
         turnstileToken: effectiveToken,
         idempotencyKey,
       });
       setSuccess(true);
       setMessage(String(data.message || "Feedback submitted for review."));
       setForm(emptyForm);
+      setTouched({});
       setPublicConsent(false);
+      setPublicationName("anonymous");
+      setPendingDraft(null);
       setTurnstileToken("");
       setTurnstileNonce((n) => n + 1);
       // Clear draft on successful submit
@@ -1116,12 +1251,71 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
       localStorage.removeItem("pch_feedback_draft_ts");
       localStorage.removeItem("pch_feedback_idempotency");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not submit feedback.");
-      setTurnstileToken("");
-      setTurnstileNonce((n) => n + 1);
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not submit feedback.",
+      );
+
+      const isFeedbackValidationError =
+        error instanceof ApiError &&
+        error.code === "FEEDBACK_VALIDATION_FAILED";
+
+      if (!isFeedbackValidationError) {
+        setTurnstileToken("");
+        setTurnstileNonce((current) => current + 1);
+      }
     } finally {
       setBusy(false);
     }
+  }
+
+  function submitMoreFeedback() {
+    setSuccess(false);
+    setMessage("");
+    setForm(emptyForm);
+    setTouched({});
+    setPendingDraft(null);
+    setPublicConsent(false);
+    setPublicationName("anonymous");
+    setTurnstileToken("");
+  }
+
+  if (success) {
+    return (
+      <div
+        className="flow-card booking-success"
+        role="status"
+        aria-live="polite"
+      >
+        <div className="booking-success-icon">
+          <CheckCircle2 size={40} aria-hidden="true" />
+        </div>
+
+        <h2 className="booking-success-title">
+          Feedback submitted
+        </h2>
+
+        <p className="booking-success-sub">
+          {message ||
+            "Thank you. Your feedback has been submitted for hospital review."}
+        </p>
+
+        <p className="field-hint">
+          Public display is never automatic. Feedback can appear on the
+          website only when publication consent was provided and hospital
+          staff separately approve it.
+        </p>
+
+        <button
+          type="button"
+          className="button primary"
+          onClick={submitMoreFeedback}
+        >
+          Submit more feedback
+        </button>
+      </div>
+    );
   }
 
   return (
@@ -1133,36 +1327,148 @@ export function FeedbackForm({ turnstileSiteKey }: { turnstileSiteKey?: string }
       <div className="two-fields">
         <label>
           Patient name
-          <input value={form.patientName} onChange={(event) => update("patientName", event.target.value)} autoComplete="name" autoCapitalize="words" required />
+          <input
+            value={form.patientName}
+            onChange={(event) =>
+              update("patientName", event.target.value)
+            }
+            onBlur={() => markFeedbackTouched("patientName")}
+            aria-invalid={
+              touched.patientName &&
+              Boolean(feedbackFieldError("patientName", form))
+            }
+            autoComplete="name"
+            autoCapitalize="words"
+            minLength={2}
+            maxLength={100}
+            required
+          />
+          <FieldError
+            show={Boolean(touched.patientName)}
+            message={feedbackFieldError("patientName", form)}
+          />
         </label>
         <label>
           Mobile number
-          <input value={form.phone} onChange={(event) => update("phone", event.target.value)} type="tel" inputMode="numeric" pattern="[6-9][0-9]{9}" maxLength={10} autoComplete="tel" title="Enter a 10-digit mobile number starting with 6-9" required />
+          <input
+            value={form.phone}
+            onChange={(event) => update("phone", event.target.value)}
+            onBlur={() => markFeedbackTouched("phone")}
+            aria-invalid={
+              touched.phone &&
+              Boolean(feedbackFieldError("phone", form))
+            }
+            type="tel"
+            inputMode="numeric"
+            pattern="[6-9][0-9]{9}"
+            minLength={10}
+            maxLength={10}
+            autoComplete="tel"
+            title="Enter a 10-digit mobile number starting with 6-9"
+            required
+          />
+          <FieldError
+            show={Boolean(touched.phone)}
+            message={feedbackFieldError("phone", form)}
+          />
         </label>
       </div>
       <label>
         Rating
-        <select value={form.rating} onChange={(event) => update("rating", event.target.value)}>
+        <select
+          value={form.rating}
+          onChange={(event) => update("rating", event.target.value)}
+          onBlur={() => markFeedbackTouched("rating")}
+          aria-invalid={
+            touched.rating &&
+            Boolean(feedbackFieldError("rating", form))
+          }
+          required
+        >
           <option value="5">5 - Excellent</option>
           <option value="4">4 - Good</option>
           <option value="3">3 - Average</option>
           <option value="2">2 - Needs attention</option>
           <option value="1">1 - Poor</option>
         </select>
+        <FieldError
+          show={Boolean(touched.rating)}
+          message={feedbackFieldError("rating", form)}
+        />
       </label>
       <label>
         Feedback
-        <textarea rows={5} value={form.message} onChange={(event) => update("message", event.target.value)} required />
+        <textarea
+          rows={5}
+          value={form.message}
+          onChange={(event) => update("message", event.target.value)}
+          onBlur={() => markFeedbackTouched("message")}
+          aria-invalid={
+            touched.message &&
+            Boolean(feedbackFieldError("message", form))
+          }
+          minLength={10}
+          maxLength={1500}
+          required
+        />
+        <FieldError
+          show={Boolean(touched.message)}
+          message={feedbackFieldError("message", form)}
+        />
       </label>
-      <TurnstileBox key={turnstileNonce} siteKey={turnstileSiteKey} onToken={handleTurnstileToken} />
+      <div>
+        <p className="field-hint" style={{ marginBottom: "8px" }}>
+          <strong>Security verification</strong>
+          <br />
+          Complete the CAPTCHA verification before submitting.
+        </p>
+
+        <TurnstileBox
+          key={turnstileNonce}
+          siteKey={turnstileSiteKey}
+          onToken={handleTurnstileToken}
+        />
+      </div>
       <label className="checkbox-field">
         <input type="checkbox" checked={form.consent} onChange={(event) => update("consent", event.target.checked)} required />
         <span>I consent to the hospital reviewing this feedback and contacting me regarding my concerns.</span>
       </label>
-      <label className="checkbox-field" style={{ marginTop: "10px" }}>
-        <input type="checkbox" checked={publicConsent} onChange={(event) => setPublicConsent(event.target.checked)} />
-        <span>I separately consent to the publication of this feedback on the hospital&apos;s website or social-media pages, either with my name or anonymously as selected by me. I understand that I may withdraw this consent.</span>
+      <label
+        className="checkbox-field"
+        style={{ marginTop: "10px" }}
+      >
+        <input
+          type="checkbox"
+          checked={publicConsent}
+          onChange={(event) => {
+            setPublicConsent(event.target.checked);
+
+            if (!event.target.checked) {
+              setPublicationName("anonymous");
+            }
+          }}
+        />
+        <span>I separately consent to this feedback being considered for publication on the hospital website. I understand that publication is optional, requires separate hospital approval, and I may withdraw this consent.</span>
       </label>
+
+      {publicConsent ? (
+        <label>
+          If approved, display my feedback as
+          <select
+            value={publicationName}
+            onChange={(event) =>
+              setPublicationName(
+                event.target.value === "named"
+                  ? "named"
+                  : "anonymous",
+              )
+            }
+          >
+            <option value="anonymous">Anonymous patient</option>
+            <option value="named">Use my submitted patient name</option>
+          </select>
+        </label>
+      ) : null}
       <div style={{ display: "flex", gap: "10px", marginTop: "6px", flexWrap: "wrap" }}>
         <button className="button primary full" type="submit" disabled={busy || !form.consent || (turnstileSiteKey ? !turnstileToken : false)} style={{ flex: 1 }}>
           <Send size={18} aria-hidden="true" /> {busy ? "Processing your request securely..." : "Submit Feedback"}

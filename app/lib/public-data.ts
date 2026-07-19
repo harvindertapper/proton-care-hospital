@@ -89,8 +89,24 @@ export async function getPublishedJobs() {
 export async function getPublishedReviews() {
   try {
     const rows = await query<PublicReview>(
-      "SELECT id, patient_name, rating, message, created_at FROM feedback WHERE status = 'APPROVED' AND is_visible = 1 ORDER BY created_at DESC LIMIT 9",
+      `SELECT
+        id,
+        CASE
+          WHEN publication_name = 'named'
+            THEN patient_name
+          ELSE 'Anonymous patient'
+        END AS patient_name,
+        rating,
+        message,
+        created_at
+      FROM feedback
+      WHERE status = 'APPROVED'
+        AND is_visible = 1
+        AND public_consent = 1
+      ORDER BY created_at DESC
+      LIMIT 9`,
     );
+
     return rows.results || [];
   } catch {
     return [];

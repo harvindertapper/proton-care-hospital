@@ -1266,10 +1266,39 @@ export function AdminConsole({
         {active === "Reviews" ? (
           <DataTable
             rows={adminData.feedback}
-            columns={["patient_name", "rating", "message", "status", "is_visible", "created_at"]}
+            columns={[
+              "patient_name",
+              "rating",
+              "message",
+              "public_consent",
+              "publication_name",
+              "status",
+              "is_visible",
+              "created_at",
+            ]}
             actions={(row) => (
               <div className="table-actions">
-                <button disabled={busy} onClick={() => mutate({ action: "feedback.visibility", id: row.id, isVisible: 1 }, "Feedback approved for public display.")}>
+                <button
+                  disabled={
+                    busy ||
+                    Number(row.public_consent) !== 1
+                  }
+                  title={
+                    Number(row.public_consent) === 1
+                      ? "Approve this feedback for public display"
+                      : "Publication consent was not provided"
+                  }
+                  onClick={() =>
+                    mutate(
+                      {
+                        action: "feedback.visibility",
+                        id: row.id,
+                        isVisible: 1,
+                      },
+                      "Feedback approved for public display.",
+                    )
+                  }
+                >
                   Approve Display
                 </button>
                 <button disabled={busy} onClick={() => mutate({ action: "feedback.visibility", id: row.id, isVisible: 0 }, "Feedback hidden from public display.")}>

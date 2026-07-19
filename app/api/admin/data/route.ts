@@ -255,12 +255,55 @@ async function applyVideo(payload: Record<string, unknown>, actorEmail: string) 
   await audit(actorEmail, "VIDEO_APPROVED", "PatientVideo", id, title);
 }
 
-async function applyFeedbackVisibility(payload: Record<string, unknown>, actorEmail: string) {
+async function applyFeedbackVisibility(
+  payload: Record<string, unknown>,
+  actorEmail: string,
+) {
   const id = clean(payload.id, 120);
   const isVisible = Number(payload.isVisible) === 1 ? 1 : 0;
-  if (!id) throw new Error("Feedback id is required.");
-  await run("UPDATE feedback SET status = ?, is_visible = ? WHERE id = ?", isVisible ? "APPROVED" : "NEEDS_REVIEW", isVisible, id);
-  await audit(actorEmail, "FEEDBACK_VISIBILITY", "Feedback", id, `visible=${isVisible}`);
+
+  if (!id) {
+    throw new Error("Feedback id is required.");
+  }
+
+  const rows = await query<{
+    public_consent: number;
+  }>(
+    "SELECT public_consent FROM feedback WHERE id = ? LIMIT 1",
+    id,
+  );
+
+  const feedback = rows.results?.[0];
+
+  if (!feedback) {
+    throw new Error("Feedback was not found.");
+  }
+
+  if (
+    isVisible === 1 &&
+    Number(feedback.public_consent) !== 1
+  ) {
+    throw new Error(
+      "This feedback cannot be published because explicit publication consent was not provided.",
+    );
+  }
+
+  await run(
+    "UPDATE feedback SET status = ?, is_visible = ? WHERE id = ?",
+    isVisible ? "APPROVED" : "NEEDS_REVIEW",
+    isVisible,
+    id,
+  );
+
+  await audit(
+    actorEmail,
+    "FEEDBACK_VISIBILITY",
+    "Feedback",
+    id,
+    `visible=${isVisible}; publicConsent=${Number(
+      feedback.public_consent,
+    )}`,
+  );
 }
 
 async function applyBlogVisibility(payload: Record<string, unknown>, actorEmail: string) {
