@@ -44,12 +44,69 @@ export function stripComments(sql) {
     .replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
-export function validateMigrationFiles(migrationsDir) {
+export function normalizeSql(sql) {
+  const stripped = stripComments(sql);
+  return stripped.replace(/\s+/g, " ").trim().replace(/;$/, "");
+}
+
+export function parseSqlStatements(sql) {
+  const stripped = stripComments(sql);
+  return stripped
+    .split(";")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+export function checkDestructiveStatement(stmt) {
+  const stripped = stripComments(stmt).trim();
+  if (!stripped) return null;
+
+  if (/\bDROP\s+TABLE\b/i.test(stripped)) return "DROP TABLE";
+  if (/\bDROP\s+INDEX\b/i.test(stripped)) return "DROP INDEX";
+  if (/\bTRUNCATE\b/i.test(stripped)) return "TRUNCATE";
+  if (/\bALTER\s+TABLE\s+[\s\S]*?\bDROP\b/i.test(stripped)) return "ALTER TABLE ... DROP";
+
+  if (/\bDELETE\s+FROM\b/i.test(stripped)) {
+    if (!/\bWHERE\b/i.test(stripped)) {
+      return "DELETE FROM (unconditional)";
+    }
+  }
+
+  return null;
+}
+
+export function extractServerTableStatements(serverTsPath) {
+  if (!fs.existsSync(serverTsPath)) return [];
+  const code = fs.readFileSync(serverTsPath, "utf8");
+  const startIdx = code.indexOf("const tableStatements = [");
+  if (startIdx === -1) return [];
+  const endIdx = code.indexOf("];", startIdx);
+  if (endIdx === -1) return [];
+  const block = code.slice(startIdx, endIdx);
+
+  // Extract backtick string contents
+  const statements = [];
+  const regex = /`([^`]+)`/g;
+  let m;
+  while ((m = regex.exec(block)) !== null) {
+    if (m[1].trim()) {
+      statements.push(m[1].trim());
+    }
+  }
+  return statements;
+}
+
+export function validateMigrationFiles(migrationsDir, serverTsPath = null) {
   if (!fs.existsSync(migrationsDir)) {
     return { valid: false, errors: [`Migrations directory not found: ${migrationsDir}`] };
   }
 
-  const entries = fs.readdirSync(migrationsDir).filter((file) => file.endsWith(".sql"));
+  // Deterministically sort migration files
+  const entries = fs
+    .readdirSync(migrationsDir)
+    .filter((file) => file.endsWith(".sql"))
+    .sort((a, b) => a.localeCompare(b, "en"));
+
   if (entries.length === 0) {
     return { valid: false, errors: ["No .sql migration files found in migrations directory."] };
   }
@@ -76,19 +133,11 @@ export function validateMigrationFiles(migrationsDir) {
       continue;
     }
 
-    const stripped = stripComments(content);
-
-    const destructivePatterns = [
-      { pattern: /\bDROP\s+TABLE\b/i, desc: "DROP TABLE" },
-      { pattern: /\bDROP\s+INDEX\b/i, desc: "DROP INDEX" },
-      { pattern: /\bTRUNCATE\b/i, desc: "TRUNCATE" },
-      { pattern: /\bDELETE\s+FROM\b/i, desc: "DELETE FROM (unconditional)" },
-      { pattern: /\bALTER\s+TABLE\s+[\s\S]*?\bDROP\b/i, desc: "ALTER TABLE ... DROP" },
-    ];
-
-    for (const { pattern, desc } of destructivePatterns) {
-      if (pattern.test(stripped)) {
-        errors.push(`Destructive SQL detected in "${file}": ${desc}`);
+    const statements = parseSqlStatements(content);
+    for (const stmt of statements) {
+      const destructiveReason = checkDestructiveStatement(stmt);
+      if (destructiveReason) {
+        errors.push(`Destructive SQL detected in "${file}": ${destructiveReason}`);
       }
     }
   }
@@ -103,7 +152,9 @@ export function validateMigrationFiles(migrationsDir) {
 
   const baselinePath = path.join(migrationsDir, "0000_baseline.sql");
   if (fs.existsSync(baselinePath)) {
-    const baselineContent = stripComments(fs.readFileSync(baselinePath, "utf8"));
+    const baselineContent = fs.readFileSync(baselinePath, "utf8");
+    const baselineStatements = parseSqlStatements(baselineContent).map(normalizeSql);
+
     for (const table of REQUIRED_TABLES) {
       const tableRegex = new RegExp(`\\bCREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${table}\\b`, "i");
       if (!tableRegex.test(baselineContent)) {
@@ -114,6 +165,21 @@ export function validateMigrationFiles(migrationsDir) {
       const indexRegex = new RegExp(`\\b${idx}\\b`, "i");
       if (!indexRegex.test(baselineContent)) {
         errors.push(`Baseline 0000_baseline.sql missing index definition for "${idx}".`);
+      }
+    }
+
+    // Source-drift check against app/lib/server.ts if provided
+    if (serverTsPath && fs.existsSync(serverTsPath)) {
+      const serverStatements = extractServerTableStatements(serverTsPath).map(normalizeSql);
+      if (serverStatements.length === 0) {
+        errors.push("Failed to extract tableStatements from app/lib/server.ts.");
+      } else {
+        for (const sStmt of serverStatements) {
+          const matched = baselineStatements.some((bStmt) => bStmt === sStmt);
+          if (!matched) {
+            errors.push(`Schema drift detected: statement in app/lib/server.ts does not match 0000_baseline.sql: "${sStmt}"`);
+          }
+        }
       }
     }
   } else {
@@ -131,7 +197,8 @@ const __filename = fileURLToPath(import.meta.url);
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename)) {
   const rootDir = path.resolve(path.dirname(__filename), "..");
   const migrationsDir = path.join(rootDir, "migrations");
-  const result = validateMigrationFiles(migrationsDir);
+  const serverTsPath = path.join(rootDir, "app", "lib", "server.ts");
+  const result = validateMigrationFiles(migrationsDir, serverTsPath);
 
   if (!result.valid) {
     console.error("❌ Migration Check Failed:");
@@ -140,7 +207,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
     }
     process.exit(1);
   } else {
-    console.log(`✅ Migration Check Passed: Verified ${result.filesCount} migration file(s) successfully.`);
+    console.log(`✅ Migration Check Passed: Verified ${result.filesCount} migration file(s) with zero schema drift.`);
     process.exit(0);
   }
 }

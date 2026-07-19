@@ -199,7 +199,7 @@ CREATE TABLE IF NOT EXISTS idempotent_requests (
   payload_hash TEXT NOT NULL,
   response_body TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL DEFAULT 0
+  expires_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS admin_email_otps (
