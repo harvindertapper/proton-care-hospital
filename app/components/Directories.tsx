@@ -162,7 +162,7 @@ export function FacilitiesDirectory() {
     return (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 w-full max-w-7xl mx-auto my-8">
         {[1, 2, 3, 4].map((i) => (
-          <div key={i} className="animate-pulse bg-slate-100 border border-slate-200 rounded-xl p-6 h-64 flex flex-col justify-between">
+          <div key={i} className="animate-pulse bg-slate-100 border border-slate-200 rounded-xl p-6 min-h-[18rem] flex flex-col justify-between">
             <div>
               <div className="h-12 w-12 bg-slate-200 rounded-lg mb-4"></div>
               <div className="h-6 bg-slate-200 rounded-md w-3/4 mb-3"></div>
@@ -183,7 +183,7 @@ export function FacilitiesDirectory() {
         return (
           <article
             key={asset.title}
-            className="flex flex-col justify-between bg-white border border-slate-100 rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow duration-300 h-64"
+            className="flex flex-col justify-between bg-white border border-slate-100 rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow duration-300 min-h-[18rem]"
           >
             <div>
               <div className="inline-flex items-center justify-center h-12 w-12 rounded-lg bg-teal-50 text-teal-600 mb-4">
@@ -192,7 +192,7 @@ export function FacilitiesDirectory() {
               <h3 className="text-lg font-semibold text-slate-800 mb-2">{asset.title}</h3>
               <p className="text-sm text-slate-600 line-clamp-3 mb-4">{asset.description}</p>
             </div>
-            <div className="flex items-center justify-between border-t border-slate-50 pt-3 mt-auto">
+            <div className="flex flex-wrap items-center justify-between gap-y-2 border-t border-slate-50 pt-3 mt-auto">
               <span className="text-sm font-medium text-teal-600">{asset.count}</span>
               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700">
                 {asset.status}
