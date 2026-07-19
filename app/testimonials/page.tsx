@@ -36,10 +36,16 @@ export default async function TestimonialsPage() {
             </div>
           ) : (
             <div className="empty-state">
-              No patient reviews have been published yet. Share your experience with us by submitting your feedback.
-              <div className="action-row"><Link href="/feedback" className="button subtle">Submit Feedback</Link></div>
+              No patient reviews have been published yet. Share your experience
+              with us by submitting your feedback.
             </div>
           )}
+
+          <div className="action-row">
+            <Link href="/feedback" className="button subtle">
+              Share Your Feedback
+            </Link>
+          </div>
         </div>
       </section>
       <section className="section alt">
