@@ -9,44 +9,64 @@ This operational runbook documents the mandatory procedures for creating, verify
 
 ---
 
-## 1. Path Scoping & Off-Repository Preconditions
+## 1. Prerequisites, Environment, and Path Initialization
 
-> **Path & Execution Rules:**
-> 1. Commands in this runbook MUST be executed from the **repository root directory**.
-> 2. `.gitignore`'s `/.local-backups/` pattern scopes local temporary working files to the repository root directory (`${PWD}/.local-backups`).
-> 3. The operator MUST provide an explicit absolute `OFFSITE_BACKUP_DIR` outside the repository tree (e.g., `/var/backups/pch` or `C:/secure_backups/pch`). Off-repository backups MUST NOT reside inside `${PWD}`, MUST NOT be Git-tracked, and MUST NOT be placed inside the public R2 `pch` bucket.
+> **Environment Preconditions:**
+> 1. Commands in this runbook MUST be executed using **Bash on Linux/macOS or WSL (Windows Subsystem for Linux)** with POSIX paths.
+> 2. Commands MUST be executed from the **repository root directory**.
+> 3. Use one dedicated shell session for backup creation.
+> 4. `OFFSITE_BACKUP_DIR` MUST be set by the operator to an absolute POSIX path representing restricted non-Git storage outside the repository tree and outside the public R2 `pch` bucket.
 
 ```bash
-# 1. Verify execution from repository root
-test -f package.json || { echo "Error: Must run from repository root"; exit 1; }
+set -Eeuo pipefail
+umask 077
 
-# 2. Verify Operator Identity (Fail closed if absent)
-export OPERATOR_ID="${OPERATOR_ID:-$(git config user.email)}"
-test -n "${OPERATOR_ID}" || { echo "Error: OPERATOR_ID or git config user.email must be set"; exit 1; }
+test -f package.json || {
+  echo "Error: run this procedure from the repository root"
+  exit 1
+}
 
-# 3. Verify Off-Repository Destination (Must be absolute & outside repository)
-test -n "${OFFSITE_BACKUP_DIR}" || { echo "Error: OFFSITE_BACKUP_DIR environment variable must be set to an absolute path"; exit 1; }
+export REPO_ROOT="$(pwd -P)"
+
+export OPERATOR_ID="${OPERATOR_ID:-$(git config --get user.email || true)}"
+test -n "${OPERATOR_ID}" || {
+  echo "Error: set OPERATOR_ID or configure git user.email"
+  exit 1
+}
+
+: "${OFFSITE_BACKUP_DIR:?Set OFFSITE_BACKUP_DIR to an absolute directory outside the repository}"
 case "${OFFSITE_BACKUP_DIR}" in
-  "${PWD}"*) echo "Error: OFFSITE_BACKUP_DIR must be outside the repository directory"; exit 1 ;;
-  /*|[a-zA-Z]:*) mkdir -p "${OFFSITE_BACKUP_DIR}" ;;
-  *) echo "Error: OFFSITE_BACKUP_DIR must be an absolute path"; exit 1 ;;
+  /*) ;;
+  *) echo "Error: OFFSITE_BACKUP_DIR must be an absolute POSIX path"; exit 1 ;;
 esac
 
-# 4. Set Repository-Local Working Directories
-export BACKUP_TIMESTAMP=$(date -u +%Y%m%d_%H%M%SZ)
-export BACKUP_ROOT="${PWD}/.local-backups"
+mkdir -p "${OFFSITE_BACKUP_DIR}"
+export OFFSITE_BACKUP_DIR="$(cd "${OFFSITE_BACKUP_DIR}" && pwd -P)"
+
+case "${OFFSITE_BACKUP_DIR}/" in
+  "${REPO_ROOT}/"*)
+    echo "Error: OFFSITE_BACKUP_DIR resolves inside the repository"
+    exit 1
+    ;;
+esac
+
+export BACKUP_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+export BACKUP_ROOT="${REPO_ROOT}/.local-backups"
 export BACKUP_DIR="${BACKUP_ROOT}/${BACKUP_TIMESTAMP}"
+export GIT_HEAD_SHA="$(git rev-parse HEAD)"
+export GIT_BRANCH_NAME="$(git branch --show-current)"
+export WRANGLER_VER="$(npx wrangler --version)"
+
 mkdir -p "${BACKUP_DIR}"
 ```
 
 ---
 
-## 2. Preconditions & Cloudflare Identity Check
+## 2. Cloudflare Identity Verification
 
 Verify Cloudflare credentials and operator account access before starting:
 
 ```bash
-# Verify CLI identity and account access
 npx wrangler whoami
 ```
 
@@ -54,19 +74,25 @@ Ensure the CLI reports account ID `b9b4b7e42c3b44d04fcd759ce96aea36` with active
 
 ---
 
-## 3. Pre-Migration D1 Information & Time Travel Bookmark
+## 3. Production Evidence Collection & Validation
 
 Capture D1 database metadata and record a Time Travel recovery point prior to applying any remote changes:
 
 ```bash
-# 1. Capture database metadata
-npx wrangler d1 info DB --json > "${BACKUP_DIR}/d1_info.json"
+npx wrangler d1 info DB --json \
+  > "${BACKUP_DIR}/d1_info.json"
 
-# 2. Capture real D1 Time Travel recovery point and bookmark
-npx wrangler d1 time-travel info DB --json > "${BACKUP_DIR}/d1_time_travel_info.json"
+npx wrangler d1 time-travel info DB --json \
+  > "${BACKUP_DIR}/d1_time_travel_info.json"
 
-# 3. Capture pending remote migrations list
-npm run db:migrate:list:remote > "${BACKUP_DIR}/remote_migrations_list.txt"
+npm run db:migrate:list:remote \
+  > "${BACKUP_DIR}/remote_migrations_list.txt"
+
+npx wrangler r2 bucket info pch --json \
+  > "${BACKUP_DIR}/r2_bucket_info.json"
+
+export D1_DUMP_FILE="${BACKUP_DIR}/protone_d1_backup_${BACKUP_TIMESTAMP}.sql"
+npx wrangler d1 export DB --remote --output "${D1_DUMP_FILE}"
 ```
 
 > **Primary Short-Window Production Recovery Path (D1 Time Travel):**
@@ -75,272 +101,468 @@ npm run db:migrate:list:remote > "${BACKUP_DIR}/remote_migrations_list.txt"
 > - Cloudflare D1 Time Travel provides point-in-time recovery (typically 7-day retention on Free plans; 30-day retention on Paid plans).
 > - Time Travel restore is **destructive** to subsequent writes and requires explicit human approval.
 
----
-
-## 4. Remote D1 Database Export & Verification
-
-Export the remote D1 database to a local SQL file:
-
+### Evidence File Non-Empty Validation
 ```bash
-export D1_DUMP_FILE="${BACKUP_DIR}/protone_d1_backup_${BACKUP_TIMESTAMP}.sql"
-npx wrangler d1 export DB --remote --output "${D1_DUMP_FILE}"
+for required_file in \
+  "${BACKUP_DIR}/d1_info.json" \
+  "${BACKUP_DIR}/d1_time_travel_info.json" \
+  "${BACKUP_DIR}/remote_migrations_list.txt" \
+  "${BACKUP_DIR}/r2_bucket_info.json" \
+  "${D1_DUMP_FILE}"
+do
+  test -s "${required_file}" || {
+    echo "Error: required backup evidence is missing or empty: ${required_file}"
+    exit 1
+  }
+done
 ```
 
-Verify export integrity without printing sensitive patient data:
+### Privacy-Safe Schema Marker Validation
+Validate SQL export schema markers without printing sensitive patient data or database records:
 
 ```bash
-# 1. Verify file existence and non-zero byte size
-test -s "${D1_DUMP_FILE}" || { echo "Error: D1 SQL export is missing or empty"; exit 1; }
+TABLE_MARKER_COUNT="$(grep -c 'CREATE TABLE' "${D1_DUMP_FILE}" || true)"
+case "${TABLE_MARKER_COUNT}" in
+  ''|*[!0-9]*) echo "Error: invalid CREATE TABLE marker count"; exit 1 ;;
+esac
 
-# 2. Check schema table count markers
-grep -c "CREATE TABLE" "${D1_DUMP_FILE}"
+test "${TABLE_MARKER_COUNT}" -ge 20 || {
+  echo "Error: D1 export contains fewer than the expected 20 table markers"
+  exit 1
+}
+
+for required_table in appointments contact_messages doctor_profiles media_assets audit_logs
+do
+  grep -Eiq "CREATE TABLE( IF NOT EXISTS)? [\"\[]?${required_table}[\"\]]?" "${D1_DUMP_FILE}" || {
+    echo "Error: expected schema marker missing for table ${required_table}"
+    exit 1
+  }
+done
 ```
 
 ---
 
-## 5. R2 Bucket Metadata & Inventory Input Options
+## 4. R2 Inventory Evidence & Optional D1 Estimate
 
 > **Wrangler 4.92.0 CLI Limitation Note:**
-> The installed Wrangler CLI version (`4.92.0`) exposes object operations (`get`, `put`, `delete`) but **does not support an object-listing command** (`wrangler r2 object list`).
+> Installed Wrangler CLI `v4.92.0` exposes object operations (`get`, `put`, `delete`) but **does not support an object-listing command** (`wrangler r2 object list`).
 
-### A. Supported Bucket Metadata Capture
-Capture verified bucket metadata via Wrangler:
-
-```bash
-npx wrangler r2 bucket info pch --json > "${BACKUP_DIR}/r2_bucket_info.json"
-```
-
-### B. Authoritative Object Inventory Inputs (Optional / Operator-Supplied)
-If an authoritative object inventory is available from the Cloudflare Dashboard or S3 API, set the optional variables before manifest generation:
+### Authoritative Inventory Inputs (Optional / Operator-Supplied)
+Authoritative inventory evidence is accepted ONLY from the Cloudflare Dashboard (manually exported) or a separately configured read-only S3-compatible client:
 
 ```bash
-# Optional operator-supplied inventory variables (leave unset if unavailable)
-export R2_INVENTORY_METHOD="${R2_INVENTORY_METHOD:-dashboard_manual}"
-export R2_INVENTORY_TIMESTAMP="${R2_INVENTORY_TIMESTAMP:-$BACKUP_TIMESTAMP}"
-# export R2_OBJECT_COUNT=150
-# export R2_OBJECT_BYTES=10485760
-# export R2_INVENTORY_FILE="${BACKUP_DIR}/r2_dashboard_snapshot.png"
+# Optional. Leave all unset when no authoritative inventory is available.
+# export R2_INVENTORY_METHOD="cloudflare_dashboard"
+# export R2_INVENTORY_TIMESTAMP="20260719T201731Z"
+# export R2_OBJECT_COUNT="150"
+# export R2_OBJECT_BYTES="10485760"
+# export R2_INVENTORY_SOURCE="/absolute/restricted/path/r2_inventory.json"
 ```
 
-### C. D1 Asset Metadata Estimate (Non-Authoritative)
-As a secondary metadata estimate (not equal to actual R2 bucket storage), you may query published D1 media records:
+If `R2_INVENTORY_SOURCE` is supplied, handle it safely:
 
 ```bash
-# Optional D1 estimate query (do NOT execute during automated migration checklist unless requested)
-npx wrangler d1 execute DB --remote --command="SELECT COUNT(*) AS total_assets, COALESCE(SUM(size_bytes),0) AS total_bytes FROM media_assets WHERE is_visible = 1;" --json > "${BACKUP_DIR}/d1_media_assets_estimate.json"
+if test -n "${R2_INVENTORY_SOURCE:-}"; then
+  case "${R2_INVENTORY_SOURCE}" in
+    /*) ;;
+    *) echo "Error: R2_INVENTORY_SOURCE must be absolute"; exit 1 ;;
+  esac
+
+  test -f "${R2_INVENTORY_SOURCE}" && test -s "${R2_INVENTORY_SOURCE}" || {
+    echo "Error: R2 inventory evidence is missing or empty"
+    exit 1
+  }
+
+  cp -- "${R2_INVENTORY_SOURCE}" "${BACKUP_DIR}/r2_inventory_evidence"
+fi
 ```
+
+### Optional D1 Asset Metadata Estimate (Non-Authoritative)
+Query published D1 media records as a secondary metadata estimate:
+
+```bash
+npx wrangler d1 execute DB --remote \
+  --command="SELECT COUNT(*) AS total_assets, COALESCE(SUM(size_bytes), 0) AS total_bytes FROM media_assets WHERE is_visible = 1;" \
+  --json > "${BACKUP_DIR}/d1_media_assets_estimate.json"
+```
+
+*(Note: This query provides a database metadata estimate and must NEVER be described as actual R2 bucket inventory).*
 
 ---
 
-## 6. Fail-Closed Backup Manifest Generator
+## 5. Strict Fail-Closed Backup Manifest Generator
 
-Generate a strict, verified JSON manifest using Node.js. If any required artifact is missing or empty, manifest generation **aborts with exit code 1**:
+Execute the strict Node.js manifest generator. If any required environment variable or required artifact is missing or zero bytes, or if metric values are invalid, manifest generation **fails closed with a non-zero exit code**:
 
 ```bash
-node -e '
-const fs = require("fs");
-const path = require("path");
-const crypto = require("crypto");
+node <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+const requiredEnv = [
+  'BACKUP_DIR',
+  'BACKUP_TIMESTAMP',
+  'OPERATOR_ID',
+  'GIT_HEAD_SHA',
+  'GIT_BRANCH_NAME',
+  'WRANGLER_VER',
+];
+
+for (const key of requiredEnv) {
+  if (!process.env[key] || !process.env[key].trim()) {
+    throw new Error(`Missing required environment variable: ${key}`);
+  }
+}
 
 const backupDir = process.env.BACKUP_DIR;
 const timestamp = process.env.BACKUP_TIMESTAMP;
-const operatorId = process.env.OPERATOR_ID;
 
-if (!backupDir || !timestamp || !operatorId) {
-  console.error("❌ Abort: Missing required environment variables (BACKUP_DIR, BACKUP_TIMESTAMP, OPERATOR_ID).");
-  process.exit(1);
-}
-
-const requiredFiles = [
-  `protone_d1_backup_${timestamp}.sql`,
-  "d1_info.json",
-  "d1_time_travel_info.json",
-  "remote_migrations_list.txt",
-  "r2_bucket_info.json"
-];
-
-function inspectArtifact(filename, isRequired = true) {
+function inspectArtifact(filename, required) {
   const fullPath = path.join(backupDir, filename);
   if (!fs.existsSync(fullPath)) {
-    if (isRequired) console.error(`❌ Required artifact missing: ${filename}`);
-    return { filename, size_bytes: 0, sha256: null, status: isRequired ? "missing" : "not_captured" };
+    if (required) throw new Error(`Required artifact missing: ${filename}`);
+    return { filename, status: 'not_captured', size_bytes: 0, sha256: null };
   }
+
   const stat = fs.statSync(fullPath);
-  if (stat.size === 0) {
-    if (isRequired) console.error(`❌ Required artifact is zero bytes: ${filename}`);
-    return { filename, size_bytes: 0, sha256: null, status: isRequired ? "empty" : "empty" };
+  if (!stat.isFile()) {
+    throw new Error(`Artifact is not a regular file: ${filename}`);
   }
-  const content = fs.readFileSync(fullPath);
-  const sha256 = crypto.createHash("sha256").update(content).digest("hex");
-  return { filename, size_bytes: stat.size, sha256, status: "verified" };
-}
 
-// 1. Inspect required artifacts
-const artifactMap = {};
-let failedRequired = false;
-
-for (const reqFile of requiredFiles) {
-  const meta = inspectArtifact(reqFile, true);
-  artifactMap[reqFile.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_]/g, "_")] = meta;
-  if (meta.status !== "verified") {
-    failedRequired = true;
+  if (stat.size <= 0) {
+    if (required) throw new Error(`Required artifact is empty: ${filename}`);
+    return { filename, status: 'empty', size_bytes: 0, sha256: null };
   }
+
+  const sha256 = crypto
+    .createHash('sha256')
+    .update(fs.readFileSync(fullPath))
+    .digest('hex');
+
+  return {
+    filename,
+    status: 'verified',
+    size_bytes: stat.size,
+    sha256,
+  };
 }
 
-if (failedRequired) {
-  console.error("❌ Manifest generation aborted: One or more required artifacts failed validation.");
-  process.exit(1);
+function parseOptionalNonNegativeSafeInteger(name) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return null;
+  if (!/^(0|[1-9][0-9]*)$/.test(raw)) {
+    throw new Error(`${name} must be a complete non-negative integer`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`${name} exceeds JavaScript safe-integer range`);
+  }
+  return value;
 }
 
-// 2. Inspect optional artifacts
-const inventoryFileName = process.env.R2_INVENTORY_FILE ? path.basename(process.env.R2_INVENTORY_FILE) : null;
-const optionalInventoryMeta = inventoryFileName ? inspectArtifact(inventoryFileName, false) : { filename: null, size_bytes: 0, sha256: null, status: "not_captured" };
-const d1EstimateMeta = inspectArtifact("d1_media_assets_estimate.json", false);
+const objectCount = parseOptionalNonNegativeSafeInteger('R2_OBJECT_COUNT');
+const objectBytes = parseOptionalNonNegativeSafeInteger('R2_OBJECT_BYTES');
 
-// 3. Parse optional inventory metrics safely
-function parseNonNegativeInt(val) {
-  if (val === undefined || val === null || val === "") return null;
-  const num = parseInt(val, 10);
-  return (!isNaN(num) && num >= 0) ? num : null;
+if ((objectCount === null) !== (objectBytes === null)) {
+  throw new Error('R2_OBJECT_COUNT and R2_OBJECT_BYTES must be supplied together');
 }
 
-const objectCount = parseNonNegativeInt(process.env.R2_OBJECT_COUNT);
-const objectBytes = parseNonNegativeInt(process.env.R2_OBJECT_BYTES);
+const requiredArtifacts = {
+  d1_sql_export: inspectArtifact(
+    `protone_d1_backup_${timestamp}.sql`,
+    true,
+  ),
+  d1_info: inspectArtifact('d1_info.json', true),
+  d1_time_travel_info: inspectArtifact('d1_time_travel_info.json', true),
+  remote_migration_list: inspectArtifact('remote_migrations_list.txt', true),
+  r2_bucket_info: inspectArtifact('r2_bucket_info.json', true),
+};
+
+const inventoryArtifact = inspectArtifact('r2_inventory_evidence', false);
+const d1EstimateArtifact = inspectArtifact(
+  'd1_media_assets_estimate.json',
+  false,
+);
+
+const metricsAvailable = objectCount !== null && objectBytes !== null;
 
 const manifest = {
+  manifest_version: 1,
   utc_timestamp: timestamp,
-  operator_identity: operatorId,
-  git_head: process.env.GIT_HEAD_SHA || null,
-  git_branch: process.env.GIT_BRANCH_NAME || null,
-  wrangler_version: process.env.WRANGLER_VER || null,
-  d1_database_name: "site-creator-d1",
-  d1_database_id: "085be1f3-8d4a-459c-86b2-5f5d0d0f964f",
-  r2_bucket: "pch",
+  operator_identity: process.env.OPERATOR_ID,
+  source: {
+    git_head: process.env.GIT_HEAD_SHA,
+    git_branch: process.env.GIT_BRANCH_NAME,
+    wrangler_version: process.env.WRANGLER_VER,
+  },
+  cloudflare: {
+    account_id: 'b9b4b7e42c3b44d04fcd759ce96aea36',
+    d1_binding: 'DB',
+    d1_database_name: 'site-creator-d1',
+    d1_database_id: '085be1f3-8d4a-459c-86b2-5f5d0d0f964f',
+    r2_binding: 'MEDIA',
+    r2_bucket: 'pch',
+  },
+  required_artifacts: requiredArtifacts,
   r2_inventory: {
-    method: process.env.R2_INVENTORY_METHOD || "bucket_info_only",
-    timestamp: process.env.R2_INVENTORY_TIMESTAMP || timestamp,
+    method: process.env.R2_INVENTORY_METHOD || 'unavailable',
+    timestamp: process.env.R2_INVENTORY_TIMESTAMP || null,
     object_count: objectCount,
     object_bytes: objectBytes,
-    metrics_status: (objectCount !== null && objectBytes !== null) ? "verified" : "unavailable",
-    artifact: optionalInventoryMeta
+    metrics_status: metricsAvailable ? 'verified' : 'unavailable',
+    artifact: inventoryArtifact,
   },
   d1_media_estimate: {
     authoritative: false,
-    artifact: d1EstimateMeta
+    artifact: d1EstimateArtifact,
   },
-  required_artifacts: artifactMap,
-  verification_status: "VERIFIED_SUCCESS"
+  verification_status: 'verified',
 };
 
-fs.writeFileSync(path.join(backupDir, "manifest.json"), JSON.stringify(manifest, null, 2));
-console.log("✅ Backup manifest successfully validated and generated.");
-' || { echo "Error: Manifest generator failed"; exit 1; }
+const manifestPath = path.join(backupDir, 'manifest.json');
+fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
+  mode: 0o600,
+});
 
-# Checksum the final manifest
-sha256sum "${BACKUP_DIR}/manifest.json" > "${BACKUP_DIR}/manifest.json.sha256"
+console.log('Manifest generated after all required checks passed.');
+NODE
+
+sha256sum "${BACKUP_DIR}/manifest.json" \
+  > "${BACKUP_DIR}/manifest.json.sha256"
+
+test -s "${BACKUP_DIR}/manifest.json.sha256" || {
+  echo "Error: manifest checksum was not created"
+  exit 1
+}
 ```
 
 ---
 
-## 7. Compression, GPG AES-256 Encryption & Off-Repository Transfer
+## 6. Compression, GPG Encryption, Verification & Off-Repository Transfer
 
-> **Important:** `.tar.gz` provides compression only, NOT encryption. Real symmetric encryption uses GPG AES-256. Plaintext files MUST NOT remain locally after backup completion.
+> **Important:** `.tar.gz` provides compression only, NOT encryption. Mandatory symmetric encryption uses GPG AES-256. Plaintext backup evidence MUST NOT remain in local working directories after backup completion.
 
-1. **Verify GPG Tool Presence:**
-   ```bash
-   command -v gpg >/dev/null 2>&1 || { echo "Error: GPG utility is missing. Halt backup."; exit 1; }
-   ```
+### Verification of Required System Utilities
+```bash
+for required_command in node tar gpg sha256sum cp
+do
+  command -v "${required_command}" >/dev/null 2>&1 || {
+    echo "Error: required command missing: ${required_command}"
+    exit 1
+  }
+done
+```
 
-2. **Compress Working Backup Directory:**
-   ```bash
-   export ARCHIVE_FILE="${BACKUP_ROOT}/backup_${BACKUP_TIMESTAMP}.tar.gz"
-   tar -czf "${ARCHIVE_FILE}" -C "${BACKUP_ROOT}" "${BACKUP_TIMESTAMP}"
-   ```
+### Compression and GPG AES-256 Encryption
+```bash
+export ARCHIVE_FILE="${BACKUP_ROOT}/backup_${BACKUP_TIMESTAMP}.tar.gz"
+export ENCRYPTED_FILE="${ARCHIVE_FILE}.gpg"
+export ENCRYPTED_FILENAME="$(basename "${ENCRYPTED_FILE}")"
+export CHECKSUM_FILENAME="${ENCRYPTED_FILENAME}.sha256"
 
-3. **Encrypt Archive using GPG AES-256:**
-   ```bash
-   export ENCRYPTED_FILE="${ARCHIVE_FILE}.gpg"
-   # Prompt interactively for passphrase (NEVER put passphrase in commands, environment, or scripts)
-   gpg --symmetric --cipher-algo AES256 --output "${ENCRYPTED_FILE}" "${ARCHIVE_FILE}"
-   ```
+for destination_name in "${ENCRYPTED_FILENAME}" "${CHECKSUM_FILENAME}"
+do
+  test ! -e "${OFFSITE_BACKUP_DIR}/${destination_name}" || {
+    echo "Error: refusing to overwrite existing off-repository artifact: ${destination_name}"
+    exit 1
+  }
+done
 
-4. **Verify Local Encrypted Stream Integrity:**
-   ```bash
-   set -o pipefail
-   gpg --decrypt "${ENCRYPTED_FILE}" | tar -tzf - >/dev/null || { echo "Error: Local encrypted archive verification failed"; exit 1; }
-   ```
+tar -czf "${ARCHIVE_FILE}" -C "${BACKUP_ROOT}" "${BACKUP_TIMESTAMP}"
+test -s "${ARCHIVE_FILE}" || { echo "Error: archive creation failed"; exit 1; }
 
-5. **Checksum Encrypted File:**
-   ```bash
-   export ENCRYPTED_FILENAME=$(basename "${ENCRYPTED_FILE}")
-   (cd "${BACKUP_ROOT}" && sha256sum "${ENCRYPTED_FILENAME}" > "${ENCRYPTED_FILENAME}.sha256")
-   ```
+gpg --symmetric --cipher-algo AES256 \
+  --output "${ENCRYPTED_FILE}" \
+  "${ARCHIVE_FILE}"
+test -s "${ENCRYPTED_FILE}" || { echo "Error: encryption failed"; exit 1; }
+```
 
-6. **Transfer Encrypted Archive & Checksum to Off-Repository Destination:**
-   ```bash
-   cp "${ENCRYPTED_FILE}" "${OFFSITE_BACKUP_DIR}/"
-   cp "${BACKUP_ROOT}/${ENCRYPTED_FILENAME}.sha256" "${OFFSITE_BACKUP_DIR}/"
+### Local Decryption Stream Verification & Off-Repository Copy
+```bash
+set -o pipefail
+gpg --decrypt "${ENCRYPTED_FILE}" | tar -tzf - >/dev/null || {
+  echo "Error: encrypted archive cannot be decrypted/listed"
+  exit 1
+}
 
-   # Verify off-repository copy against copied checksum
-   (cd "${OFFSITE_BACKUP_DIR}" && sha256sum -c "${ENCRYPTED_FILENAME}.sha256") || {
-     echo "Error: Off-repository backup checksum verification failed!"; exit 1;
-   }
-   ```
+(
+  cd "${BACKUP_ROOT}"
+  sha256sum "${ENCRYPTED_FILENAME}" > "${CHECKSUM_FILENAME}"
+)
 
-7. **Clean Up Local Repository Working Files:**
-   ```bash
-   # Remove unencrypted local directory, local archive, and local copy ONLY after off-repo verification succeeds
-   rm -rf "${BACKUP_DIR}" "${ARCHIVE_FILE}" "${ENCRYPTED_FILE}" "${BACKUP_ROOT}/${ENCRYPTED_FILENAME}.sha256"
-   echo "✅ Off-repository backup archive verified and stored at: ${OFFSITE_BACKUP_DIR}/${ENCRYPTED_FILENAME}"
-   ```
+cp -- "${ENCRYPTED_FILE}" "${OFFSITE_BACKUP_DIR}/${ENCRYPTED_FILENAME}"
+cp -- "${BACKUP_ROOT}/${CHECKSUM_FILENAME}" "${OFFSITE_BACKUP_DIR}/${CHECKSUM_FILENAME}"
+
+chmod 600 \
+  "${OFFSITE_BACKUP_DIR}/${ENCRYPTED_FILENAME}" \
+  "${OFFSITE_BACKUP_DIR}/${CHECKSUM_FILENAME}"
+
+(
+  cd "${OFFSITE_BACKUP_DIR}"
+  sha256sum -c "${CHECKSUM_FILENAME}"
+)
+```
+
+### Local Plaintext Cleanup
+```bash
+rm -rf -- "${BACKUP_DIR}"
+rm -f -- \
+  "${ARCHIVE_FILE}" \
+  "${ENCRYPTED_FILE}" \
+  "${BACKUP_ROOT}/${CHECKSUM_FILENAME}"
+
+printf 'Verified off-repository backup: %s\n' \
+  "${OFFSITE_BACKUP_DIR}/${ENCRYPTED_FILENAME}"
+```
+
+> **Off-Repository Storage & Passphrase Rules:**
+> - NEVER use the public R2 `pch` bucket as a backup destination.
+> - NEVER commit backup archives or checksums to Git.
+> - NEVER delete the off-repository encrypted backup until retention policy permits.
+> - Store the GPG passphrase separately from the encrypted archive in an authorized credential vault.
+> - If any step fails, retain local evidence, halt, and escalate; do NOT apply remote database migrations.
 
 ---
 
-## 8. Safe D1 Production Recovery Procedure
+## 7. Standalone Production Recovery Procedure
 
-If a remote migration or administrative operation causes database issues, recovery begins from the verified **off-repository encrypted backup archive**.
+Recovery MUST be self-contained and executable in a brand-new shell session without relying on environment variables left over from backup creation.
 
-### A. Secure Temporary Extraction & Verification
-1. **Halt all administrative write operations** immediately.
-2. Create a restricted temporary recovery directory:
-   ```bash
-   export RECOVERY_TMP=$(umask 077 && mktemp -d /tmp/pch_recovery_XXXXXX 2>/dev/null || mktemp -d -t pch_recovery_XXXXXX)
-   ```
-3. Verify the off-repository encrypted archive checksum:
-   ```bash
-   (cd "${OFFSITE_BACKUP_DIR}" && sha256sum -c "${ENCRYPTED_FILENAME}.sha256") || {
-     echo "Error: Off-repository backup checksum invalid!"; exit 1;
-   }
-   ```
-4. Decrypt and extract the off-repository backup into the restricted recovery directory:
-   ```bash
-   gpg --decrypt "${OFFSITE_BACKUP_DIR}/${ENCRYPTED_FILENAME}" | tar -xzf - -C "${RECOVERY_TMP}"
-   ```
-5. Locate the restored evidence directory `${RECOVERY_TMP}/${BACKUP_TIMESTAMP}` and inspect `d1_time_travel_info.json` to extract the recorded recovery bookmark or timestamp. *(Do NOT print SQL dump or patient records).*
+```bash
+set -Eeuo pipefail
+umask 077
 
-### B. Capture Undo Bookmark & Execute Time Travel Restore
-1. Record a pre-restore "undo" bookmark in the recovery directory before restoring:
-   ```bash
-   npx wrangler d1 time-travel info DB --json > "${RECOVERY_TMP}/undo_bookmark_${BACKUP_TIMESTAMP}.json"
-   ```
-2. Obtain explicit human operator approval.
-3. Execute Time Travel restore using the recorded bookmark or timestamp:
-   ```bash
-   # Restore using bookmark:
-   npx wrangler d1 time-travel restore DB --bookmark="<RECORDED_BOOKMARK>"
-   # OR restore using timestamp:
-   npx wrangler d1 time-travel restore DB --timestamp="<RECORDED_TIMESTAMP>"
-   ```
-4. Perform thorough application health checks (schema integrity, appointment lookups, login).
+# Operator MUST set RECOVERY_ARCHIVE to the absolute path of the existing encrypted off-repo archive file.
+: "${RECOVERY_ARCHIVE:?Set RECOVERY_ARCHIVE to the absolute off-repository .tar.gz.gpg file}"
 
-### C. Post-Recovery Cleanup & Off-Repository Archive Retention
-1. Securely remove the temporary local recovery directory:
-   ```bash
-   rm -rf "${RECOVERY_TMP}"
-   ```
-2. **Retain the off-repository encrypted backup archive** (`${OFFSITE_BACKUP_DIR}/${ENCRYPTED_FILENAME}`) in accordance with operational data retention policies.
+case "${RECOVERY_ARCHIVE}" in
+  /*) ;;
+  *) echo "Error: RECOVERY_ARCHIVE must be absolute"; exit 1 ;;
+esac
 
-### Secondary Recovery Path: Off-Repo SQL Backup Dump
-- The SQL dump file inside the off-repository archive is an **off-repo recovery artifact**.
-- **Do NOT** directly pipe or execute a full `CREATE TABLE` SQL dump into an existing non-empty production database.
-- Any SQL-based restoration must first be validated against a **fresh, isolated test/preview database** (`npx wrangler d1 create test-restore-db`) before applying to production.
+test -f "${RECOVERY_ARCHIVE}" && test -s "${RECOVERY_ARCHIVE}" || {
+  echo "Error: recovery archive is missing or empty"
+  exit 1
+}
+
+export RECOVERY_ARCHIVE="$(cd "$(dirname "${RECOVERY_ARCHIVE}")" && pwd -P)/$(basename "${RECOVERY_ARCHIVE}")"
+export RECOVERY_DIR="$(dirname "${RECOVERY_ARCHIVE}")"
+export ENCRYPTED_FILENAME="$(basename "${RECOVERY_ARCHIVE}")"
+export RECOVERY_CHECKSUM="${RECOVERY_DIR}/${ENCRYPTED_FILENAME}.sha256"
+
+test -s "${RECOVERY_CHECKSUM}" || {
+  echo "Error: recovery checksum file is missing"
+  exit 1
+}
+
+case "${ENCRYPTED_FILENAME}" in
+  backup_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.tar.gz.gpg) ;;
+  *) echo "Error: unexpected recovery archive filename"; exit 1 ;;
+esac
+
+export BACKUP_TIMESTAMP="${ENCRYPTED_FILENAME#backup_}"
+export BACKUP_TIMESTAMP="${BACKUP_TIMESTAMP%.tar.gz.gpg}"
+
+(
+  cd "${RECOVERY_DIR}"
+  sha256sum -c "$(basename "${RECOVERY_CHECKSUM}")"
+)
+
+export RECOVERY_TMP="$(mktemp -d -t pch-recovery-XXXXXXXX)"
+
+cleanup_recovery_tmp() {
+  if test -n "${RECOVERY_TMP:-}" && test -d "${RECOVERY_TMP}"; then
+    rm -rf -- "${RECOVERY_TMP}"
+  fi
+}
+trap cleanup_recovery_tmp EXIT INT TERM
+
+set -o pipefail
+gpg --decrypt "${RECOVERY_ARCHIVE}" | tar -xzf - -C "${RECOVERY_TMP}" || {
+  echo "Error: recovery decryption/extraction failed"
+  exit 1
+}
+
+export RECOVERED_EVIDENCE_DIR="${RECOVERY_TMP}/${BACKUP_TIMESTAMP}"
+
+test -s "${RECOVERED_EVIDENCE_DIR}/d1_time_travel_info.json" || {
+  echo "Error: recovered Time Travel evidence is missing"
+  exit 1
+}
+```
+
+*(Note: Do NOT `cat` the SQL export or patient records. Inspect only the specific `d1_time_travel_info.json` file to obtain the recovery bookmark or timestamp).*
+
+---
+
+## 8. Capture & Retain Pre-Restore Undo Bookmark
+
+Before performing any destructive Time Travel restore:
+
+```bash
+export UNDO_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+export UNDO_FILE="${RECOVERY_TMP}/undo_bookmark_${UNDO_TIMESTAMP}.json"
+export UNDO_ENCRYPTED_FILE="${RECOVERY_DIR}/undo_bookmark_${UNDO_TIMESTAMP}.json.gpg"
+
+npx wrangler d1 time-travel info DB --json > "${UNDO_FILE}"
+
+test -s "${UNDO_FILE}" || {
+  echo "Error: failed to capture current undo bookmark"
+  exit 1
+}
+
+gpg --symmetric --cipher-algo AES256 \
+  --output "${UNDO_ENCRYPTED_FILE}" \
+  "${UNDO_FILE}"
+
+test -s "${UNDO_ENCRYPTED_FILE}" || {
+  echo "Error: failed to encrypt undo bookmark"
+  exit 1
+}
+
+(
+  cd "${RECOVERY_DIR}"
+  sha256sum "$(basename "${UNDO_ENCRYPTED_FILE}")" \
+    > "$(basename "${UNDO_ENCRYPTED_FILE}").sha256"
+  sha256sum -c "$(basename "${UNDO_ENCRYPTED_FILE}").sha256"
+)
+```
+
+> **Undo Bookmark & Recovery Rules:**
+> - `npx wrangler d1 time-travel info DB --json` is a read-only remote operation.
+> - The encrypted undo bookmark (`${UNDO_ENCRYPTED_FILE}`) MUST remain stored off-repository until recovery sign-off and retention expiry.
+> - Temporary plaintext files are cleaned up automatically by the recovery trap (`cleanup_recovery_tmp`).
+> - Do NOT restore until an authorized human verifies the target bookmark and explicitly approves the destructive operation.
+
+### Destructive Time Travel Restore (Operator-Approved Examples)
+```bash
+# Choose exactly one option after explicit human approval:
+
+npx wrangler d1 time-travel restore DB --bookmark="<VERIFIED_BOOKMARK>"
+
+# OR
+
+npx wrangler d1 time-travel restore DB --timestamp="<VERIFIED_RFC3339_TIMESTAMP>"
+```
+
+### Post-Restore Health Verification
+Without printing patient data or sensitive records, verify:
+1. D1 database identity (`npx wrangler d1 info DB --json`).
+2. Migration status (`npm run db:migrate:list:remote`).
+3. Expected table/schema markers.
+4. Admin console login (`/admin/login`).
+5. Appointment status lookup using an authorized synthetic/test identifier only.
+6. Public content rendering (`/doctors`, `/blog`, `/careers`, `/gallery`).
+7. Error log check.
+8. Confirmation that no R2 object changed.
+9. Authorized human recovery sign-off.
+
+*(Temporary plaintext directory `${RECOVERY_TMP}` is cleaned up upon shell exit. The encrypted original backup and encrypted undo bookmark MUST NOT be deleted merely because initial health checks pass).*
+
+---
+
+## 9. Secondary SQL Recovery Wording & Operational Isolation
+
+- **Isolation Rule:** Operational patient records (`appointments`, `contact_messages`, `feedback`, `sessions`, `admin_email_otps`, `audit_logs`, `rate_limits`) represent live patient/system activity and are **never altered, wiped, or rolled back** during website content updates.
+- **SQL Restore Constraints:** Never import the full SQL export file directly into a non-empty production D1 database. Any SQL-based recovery MUST first be tested against a fresh, isolated recovery database (`npx wrangler d1 create test-restore-db`). Creating a recovery database is a remote mutation requiring separate explicit approval.
