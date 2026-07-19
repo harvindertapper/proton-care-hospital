@@ -23,10 +23,22 @@ current application.
 npm install
 npm run dev
 npm run lint
-npm test
+npm run test
 npm run build
 npm run cf:types
 ```
+
+## Database Migrations & Operational Runbooks
+
+- **Static Migration Check:** `npm run db:check-migrations`
+- **Local D1 Migration List / Apply:** `npm run db:migrate:list:local` / `npm run db:migrate:apply:local`
+- **Remote D1 Migration List:** `npm run db:migrate:list:remote`
+- **Remote D1 Migration Apply (Manual Post-Backup):** `npm run db:migrate:apply:remote`
+
+Operational documentation:
+- [D1 Database & R2 Storage Backup Runbook](docs/operations/d1-r2-backup-runbook.md)
+- [Content Source Inventory](docs/operations/content-source-inventory.md)
+- [Admin Architecture & Module Boundaries](docs/architecture/admin-rebuild-boundaries.md)
 
 ## Cloudflare deployment
 

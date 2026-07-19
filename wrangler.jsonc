@@ -11,7 +11,9 @@
     {
       "binding": "DB",
       "database_name": "site-creator-d1",
-      "database_id": "085be1f3-8d4a-459c-86b2-5f5d0d0f964f"
+      "database_id": "085be1f3-8d4a-459c-86b2-5f5d0d0f964f",
+      "migrations_dir": "migrations",
+      "migrations_table": "d1_migrations"
     }
   ],
   "r2_buckets": [

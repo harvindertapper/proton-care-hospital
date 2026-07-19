@@ -8,6 +8,11 @@
   "scripts": {
     "dev": "vinext dev",
     "typecheck": "tsc --noEmit",
+    "db:check-migrations": "node scripts/check-migrations.mjs",
+    "db:migrate:list:local": "wrangler d1 migrations list DB --local",
+    "db:migrate:apply:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:list:remote": "wrangler d1 migrations list DB --remote",
+    "db:migrate:apply:remote": "wrangler d1 migrations apply DB --remote",
     "prebuild": "npm run typecheck && npm run lint",
     "build": "npm run deploy:check-env && vinext build",
     "start": "vinext start",

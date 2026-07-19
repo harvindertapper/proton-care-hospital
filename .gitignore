@@ -42,3 +42,8 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# local operational backups and inventories
+/backups/
+/inventories/
+.local-backups/
