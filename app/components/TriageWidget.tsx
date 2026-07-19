@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { HelpCircle, X, ChevronRight, Calendar } from "lucide-react";
 
 interface SymptomNode {
@@ -73,6 +73,8 @@ const SYMPTOM_TREE: Record<string, SymptomNode> = {
 };
 
 export function TriageWidget() {
+  const launcherRef = useRef<HTMLButtonElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [currentNode, setCurrentNode] = useState("start");
   const [history, setHistory] = useState<string[]>([]);
@@ -119,10 +121,37 @@ export function TriageWidget() {
     }
   }
 
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      closeButtonRef.current?.focus();
+    });
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setIsOpen(false);
+      window.requestAnimationFrame(() => {
+        launcherRef.current?.focus();
+      });
+    }
+
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [isOpen]);
+
   return (
     <div className="triage-widget-float">
       {!isOpen && (
         <button
+          ref={launcherRef}
+          type="button"
+          aria-expanded={isOpen}
+          aria-controls="symptom-triage-panel"
           onClick={() => {
             setIsOpen(true);
             resetTriage();
@@ -149,42 +178,41 @@ export function TriageWidget() {
 
       {isOpen && (
         <div
-          style={{
-            width: "360px",
-            background: "white",
-            borderRadius: "16px",
-            border: "1px solid #e2e8f0",
-            boxShadow: "0 10px 30px rgba(15, 23, 42, 0.08)",
-            display: "flex",
-            flexDirection: "column",
-            overflow: "hidden"
-          }}
+          id="symptom-triage-panel"
+          className="triage-panel"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="symptom-triage-title"
         >
-          <div
-            style={{
-              padding: "16px 20px",
-              background: "linear-gradient(135deg, #0f172a, #1e293b)",
-              color: "white",
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center"
-            }}
-          >
+          <div className="triage-panel-header">
             <div>
-              <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 600 }}>Symptom Triage Assistant</h3>
+              <h3
+                id="symptom-triage-title"
+                className="triage-panel-title"
+              >
+                Symptom Triage Assistant
+              </h3>
               <span style={{ fontSize: "11px", color: "#94a3b8" }}>Protone Care Hospital</span>
             </div>
             <button
-              onClick={() => setIsOpen(false)}
-              style={{ background: "transparent", border: 0, color: "#94a3b8", cursor: "pointer", padding: "4px" }}
+              ref={closeButtonRef}
+              type="button"
+              className="triage-close-button"
+              aria-label="Close symptom triage"
+              onClick={() => {
+                setIsOpen(false);
+                window.requestAnimationFrame(() => {
+                  launcherRef.current?.focus();
+                });
+              }}
             >
-              <X size={18} />
+              <X size={18} aria-hidden="true" />
             </button>
           </div>
 
-          <div style={{ padding: "20px", flex: 1, display: "flex", flexDirection: "column", gap: "16px", minHeight: "260px", justifyContent: "space-between" }}>
+          <div className="triage-panel-body">
             {result ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: "14px", textAlign: "center", padding: "10px 0" }}>
+              <div className="triage-result">
                 {result.emergency ? (
                   <>
                     <div style={{ fontSize: "40px" }}>🚨</div>
@@ -238,56 +266,38 @@ export function TriageWidget() {
                   </>
                 )}
                 <button
+                  type="button"
+                  className="triage-secondary-action"
                   onClick={resetTriage}
-                  style={{ background: "transparent", border: 0, color: "#64748b", fontSize: "12px", textDecoration: "underline", cursor: "pointer", marginTop: "10px" }}
                 >
                   Start Over
                 </button>
               </div>
             ) : (
               <>
-                <p style={{ margin: 0, fontSize: "13px", color: "#334155", fontWeight: 500, lineHeight: "1.5", background: "#f8fafc", padding: "12px", borderRadius: "8px" }}>
+                <p className="triage-question">
                   {SYMPTOM_TREE[currentNode].question}
                 </p>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "200px", overflowY: "auto", paddingRight: "4px" }}>
+                <div className="triage-options">
                   {SYMPTOM_TREE[currentNode].options.map((opt, i) => (
                     <button
                       key={i}
+                      type="button"
+                      className="triage-option"
                       onClick={() => handleOptionClick(opt)}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        padding: "10px 14px",
-                        background: "white",
-                        border: "1px solid #cbd5e1",
-                        borderRadius: "8px",
-                        cursor: "pointer",
-                        fontSize: "12.5px",
-                        color: "#1e293b",
-                        fontWeight: 500,
-                        textAlign: "left",
-                        transition: "all 0.15s ease"
-                      }}
                     >
                       <span>{opt.text}</span>
-                      <ChevronRight size={14} style={{ color: "#94a3b8" }} />
+                      <ChevronRight size={14} aria-hidden="true" />
                     </button>
                   ))}
                 </div>
 
                 {history.length > 0 && (
                   <button
+                    type="button"
+                    className="triage-secondary-action triage-back-button"
                     onClick={handleBack}
-                    style={{
-                      alignSelf: "flex-start",
-                      background: "transparent",
-                      border: 0,
-                      color: "#64748b",
-                      fontSize: "12px",
-                      cursor: "pointer"
-                    }}
                   >
                     ← Back
                   </button>

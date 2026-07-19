@@ -2082,6 +2082,139 @@ summary:focus-visible,
   }
 }
 
+.triage-panel {
+  width: min(360px, calc(100vw - 40px));
+  max-height: calc(100vh - 140px);
+  max-height: calc(100dvh - 140px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  background: white;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+}
+.triage-panel-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  color: white;
+  background: linear-gradient(135deg, #0f172a, #1e293b);
+}
+.triage-panel-title {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.3;
+  font-weight: 600;
+}
+.triage-close-button {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: white;
+  background: transparent;
+  cursor: pointer;
+}
+.triage-close-button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.triage-panel-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.triage-result {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 10px 0;
+  text-align: center;
+}
+.triage-question {
+  margin: 0;
+  padding: 12px;
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--soft);
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 500;
+}
+.triage-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 200px;
+  padding-right: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.triage-option {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: var(--ink);
+  background: white;
+  cursor: pointer;
+  font-size: 12.5px;
+  line-height: 1.4;
+  font-weight: 500;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+.triage-option:hover {
+  border-color: var(--blue);
+  background: var(--sky);
+}
+.triage-option svg {
+  flex: 0 0 auto;
+  color: var(--blue);
+}
+.triage-secondary-action {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--blue);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: underline;
+}
+.triage-secondary-action:hover {
+  background: var(--sky);
+}
+.triage-back-button {
+  align-self: flex-start;
+}
+
 
 /* Admin/Staff Professional Login rewrite enhancements */
 .password-input-container {
@@ -2230,5 +2363,23 @@ video {
   .triage-widget-float > button {
     width: 48px !important;
     height: 48px !important;
+  }
+  .triage-panel {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 84px - env(safe-area-inset-bottom));
+    max-height: calc(100dvh - 84px - env(safe-area-inset-bottom));
+    border-radius: 14px;
+  }
+  .triage-panel-header {
+    padding: 12px 14px;
+  }
+  .triage-panel-body {
+    gap: 12px;
+    padding: 14px;
+  }
+  .triage-options {
+    max-height: none;
+    padding-right: 0;
+    overflow: visible;
   }
 }
