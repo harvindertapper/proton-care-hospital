@@ -2365,7 +2365,7 @@ video {
     height: 48px !important;
   }
   .triage-panel {
-    width: calc(100vw - 24px);
+    width: min(360px, calc(100vw - 24px));
     max-height: calc(100vh - 84px - env(safe-area-inset-bottom));
     max-height: calc(100dvh - 84px - env(safe-area-inset-bottom));
     border-radius: 14px;
