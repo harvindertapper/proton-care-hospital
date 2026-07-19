@@ -464,6 +464,14 @@ esac
 export BACKUP_TIMESTAMP="${ENCRYPTED_FILENAME#backup_}"
 export BACKUP_TIMESTAMP="${BACKUP_TIMESTAMP%.tar.gz.gpg}"
 
+case "${BACKUP_TIMESTAMP}" in
+  [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) ;;
+  *)
+    echo "Error: failed to derive a valid backup timestamp"
+    exit 1
+    ;;
+esac
+
 (
   cd "${RECOVERY_DIR}"
   sha256sum -c "$(basename "${RECOVERY_CHECKSUM}")"
