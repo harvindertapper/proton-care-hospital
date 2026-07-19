@@ -128,7 +128,7 @@ export async function getBlogBySlug(slug: string): Promise<PublicBlog | null> {
   try {
     const rows = await query<PublicBlog>(
       "SELECT id, slug, title, excerpt, body, author, reviewer, created_at FROM blog_posts WHERE slug = ? AND status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0",
-      [slug]
+      slug
     );
     if (rows.results?.length) return rows.results[0];
   } catch {
@@ -143,7 +143,7 @@ export async function getJobBySlug(slug: string): Promise<PublicJob | null> {
   try {
     const rows = await query<PublicJob>(
       "SELECT id, slug, title, department, employment_type, description FROM career_jobs WHERE slug = ? AND status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0",
-      [slug]
+      slug
     );
     if (rows.results?.length) return rows.results[0];
   } catch {
@@ -158,7 +158,7 @@ export async function getDoctorBySlug(slug: string): Promise<Doctor | null> {
   try {
     const rows = await query<Record<string, unknown>>(
       "SELECT slug, name, speciality, qualification, department_slug, photo_url, registration_number, consultant_type FROM doctor_profiles WHERE slug = ? AND status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 LIMIT 1",
-      [slug]
+      slug
     );
     if (rows.results?.length) return dbDoctorToPublic(rows.results[0]);
   } catch {

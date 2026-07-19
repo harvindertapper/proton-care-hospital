@@ -1,4 +1,4 @@
-import { audit, checkRateLimit, getClientIp, getR2, json, requireAdmin, run, verifyCsrf, query } from "@/app/lib/server";
+import { audit, checkRateLimit, getClientIp, getR2, json, requireAdmin, requireAppliedMutation, run, verifyCsrf, query } from "@/app/lib/server";
 
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const admin = await requireAdmin();
+  const admin = await requireAdmin({ role: "SUPER_ADMIN" });
   if (!admin.ok) return json({ error: admin.error, ...(admin.code ? { code: admin.code } : {}) }, { status: admin.status });
   if (!verifyCsrf(request, admin.session)) return json({ error: "Invalid CSRF token." }, { status: 403 });
 
@@ -71,10 +71,12 @@ export async function DELETE(request: Request) {
     await bucket.delete(asset.r2_key);
   } catch (err) {
     console.error("Failed to delete R2 object", err);
+    return json({ success: false, outcome: "FAILED", error: "Media object deletion failed; metadata was retained." }, { status: 502 });
   }
 
-  await run("DELETE FROM media_assets WHERE id = ?", id);
+  const result = await run("DELETE FROM media_assets WHERE id = ?", id);
+  requireAppliedMutation(result, true, "Media asset");
   await audit(admin.session.email, "MEDIA_DELETED", "MediaAsset", id, asset.r2_key);
 
-  return json({ success: true });
+  return json({ success: true, outcome: "APPLIED" });
 }

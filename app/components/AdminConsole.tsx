@@ -706,8 +706,12 @@ export function AdminConsole({
     setBusy(true);
     setNotice("");
     try {
-      await postAdmin(session.csrf, payload);
-      setNotice(successText);
+      const result = await postAdmin(session.csrf, payload);
+      setNotice(
+        result.outcome === "PENDING_APPROVAL"
+          ? "Change submitted for Super Admin approval."
+          : successText,
+      );
       await refreshData(true);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Action failed.");

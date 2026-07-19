@@ -4,8 +4,10 @@ import {
   getClientIp,
   json,
   parseYouTubeId,
+  MutationNotFoundError,
   query,
   requireAdmin,
+  requireAppliedMutation,
   run,
   verifyCsrf,
   hashPassword,
@@ -97,7 +99,7 @@ async function dashboardData(session: AdminSession) {
 
 async function createRevision(session: AdminSession, action: string, entityType: string, entityId: string, title: string, payload: Record<string, unknown>) {
   const id = crypto.randomUUID();
-  await run(
+  const result = await run(
     "INSERT INTO content_revisions (id, entity_type, entity_id, title, payload_json, proposed_by) VALUES (?, ?, ?, ?, ?, ?)",
     id,
     entityType,
@@ -106,6 +108,7 @@ async function createRevision(session: AdminSession, action: string, entityType:
     JSON.stringify({ action, payload }),
     session.email,
   );
+  requireAppliedMutation(result, true, "Content revision");
   await audit(session.email, "REVISION_CREATED", entityType, entityId, `${title} requires super admin review`);
   return { id, reviewRequired: true };
 }
@@ -164,7 +167,8 @@ async function applyDoctor(payload: Record<string, unknown>, actorEmail: string)
 
   if (!name || !slug || !speciality || !department) throw new Error("Invalid doctor profile payload.");
 
-  await run(
+  const existing = await query("SELECT id FROM doctor_profiles WHERE slug = ? LIMIT 1", slug);
+  const result = await run(
     `INSERT INTO doctor_profiles
       (id, slug, name, speciality, qualification, department_slug, photo_url, profile_note, consent_status, status, is_visible, approved_by, blocked_dates, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED_SOURCE', 'APPROVED', ?, ?, ?, CURRENT_TIMESTAMP)
@@ -192,7 +196,9 @@ async function applyDoctor(payload: Record<string, unknown>, actorEmail: string)
     actorEmail,
     blockedDates,
   );
+  requireAppliedMutation(result, Boolean(existing.results?.length) || Number(result.meta?.changes || 0) > 0, "Doctor profile");
   await audit(actorEmail, "DOCTOR_APPROVED", "DoctorProfile", slug, name);
+  return { outcome: "APPLIED" as const };
 }
 
 async function applyBlog(payload: Record<string, unknown>, actorEmail: string) {
@@ -288,12 +294,13 @@ async function applyFeedbackVisibility(
     );
   }
 
-  await run(
+  const result = await run(
     "UPDATE feedback SET status = ?, is_visible = ? WHERE id = ?",
     isVisible ? "APPROVED" : "NEEDS_REVIEW",
     isVisible,
     id,
   );
+  requireAppliedMutation(result, true, "Feedback");
 
   await audit(
     actorEmail,
@@ -304,30 +311,40 @@ async function applyFeedbackVisibility(
       feedback.public_consent,
     )}`,
   );
+  return { outcome: "APPLIED" as const };
 }
 
 async function applyBlogVisibility(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 120);
   const isVisible = Number(payload.isVisible) === 1 ? 1 : 0;
   if (!slug) throw new Error("Blog slug is required.");
-  await run("UPDATE blog_posts SET is_visible = ?, status = ? WHERE slug = ?", isVisible, isVisible ? "APPROVED" : "HIDDEN", slug);
+  const existing = await query("SELECT id FROM blog_posts WHERE slug = ? AND is_deleted = 0 LIMIT 1", slug);
+  const result = await run("UPDATE blog_posts SET is_visible = ?, status = ? WHERE slug = ? AND is_deleted = 0", isVisible, isVisible ? "APPROVED" : "HIDDEN", slug);
+  requireAppliedMutation(result, Boolean(existing.results?.length), "Blog post");
   await audit(actorEmail, "BLOG_VISIBILITY", "BlogPost", slug, `visible=${isVisible}`);
+  return { outcome: "APPLIED" as const };
 }
 
 async function applyCareerVisibility(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 120);
   const isVisible = Number(payload.isVisible) === 1 ? 1 : 0;
   if (!slug) throw new Error("Career slug is required.");
-  await run("UPDATE career_jobs SET is_visible = ?, status = ? WHERE slug = ?", isVisible, isVisible ? "APPROVED" : "HIDDEN", slug);
+  const existing = await query("SELECT id FROM career_jobs WHERE slug = ? AND is_deleted = 0 LIMIT 1", slug);
+  const result = await run("UPDATE career_jobs SET is_visible = ?, status = ? WHERE slug = ? AND is_deleted = 0", isVisible, isVisible ? "APPROVED" : "HIDDEN", slug);
+  requireAppliedMutation(result, Boolean(existing.results?.length), "Career job");
   await audit(actorEmail, "CAREER_VISIBILITY", "CareerJob", slug, `visible=${isVisible}`);
+  return { outcome: "APPLIED" as const };
 }
 
 async function applyVideoVisibility(payload: Record<string, unknown>, actorEmail: string) {
   const id = clean(payload.id, 120);
   const isVisible = Number(payload.isVisible) === 1 ? 1 : 0;
   if (!id) throw new Error("Video id is required.");
-  await run("UPDATE patient_videos SET is_visible = ?, status = ? WHERE id = ?", isVisible, isVisible ? "APPROVED" : "HIDDEN", id);
+  const existing = await query("SELECT id FROM patient_videos WHERE id = ? AND is_deleted = 0 LIMIT 1", id);
+  const result = await run("UPDATE patient_videos SET is_visible = ?, status = ? WHERE id = ? AND is_deleted = 0", isVisible, isVisible ? "APPROVED" : "HIDDEN", id);
+  requireAppliedMutation(result, Boolean(existing.results?.length), "Patient video");
   await audit(actorEmail, "VIDEO_VISIBILITY", "PatientVideo", id, `visible=${isVisible}`);
+  return { outcome: "APPLIED" as const };
 }
 
 async function applyContactStatus(payload: Record<string, unknown>, actorEmail: string) {
@@ -361,6 +378,7 @@ async function applyAppointmentStatus(payload: Record<string, unknown>, actorEma
   );
   const currentApp = current.results?.[0];
 
+  if (!currentApp) throw new MutationNotFoundError("Appointment");
   let newDate = currentApp?.requested_date || "";
   let newTime = currentApp?.requested_time || "";
   let scheduleVersion = currentApp?.schedule_version || 1;
@@ -378,8 +396,7 @@ async function applyAppointmentStatus(payload: Record<string, unknown>, actorEma
   if (rescheduled) {
     scheduleVersion += 1;
   }
-
-  await run(
+  const result = await run(
     "UPDATE appointments SET status = ?, internal_notes = COALESCE(NULLIF(?, ''), internal_notes), requested_date = ?, requested_time = ?, schedule_version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
     status,
     notes,
@@ -388,12 +405,14 @@ async function applyAppointmentStatus(payload: Record<string, unknown>, actorEma
     scheduleVersion,
     id
   );
+  requireAppliedMutation(result, true, "Appointment");
   await audit(actorEmail, "APPOINTMENT_STATUS", "Appointment", id, `${status}; rescheduled=${rescheduled}; version=${scheduleVersion}`);
 
   // Mock Resend Email dispatch logic
   if (rescheduled) {
     console.log(`[RESEND EMAIL DISPATCH] Rescheduling notification sent for appointment ${id}. Version ${scheduleVersion}. New slot: ${newDate} at ${newTime}`);
   }
+  return { outcome: "APPLIED" as const };
 }
 
 async function applyAction(action: string, payload: Record<string, unknown>, actorEmail: string) {
@@ -492,8 +511,8 @@ export async function POST(request: Request) {
     }
 
     if (action === "appointment.status") {
-      await applyAppointmentStatus(payload, admin.session.email);
-      return json({ success: true });
+      const result = await applyAppointmentStatus(payload, admin.session.email);
+      return json({ success: true, ...result });
     }
 
     if (action === "REVOKE_SESSION") {
@@ -688,15 +707,18 @@ export async function POST(request: Request) {
         action;
       const entityType = action.split(".")[0] || "content";
       const entityId = clean(payload.slug, 120) || clean(payload.departmentSlug, 120) || clean(payload.id, 120) || crypto.randomUUID();
-      return json({ success: true, revision: await createRevision(admin.session, action, entityType, entityId, title, payload) });
+      return json({ success: true, outcome: "PENDING_APPROVAL", revision: await createRevision(admin.session, action, entityType, entityId, title, payload) });
     }
 
-    await applyAction(action, payload, admin.session.email);
-    return json({ success: true });
+    const result = await applyAction(action, payload, admin.session.email);
+    return json({ success: true, outcome: result?.outcome || "APPLIED" });
   } catch (error) {
     console.error("Admin action failed:", error);
     const msg = error instanceof Error ? error.message : "Admin action failed.";
     const isInternal = msg.includes("D1") || msg.includes("SQLITE") || msg.includes("prepare") || msg.includes("bind");
+    if (error instanceof MutationNotFoundError) {
+      return json({ success: false, outcome: "NOT_FOUND", error: msg }, { status: 404 });
+    }
     return json(
       { error: isInternal ? "An internal database error occurred." : msg },
       { status: isInternal ? 500 : 400 }
@@ -809,27 +831,39 @@ async function applyDeleteClosure(payload: Record<string, unknown>, actorEmail: 
 async function applyDeleteDoctor(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 120);
   if (!slug) throw new Error("Doctor slug is required.");
-  await run("UPDATE doctor_profiles SET is_deleted = 1 WHERE slug = ?", slug);
+  const existing = await query("SELECT id FROM doctor_profiles WHERE slug = ? AND is_deleted = 0 LIMIT 1", slug);
+  const result = await run("UPDATE doctor_profiles SET is_deleted = 1 WHERE slug = ? AND is_deleted = 0", slug);
+  requireAppliedMutation(result, Boolean(existing.results?.length), "Doctor profile");
   await audit(actorEmail, "DOCTOR_DELETED", "DoctorProfile", slug, `Soft deleted doctor profile with slug: ${slug}`);
+  return { outcome: "APPLIED" as const };
 }
 
 async function applyDeleteBlog(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 120);
   if (!slug) throw new Error("Blog slug is required.");
-  await run("UPDATE blog_posts SET is_deleted = 1 WHERE slug = ?", slug);
+  const existing = await query("SELECT id FROM blog_posts WHERE slug = ? AND is_deleted = 0 LIMIT 1", slug);
+  const result = await run("UPDATE blog_posts SET is_deleted = 1 WHERE slug = ? AND is_deleted = 0", slug);
+  requireAppliedMutation(result, Boolean(existing.results?.length), "Blog post");
   await audit(actorEmail, "BLOG_DELETED", "BlogPost", slug, `Soft deleted blog post with slug: ${slug}`);
+  return { outcome: "APPLIED" as const };
 }
 
 async function applyDeleteCareer(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 120);
   if (!slug) throw new Error("Career job slug is required.");
-  await run("UPDATE career_jobs SET is_deleted = 1 WHERE slug = ?", slug);
+  const existing = await query("SELECT id FROM career_jobs WHERE slug = ? AND is_deleted = 0 LIMIT 1", slug);
+  const result = await run("UPDATE career_jobs SET is_deleted = 1 WHERE slug = ? AND is_deleted = 0", slug);
+  requireAppliedMutation(result, Boolean(existing.results?.length), "Career job");
   await audit(actorEmail, "CAREER_DELETED", "CareerJob", slug, `Soft deleted job listing with slug: ${slug}`);
+  return { outcome: "APPLIED" as const };
 }
 
 async function applyDeleteVideo(payload: Record<string, unknown>, actorEmail: string) {
   const id = clean(payload.id, 120);
   if (!id) throw new Error("Video ID is required.");
-  await run("UPDATE patient_videos SET is_deleted = 1 WHERE id = ?", id);
+  const existing = await query("SELECT id FROM patient_videos WHERE id = ? AND is_deleted = 0 LIMIT 1", id);
+  const result = await run("UPDATE patient_videos SET is_deleted = 1 WHERE id = ? AND is_deleted = 0", id);
+  requireAppliedMutation(result, Boolean(existing.results?.length), "Patient video");
   await audit(actorEmail, "VIDEO_DELETED", "PatientVideo", id, `Soft deleted video with ID: ${id}`);
+  return { outcome: "APPLIED" as const };
 }

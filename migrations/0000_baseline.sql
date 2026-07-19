@@ -253,6 +253,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS rate_limits_action_identifier_idx ON rate_limi
 CREATE UNIQUE INDEX IF NOT EXISTS admin_users_email_idx ON admin_users(email);
 CREATE INDEX IF NOT EXISTS sessions_id_idx ON sessions(id);
 CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions(expires_at);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_slot ON appointments(department_slug, requested_date, requested_time, phone) WHERE status != 'CANCELLED';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_slot ON appointments(department_slug, requested_date, requested_time) WHERE status != 'CANCELLED';
 CREATE INDEX IF NOT EXISTS admin_email_otps_email_idx ON admin_email_otps(email);
 CREATE INDEX IF NOT EXISTS idx_analytics_event ON site_analytics(event_type);
