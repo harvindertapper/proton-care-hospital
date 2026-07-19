@@ -1,23 +1,16 @@
-import type { ContentLifecycleStatus } from "./lifecycle";
+import type { ContentLifecycleStatus } from "./lifecycle.ts";
 
 export class ContentVersionConflictError extends Error {
-  readonly code = "CONTENT_VERSION_CONFLICT";
-  readonly tableName: string;
+  readonly code = "CONFLICT";
   readonly recordId: string;
   readonly expectedVersion: number;
   readonly actualVersion: number;
 
-  constructor(
-    tableName: string,
-    recordId: string,
-    expectedVersion: number,
-    actualVersion: number,
-  ) {
+  constructor(recordId: string, expectedVersion: number, actualVersion: number) {
     super(
-      `Content version conflict on ${tableName} id=${recordId}: expected version ${expectedVersion} but found ${actualVersion}`,
+      `Content version conflict id=${recordId}: expected version ${expectedVersion} but found ${actualVersion}`,
     );
     this.name = "ContentVersionConflictError";
-    this.tableName = tableName;
     this.recordId = recordId;
     this.expectedVersion = expectedVersion;
     this.actualVersion = actualVersion;
@@ -25,7 +18,7 @@ export class ContentVersionConflictError extends Error {
 }
 
 export class InvalidLifecycleTransitionError extends Error {
-  readonly code = "INVALID_LIFECYCLE_TRANSITION";
+  readonly code = "INVALID_TRANSITION";
   readonly from: ContentLifecycleStatus;
   readonly to: ContentLifecycleStatus;
 
@@ -37,17 +30,25 @@ export class InvalidLifecycleTransitionError extends Error {
   }
 }
 
-export class ContentPostApplyError extends Error {
-  readonly code = "CONTENT_POST_APPLY_ERROR";
-  readonly tableName: string;
-  readonly recordId: string;
-  readonly cause?: unknown;
+export type ContentMutationFailureStage = "MUTATION" | "AUDIT" | "CACHE";
 
-  constructor(tableName: string, recordId: string, message: string, cause?: unknown) {
-    super(`Post-apply failure for ${tableName} id=${recordId}: ${message}`);
-    this.name = "ContentPostApplyError";
-    this.tableName = tableName;
-    this.recordId = recordId;
+export class ContentMutationFailedError extends Error {
+  readonly code = "FAILED";
+  readonly stage: ContentMutationFailureStage;
+  readonly appliedVersion: number;
+
+  constructor(
+    stage: ContentMutationFailureStage,
+    appliedVersion: number,
+    message: string,
+    cause?: unknown,
+  ) {
+    super(
+      `Content mutation failed at stage ${stage} (appliedVersion=${appliedVersion}): ${message}`,
+    );
+    this.name = "ContentMutationFailedError";
+    this.stage = stage;
+    this.appliedVersion = appliedVersion;
     this.cause = cause;
   }
 }
