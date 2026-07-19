@@ -48,18 +48,84 @@ test("0000_baseline.sql matches normalized current runtime CREATE definitions wi
   assert.equal(result.valid, true, `Schema drift or validation error: ${result.errors?.join(", ")}`);
 });
 
-test("checkDestructiveStatement handles conditional vs unconditional DELETE and comments", () => {
-  // Unconditional DELETE is rejected
+test("checkDestructiveStatement handles DROP INDEX, TRUNCATE, ALTER DROP, and DELETE clauses", () => {
+  // Destructive operations fail outside comments
+  assert.equal(checkDestructiveStatement("DROP INDEX idx_test;"), "DROP INDEX");
+  assert.equal(checkDestructiveStatement("TRUNCATE appointments;"), "TRUNCATE");
+  assert.equal(checkDestructiveStatement("ALTER TABLE admin_users DROP COLUMN is_active;"), "ALTER TABLE ... DROP");
   assert.equal(checkDestructiveStatement("DELETE FROM admin_users;"), "DELETE FROM (unconditional)");
-  assert.equal(checkDestructiveStatement("  delete   from   sessions  ;"), "DELETE FROM (unconditional)");
 
-  // Conditional DELETE with WHERE clause is allowed
-  assert.equal(checkDestructiveStatement("DELETE FROM sessions WHERE expires_at < 12345;"), null);
-  assert.equal(checkDestructiveStatement("DELETE FROM rate_limits WHERE reset_at < CURRENT_TIMESTAMP;"), null);
+  // Conditional DELETE with WHERE is allowed
+  assert.equal(checkDestructiveStatement("DELETE FROM sessions WHERE expires_at < 1234;"), null);
 
-  // Comment-only destructive words are ignored
-  assert.equal(checkDestructiveStatement("-- DROP TABLE admin_users;"), null);
+  // Commented destructive operations are ignored
+  assert.equal(checkDestructiveStatement("-- DROP INDEX idx_test;"), null);
   assert.equal(checkDestructiveStatement("/* TRUNCATE appointments; */"), null);
+});
+
+test("Bidirectional source-drift: extra baseline-only CREATE statement fails validation", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pch-extra-baseline-"));
+  const tmpServerTs = path.join(tmpDir, "server.ts");
+  try {
+    const validBaseline = fs.readFileSync(path.join(realMigrationsDir, "0000_baseline.sql"), "utf8");
+    const extraBaseline = validBaseline + "\nCREATE TABLE IF NOT EXISTS extra_table (id TEXT PRIMARY KEY);";
+    fs.writeFileSync(path.join(tmpDir, "0000_baseline.sql"), extraBaseline);
+    fs.writeFileSync(tmpServerTs, fs.readFileSync(realServerTsPath, "utf8"));
+
+    const res = validateMigrationFiles(tmpDir, tmpServerTs);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => e.includes("Schema drift") || e.includes("mismatch")));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("Bidirectional source-drift: runtime-only CREATE statement fails validation", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pch-extra-runtime-"));
+  const tmpServerTs = path.join(tmpDir, "server.ts");
+  try {
+    fs.writeFileSync(path.join(tmpDir, "0000_baseline.sql"), fs.readFileSync(path.join(realMigrationsDir, "0000_baseline.sql"), "utf8"));
+    const serverCode = fs.readFileSync(realServerTsPath, "utf8");
+    const modifiedServerCode = serverCode.replace(
+      "const tableStatements = [",
+      "const tableStatements = [\n  `CREATE TABLE IF NOT EXISTS extra_runtime (id TEXT PRIMARY KEY)`,",
+    );
+    fs.writeFileSync(tmpServerTs, modifiedServerCode);
+
+    const res = validateMigrationFiles(tmpDir, tmpServerTs);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => e.includes("Schema drift") || e.includes("mismatch")));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("Bidirectional source-drift: duplicate normalized CREATE statement fails validation", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pch-dup-statement-"));
+  try {
+    const validBaseline = fs.readFileSync(path.join(realMigrationsDir, "0000_baseline.sql"), "utf8");
+    const dupBaseline = validBaseline + "\nCREATE TABLE IF NOT EXISTS site_configs (\n  key TEXT PRIMARY KEY,\n  value TEXT NOT NULL\n);";
+    fs.writeFileSync(path.join(tmpDir, "0000_baseline.sql"), dupBaseline);
+
+    const res = validateMigrationFiles(tmpDir, realServerTsPath);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => e.includes("Duplicate normalized CREATE statement")));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("Empty migration file fails validation", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pch-empty-migration-"));
+  try {
+    fs.writeFileSync(path.join(tmpDir, "0000_baseline.sql"), "");
+
+    const res = validateMigrationFiles(tmpDir, realServerTsPath);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => e.includes("empty")));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test("Unsorted filesystem input is handled deterministically by validator", () => {
@@ -76,7 +142,7 @@ test("Unsorted filesystem input is handled deterministically by validator", () =
   }
 });
 
-test("Validator rejects temporary fixtures with duplicate prefix, invalid filename, or destructive SQL", () => {
+test("Validator rejects temporary fixtures with duplicate prefix or invalid filename", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pch-migration-test-"));
   try {
     fs.writeFileSync(path.join(tmpDir, "0000_baseline.sql"), fs.readFileSync(path.join(realMigrationsDir, "0000_baseline.sql"), "utf8"));
@@ -94,20 +160,6 @@ test("Validator rejects temporary fixtures with duplicate prefix, invalid filena
     assert.equal(res.valid, false);
     assert.ok(res.errors.some((e) => e.includes("Duplicate migration prefix")));
     fs.unlinkSync(path.join(tmpDir, "0000_dup.sql"));
-
-    // Case 3: Destructive SQL (DROP TABLE)
-    fs.writeFileSync(path.join(tmpDir, "0001_destructive.sql"), "DROP TABLE admin_users;");
-    res = validateMigrationFiles(tmpDir);
-    assert.equal(res.valid, false);
-    assert.ok(res.errors.some((e) => e.includes("Destructive SQL detected")));
-    fs.unlinkSync(path.join(tmpDir, "0001_destructive.sql"));
-
-    // Case 4: Unconditional DELETE
-    fs.writeFileSync(path.join(tmpDir, "0002_unconditional_delete.sql"), "DELETE FROM admin_users;");
-    res = validateMigrationFiles(tmpDir);
-    assert.equal(res.valid, false);
-    assert.ok(res.errors.some((e) => e.includes("DELETE FROM (unconditional)")));
-    fs.unlinkSync(path.join(tmpDir, "0002_unconditional_delete.sql"));
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

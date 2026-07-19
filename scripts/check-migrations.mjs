@@ -84,7 +84,6 @@ export function extractServerTableStatements(serverTsPath) {
   if (endIdx === -1) return [];
   const block = code.slice(startIdx, endIdx);
 
-  // Extract backtick string contents
   const statements = [];
   const regex = /`([^`]+)`/g;
   let m;
@@ -101,7 +100,6 @@ export function validateMigrationFiles(migrationsDir, serverTsPath = null) {
     return { valid: false, errors: [`Migrations directory not found: ${migrationsDir}`] };
   }
 
-  // Deterministically sort migration files
   const entries = fs
     .readdirSync(migrationsDir)
     .filter((file) => file.endsWith(".sql"))
@@ -168,16 +166,40 @@ export function validateMigrationFiles(migrationsDir, serverTsPath = null) {
       }
     }
 
-    // Source-drift check against app/lib/server.ts if provided
     if (serverTsPath && fs.existsSync(serverTsPath)) {
       const serverStatements = extractServerTableStatements(serverTsPath).map(normalizeSql);
       if (serverStatements.length === 0) {
         errors.push("Failed to extract tableStatements from app/lib/server.ts.");
       } else {
+        const seenServer = new Set();
         for (const sStmt of serverStatements) {
-          const matched = baselineStatements.some((bStmt) => bStmt === sStmt);
-          if (!matched) {
-            errors.push(`Schema drift detected: statement in app/lib/server.ts does not match 0000_baseline.sql: "${sStmt}"`);
+          if (seenServer.has(sStmt)) {
+            errors.push(`Duplicate normalized CREATE statement in app/lib/server.ts: "${sStmt.slice(0, 60)}..."`);
+          }
+          seenServer.add(sStmt);
+        }
+
+        const seenBaseline = new Set();
+        for (const bStmt of baselineStatements) {
+          if (seenBaseline.has(bStmt)) {
+            errors.push(`Duplicate normalized CREATE statement in 0000_baseline.sql: "${bStmt.slice(0, 60)}..."`);
+          }
+          seenBaseline.add(bStmt);
+        }
+
+        if (serverStatements.length !== baselineStatements.length) {
+          errors.push(`Statement count mismatch: app/lib/server.ts declared ${serverStatements.length} CREATE statements but 0000_baseline.sql declared ${baselineStatements.length} CREATE statements.`);
+        }
+
+        for (const sStmt of serverStatements) {
+          if (!baselineStatements.includes(sStmt)) {
+            errors.push(`Schema drift (runtime statement missing from baseline): "${sStmt.slice(0, 60)}..."`);
+          }
+        }
+
+        for (const bStmt of baselineStatements) {
+          if (!serverStatements.includes(bStmt)) {
+            errors.push(`Schema drift (baseline statement missing from runtime): "${bStmt.slice(0, 60)}..."`);
           }
         }
       }
