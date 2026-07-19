@@ -44,8 +44,24 @@ export const metadata: Metadata = {
     images: [hospital.wideImage],
   },
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
+    icon: [
+      {
+        url: hospital.logo,
+        type: "image/jpeg",
+      },
+    ],
+    shortcut: [
+      {
+        url: hospital.logo,
+        type: "image/jpeg",
+      },
+    ],
+    apple: [
+      {
+        url: hospital.logo,
+        type: "image/jpeg",
+      },
+    ],
   },
 };
 
