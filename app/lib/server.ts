@@ -9,24 +9,9 @@ import {
   type SuperAdminBootstrapResult,
 } from "./adminAuth";
 
+export { MutationNotFoundError, requireAppliedMutation } from "./mutation-result";
+
 type D1Result<T = unknown> = { results?: T[]; success?: boolean };
-type D1MutationResult = { success?: boolean; meta?: { changes?: number } };
-
-export class MutationNotFoundError extends Error {
-  readonly code = "NOT_FOUND";
-
-  constructor(entityLabel: string) {
-    super(`${entityLabel} was not found.`);
-    this.name = "MutationNotFoundError";
-  }
-}
-
-export function requireAppliedMutation(result: D1MutationResult, entityExists: boolean, entityLabel: string) {
-  if (!entityExists || Number(result.meta?.changes || 0) < 1) {
-    throw new MutationNotFoundError(entityLabel);
-  }
-  return { outcome: "APPLIED" as const };
-}
 
 const SESSION_COOKIE = "pch_admin_session";
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
@@ -218,7 +203,7 @@ const tableStatements = [
   `CREATE UNIQUE INDEX IF NOT EXISTS admin_users_email_idx ON admin_users(email)`,
   `CREATE INDEX IF NOT EXISTS sessions_id_idx ON sessions(id)`,
   `CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions(expires_at)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_slot ON appointments(department_slug, requested_date, requested_time) WHERE status != 'CANCELLED'`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_slot ON appointments(department_slug, requested_date, requested_time, phone) WHERE status != 'CANCELLED'`,
   `CREATE TABLE IF NOT EXISTS idempotent_requests (
     id TEXT PRIMARY KEY,
     payload_hash TEXT NOT NULL,

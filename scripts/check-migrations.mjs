@@ -38,6 +38,14 @@ export const REQUIRED_INDEXES = [
   "idx_analytics_event",
 ];
 
+export const IMMUTABLE_BASELINE_APPOINTMENT_INDEX =
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_slot ON appointments(department_slug, requested_date, requested_time, phone) WHERE status != 'CANCELLED'";
+
+export const REQUIRED_INCREMENTAL_MIGRATIONS = {
+  "0001_enforce_department_slot_exclusivity.sql":
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_department_slot ON appointments(department_slug, requested_date, requested_time) WHERE status != 'CANCELLED'",
+};
+
 export function stripComments(sql) {
   return sql
     .replace(/--.*$/gm, "")
@@ -166,6 +174,17 @@ export function validateMigrationFiles(migrationsDir, serverTsPath = null) {
       }
     }
 
+    const immutableIndex = normalizeSql(IMMUTABLE_BASELINE_APPOINTMENT_INDEX);
+    const accidentalThreeColumnLegacyIndex = normalizeSql(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_slot ON appointments(department_slug, requested_date, requested_time) WHERE status != 'CANCELLED'",
+    );
+    if (!baselineStatements.includes(immutableIndex)) {
+      errors.push("Immutable baseline index idx_appointments_slot does not match the B0 definition.");
+    }
+    if (baselineStatements.includes(accidentalThreeColumnLegacyIndex)) {
+      errors.push("Immutable baseline index idx_appointments_slot incorrectly omits phone.");
+    }
+
     if (serverTsPath && fs.existsSync(serverTsPath)) {
       const serverStatements = extractServerTableStatements(serverTsPath).map(normalizeSql);
       if (serverStatements.length === 0) {
@@ -206,6 +225,26 @@ export function validateMigrationFiles(migrationsDir, serverTsPath = null) {
     }
   } else {
     errors.push("Baseline migration 0000_baseline.sql is missing.");
+  }
+
+  for (const [file, expectedStatement] of Object.entries(REQUIRED_INCREMENTAL_MIGRATIONS)) {
+    const migrationPath = path.join(migrationsDir, file);
+    if (!fs.existsSync(migrationPath)) {
+      errors.push("Migration 0001 is missing idx_appointments_department_slot.");
+      continue;
+    }
+
+    const migrationContent = fs.readFileSync(migrationPath, "utf8");
+    const statements = parseSqlStatements(migrationContent).map(normalizeSql);
+    if (!statements.includes(normalizeSql(expectedStatement))) {
+      errors.push("Migration 0001 is missing idx_appointments_department_slot.");
+    }
+    if (/idx_appointments_department_slot[\s\S]*requested_time\s*,\s*phone/i.test(stripComments(migrationContent))) {
+      errors.push("Migration 0001 incorrectly includes phone in the department-slot invariant.");
+    }
+    if (/\b(?:DROP|DELETE|UPDATE|INSERT|REPLACE|CREATE\s+TABLE|ALTER\s+TABLE)\b/i.test(stripComments(migrationContent))) {
+      errors.push("Migration 0001 must remain additive and may only create the new index.");
+    }
   }
 
   return {

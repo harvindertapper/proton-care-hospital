@@ -23,6 +23,7 @@ await writeFile(new URL("./status-route-real-mocked.ts", import.meta.url), mocke
 const dataRouteContent = await readFile(new URL("../app/api/admin/data/route.ts", import.meta.url), "utf8");
 const mockedDataRouteContent = dataRouteContent
   .replace('from "@/app/lib/server";', 'from "./server-mocked.js";')
+  .replace('from "@/app/lib/mutation-result";', 'from "../app/lib/mutation-result.ts";')
   .replace('from "@/app/lib/data";', 'from "../app/lib/data.ts";')
   .replace('from "@/app/lib/adminAuth";', 'from "../app/lib/adminAuth.ts";')
   .replace('from "@/app/lib/resend";', 'from "../app/lib/resend.ts";')

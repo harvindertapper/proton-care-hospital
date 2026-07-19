@@ -1,4 +1,5 @@
-import { audit, checkRateLimit, getClientIp, getR2, json, requireAdmin, requireAppliedMutation, run, verifyCsrf, query } from "@/app/lib/server";
+import { audit, checkRateLimit, getClientIp, getR2, json, MutationNotFoundError, requireAdmin, run, verifyCsrf, query } from "@/app/lib/server";
+import { executeMediaDeletion } from "@/app/lib/mutation-result";
 
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
@@ -63,20 +64,44 @@ export async function DELETE(request: Request) {
   const id = url.searchParams.get("id") || "";
   if (!id) return json({ error: "Media asset ID is required." }, { status: 400 });
 
-  const rows = await query<{ r2_key: string }>("SELECT r2_key FROM media_assets WHERE id = ? LIMIT 1", id);
-  const asset = rows.results?.[0];
-  if (!asset) return json({ error: "Media asset not found." }, { status: 404 });
-
   try {
-    await bucket.delete(asset.r2_key);
-  } catch (err) {
-    console.error("Failed to delete R2 object", err);
-    return json({ success: false, outcome: "FAILED", error: "Media object deletion failed; metadata was retained." }, { status: 502 });
+    const result = await executeMediaDeletion<{ r2_key: string }>({
+      loadMetadata: async () => {
+        const rows = await query<{ r2_key: string }>("SELECT r2_key FROM media_assets WHERE id = ? LIMIT 1", id);
+        return rows.results?.[0] || null;
+      },
+      deleteObject: (asset) => bucket.delete(asset.r2_key),
+      deleteMetadata: () => run("DELETE FROM media_assets WHERE id = ?", id),
+      writeAudit: (asset) => audit(admin.session.email, "MEDIA_DELETED", "MediaAsset", id, asset.r2_key),
+      logError: (message, error) => console.error(message, error),
+    });
+
+    if (result.outcome === "FAILED") {
+      const objectFailed = result.stage === "OBJECT";
+      return json(
+        {
+          success: false,
+          outcome: "FAILED",
+          error: objectFailed
+            ? "Media object deletion failed; metadata was retained."
+            : "Media deletion could not be finalized. The inconsistency was logged for recovery.",
+        },
+        { status: objectFailed ? 502 : 500 },
+      );
+    }
+
+    return json({ success: true, outcome: "APPLIED" });
+  } catch (error) {
+    if (error instanceof MutationNotFoundError) {
+      return json(
+        { success: false, outcome: "NOT_FOUND", error: error.message },
+        { status: 404 },
+      );
+    }
+    console.error("Media deletion failed", error);
+    return json(
+      { success: false, outcome: "FAILED", error: "Media deletion failed." },
+      { status: 500 },
+    );
   }
-
-  const result = await run("DELETE FROM media_assets WHERE id = ?", id);
-  requireAppliedMutation(result, true, "Media asset");
-  await audit(admin.session.email, "MEDIA_DELETED", "MediaAsset", id, asset.r2_key);
-
-  return json({ success: true, outcome: "APPLIED" });
 }

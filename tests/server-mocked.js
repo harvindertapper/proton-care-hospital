@@ -111,20 +111,7 @@ export async function checkRateLimit(action, identifier, limit, windowSeconds) {
   }
   return { ok: true, remaining: limit - row.count };
 }
-export class MutationNotFoundError extends Error {
-  constructor(entityLabel) {
-    super(`${entityLabel} was not found.`);
-    this.name = "MutationNotFoundError";
-  }
-}
-
-export function requireAppliedMutation(result, entityExists, entityLabel) {
-  if (!entityExists || Number(result.meta?.changes || 0) < 1) {
-    throw new MutationNotFoundError(entityLabel);
-  }
-  return { outcome: "APPLIED" };
-}
-
+export { MutationNotFoundError, requireAppliedMutation } from "../app/lib/mutation-result.ts";
 
 export function json(data, init = {}) {
   return new Response(JSON.stringify(data), {

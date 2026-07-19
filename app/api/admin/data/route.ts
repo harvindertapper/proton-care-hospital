@@ -13,6 +13,7 @@ import {
   hashPassword,
   nextRequestId,
 } from "@/app/lib/server";
+import { executeRoleMutation } from "@/app/lib/mutation-result";
 import { departmentBySlug } from "@/app/lib/data";
 import { validateStaffAccountInput } from "@/app/lib/adminAuth";
 import { sendEmail, getStaffOnboardingTemplate } from "@/app/lib/resend";
@@ -499,15 +500,16 @@ export async function POST(request: Request) {
           );
         }
       }
-      await run(
-        "UPDATE content_revisions SET status = ?, reviewed_by = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?",
+      const reviewResult = await run(
+        "UPDATE content_revisions SET status = ?, reviewed_by = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'NEEDS_REVIEW'",
         decision,
         admin.session.email,
         clean(body.reviewNote, 400),
         revisionId,
       );
+      requireAppliedMutation(reviewResult, true, "Content revision");
       await audit(admin.session.email, `REVISION_${decision}`, revision.entity_type, revision.entity_id);
-      return json({ success: true });
+      return json({ success: true, outcome: "APPLIED" });
     }
 
     if (action === "appointment.status") {
@@ -698,20 +700,20 @@ export async function POST(request: Request) {
       return json({ success: true, loginRequired: true });
     }
 
-    if (admin.session.role === "STAFF") {
-      const title =
-        clean(payload.title, 180) ||
-        clean(payload.name, 180) ||
-        clean(payload.departmentSlug, 180) ||
-        clean(payload.id, 180) ||
-        action;
-      const entityType = action.split(".")[0] || "content";
-      const entityId = clean(payload.slug, 120) || clean(payload.departmentSlug, 120) || clean(payload.id, 120) || crypto.randomUUID();
-      return json({ success: true, outcome: "PENDING_APPROVAL", revision: await createRevision(admin.session, action, entityType, entityId, title, payload) });
-    }
-
-    const result = await applyAction(action, payload, admin.session.email);
-    return json({ success: true, outcome: result?.outcome || "APPLIED" });
+    const title =
+      clean(payload.title, 180) ||
+      clean(payload.name, 180) ||
+      clean(payload.departmentSlug, 180) ||
+      clean(payload.id, 180) ||
+      action;
+    const entityType = action.split(".")[0] || "content";
+    const entityId = clean(payload.slug, 120) || clean(payload.departmentSlug, 120) || clean(payload.id, 120) || crypto.randomUUID();
+    const result = await executeRoleMutation({
+      isStaff: admin.session.role === "STAFF",
+      createRevision: () => createRevision(admin.session, action, entityType, entityId, title, payload),
+      applyMutation: () => applyAction(action, payload, admin.session.email),
+    });
+    return json({ success: true, ...result });
   } catch (error) {
     console.error("Admin action failed:", error);
     const msg = error instanceof Error ? error.message : "Admin action failed.";
@@ -720,8 +722,12 @@ export async function POST(request: Request) {
       return json({ success: false, outcome: "NOT_FOUND", error: msg }, { status: 404 });
     }
     return json(
-      { error: isInternal ? "An internal database error occurred." : msg },
-      { status: isInternal ? 500 : 400 }
+      {
+        success: false,
+        outcome: "FAILED",
+        error: isInternal ? "An internal database error occurred." : msg,
+      },
+      { status: isInternal ? 500 : 400 },
     );
   }
 }
