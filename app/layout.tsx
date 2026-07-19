@@ -46,20 +46,28 @@ export const metadata: Metadata = {
   icons: {
     icon: [
       {
-        url: hospital.logo,
-        type: "image/jpeg",
+        url: "/assets/brand/protone-tab-icon-32.png",
+        type: "image/png",
+        sizes: "32x32",
+      },
+      {
+        url: "/assets/brand/protone-tab-icon-192.png",
+        type: "image/png",
+        sizes: "192x192",
       },
     ],
     shortcut: [
       {
-        url: hospital.logo,
-        type: "image/jpeg",
+        url: "/assets/brand/protone-tab-icon-32.png",
+        type: "image/png",
+        sizes: "32x32",
       },
     ],
     apple: [
       {
-        url: hospital.logo,
-        type: "image/jpeg",
+        url: "/assets/brand/protone-apple-touch-icon-180.png",
+        type: "image/png",
+        sizes: "180x180",
       },
     ],
   },
