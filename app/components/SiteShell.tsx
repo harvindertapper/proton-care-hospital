@@ -38,6 +38,32 @@ export function Header() {
     }
   }, [pathname]);
 
+  // Close the mobile menu when interacting outside it or pressing Escape.
+  useEffect(() => {
+    function handleOutsidePointer(event: PointerEvent) {
+      const mobileNav = mobileNavRef.current;
+      if (!mobileNav?.open) return;
+      if (!(event.target instanceof Node)) return;
+      if (mobileNav.contains(event.target)) return;
+      mobileNav.open = false;
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      const mobileNav = mobileNavRef.current;
+      if (event.key !== "Escape" || !mobileNav?.open) return;
+      mobileNav.open = false;
+      mobileNav.querySelector("summary")?.focus();
+    }
+
+    document.addEventListener("pointerdown", handleOutsidePointer);
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.removeEventListener("pointerdown", handleOutsidePointer);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
+
   return (
     <header className="site-header">
       <div className="topbar">
