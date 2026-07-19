@@ -1395,6 +1395,49 @@ export function ContactForm({ turnstileSiteKey }: { turnstileSiteKey?: string })
     }
   }
 
+  function sendAnotherMessage() {
+    setSuccess(false);
+    setNotice("");
+    setForm(emptyForm);
+    setTouched({});
+    setPendingDraft(null);
+    setTurnstileToken("");
+  }
+
+  if (success) {
+    return (
+      <div
+        className="flow-card booking-success"
+        role="status"
+        aria-live="polite"
+      >
+        <div className="booking-success-icon">
+          <CheckCircle2 size={40} aria-hidden="true" />
+        </div>
+
+        <h2 className="booking-success-title">Message received</h2>
+
+        <p className="booking-success-sub">
+          {notice ||
+            "Thank you. The hospital desk has received your message."}
+        </p>
+
+        <p className="field-hint">
+          Our administration team will review your enquiry and respond as soon
+          as reasonably practicable.
+        </p>
+
+        <button
+          type="button"
+          className="button primary"
+          onClick={sendAnotherMessage}
+        >
+          Send another message
+        </button>
+      </div>
+    );
+  }
+
   return (
     <form className="flow-card" onSubmit={submit}>
       {pendingDraft ? (
