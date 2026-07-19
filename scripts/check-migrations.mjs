@@ -46,6 +46,31 @@ export const REQUIRED_INCREMENTAL_MIGRATIONS = {
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_department_slot ON appointments(department_slug, requested_date, requested_time) WHERE status != 'CANCELLED'",
 };
 
+export const LIFECYCLE_FOUNDATION_MIGRATION = "0002_add_content_lifecycle_foundation.sql";
+
+export const LIFECYCLE_FOUNDATION_TABLES = [
+  "department_timings",
+  "doctor_profiles",
+  "blog_posts",
+  "career_jobs",
+  "patient_videos",
+  "media_assets",
+];
+
+export const LIFECYCLE_FOUNDATION_COLUMNS = [
+  "lifecycle_status",
+  "version",
+  "deleted_at",
+];
+
+function findAlterAddColumn(stmt, table, column) {
+  const addColRegex = new RegExp(
+    `^ALTER\\s+TABLE\\s+${table}\\s+ADD\\s+COLUMN\\s+${column}\\b`,
+    "i",
+  );
+  return addColRegex.test(stmt);
+}
+
 export function stripComments(sql) {
   return sql
     .replace(/--.*$/gm, "")
@@ -244,6 +269,42 @@ export function validateMigrationFiles(migrationsDir, serverTsPath = null) {
     }
     if (/\b(?:DROP|DELETE|UPDATE|INSERT|REPLACE|CREATE\s+TABLE|ALTER\s+TABLE)\b/i.test(stripComments(migrationContent))) {
       errors.push("Migration 0001 must remain additive and may only create the new index.");
+    }
+  }
+
+  const lifecyclePath = path.join(migrationsDir, LIFECYCLE_FOUNDATION_MIGRATION);
+  if (fs.existsSync(lifecyclePath)) {
+    const lifecycleContent = fs.readFileSync(lifecyclePath, "utf8");
+    const stripped = stripComments(lifecycleContent);
+    const statements = parseSqlStatements(lifecycleContent);
+
+    const enumRegexLenient = /lifecycle_status\s+IN\s*\(\s*'DRAFT'.*'ARCHIVED'\s*\)/i;
+    for (const table of LIFECYCLE_FOUNDATION_TABLES) {
+      for (const column of LIFECYCLE_FOUNDATION_COLUMNS) {
+        if (!statements.some((stmt) => findAlterAddColumn(stmt, table, column))) {
+          errors.push(`Migration 0002 missing additive ALTER for ${table}.${column}.`);
+        }
+      }
+      const addStatusRegex = new RegExp(
+        `ALTER\\s+TABLE\\s+${table}\\s+ADD\\s+COLUMN\\s+lifecycle_status\\s+TEXT\\s+NOT\\s+NULL\\s+DEFAULT\\s+'PUBLISHED'\\s+CHECK`,
+        "i",
+      );
+      if (!addStatusRegex.test(stripped) || !enumRegexLenient.test(stripped)) {
+        errors.push(`Migration 0002 lifecycle_status for ${table} must default to PUBLISHED with the canonical CHECK enum.`);
+      }
+    }
+
+    for (const stmt of statements) {
+      if (/\bALTER\s+TABLE\s+[\s\S]*?\bDROP\b/i.test(stmt)) {
+        errors.push("Migration 0002 must not drop any legacy columns.");
+      }
+      if (/\bDROP\s+TABLE\b/i.test(stmt)) {
+        errors.push("Migration 0002 must not drop any table.");
+      }
+    }
+
+    if (enumRegexLenient.test(stripped) === false) {
+      errors.push("Migration 0002 must introduce the canonical lifecycle_status CHECK enum.");
     }
   }
 

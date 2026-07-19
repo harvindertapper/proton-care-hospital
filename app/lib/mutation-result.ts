@@ -1,4 +1,4 @@
-export type MutationOutcome = "APPLIED" | "PENDING_APPROVAL" | "NOT_FOUND" | "FAILED";
+export type MutationOutcome = "APPLIED" | "PENDING_APPROVAL" | "NOT_FOUND" | "FAILED" | "CONFLICT";
 
 export type D1MutationResult = {
   success?: boolean;
