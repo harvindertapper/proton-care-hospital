@@ -42,7 +42,7 @@ test("structural guard: high-risk admin mutations require affected-row proof bef
   for (const entity of ["Blog post", "Career job", "Patient video", "Appointment"]) {
     assert.match(adminRoute, new RegExp(`requireAppliedMutation\\([^\\n]+${entity}`));
   }
-  assert.match(doctorAdminSource, /requireAppliedMutation\([^\n]+Doctor profile/);
+  assert.match(doctorAdminSource, /throwDoctorGuardFailure\(repo, slug, "(SAVE|ARCHIVE|RESTORE)"\)/);
   assert.match(mediaRoute, /executeMediaDeletion/);
   assert.match(adminRoute, /outcome: "NOT_FOUND"/);
 });

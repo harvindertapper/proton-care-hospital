@@ -1,7 +1,51 @@
-import { requireAppliedMutation, MutationNotFoundError, MutationConflictError } from "./mutation-result.ts";
+import { MutationNotFoundError, MutationConflictError } from "./mutation-result.ts";
 import type { DoctorManagerRow } from "./doctor-admin-types.ts";
 
 export type LifecycleStatus = "DRAFT" | "IN_REVIEW" | "PUBLISHED" | "HIDDEN" | "ARCHIVED";
+
+export type DoctorGuardOperation = "SAVE" | "ARCHIVE" | "RESTORE";
+
+export function parseExpectedVersion(
+  raw: unknown,
+  { minimum = 0 }: { minimum?: number } = {},
+): number {
+  if (raw === undefined || raw === null) return minimum > 0 ? NaN : 0;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw)) return NaN;
+  if (raw < minimum) return NaN;
+  return raw;
+}
+
+export function throwInvalidExpectedVersion(): never {
+  throw new Error("expectedVersion must be a non-negative integer.");
+}
+
+export async function throwDoctorGuardFailure(
+  repo: DoctorRepo,
+  slug: string,
+  operation: DoctorGuardOperation,
+): Promise<never> {
+  const current = await loadDoctor(repo, slug);
+
+  if (!current) {
+    throw new MutationNotFoundError("Doctor profile");
+  }
+
+  const archived =
+    current.is_deleted === 1 || current.lifecycle_status === "ARCHIVED";
+
+  if (operation === "SAVE") {
+    if (archived) throw new Error(ARCHIVED_SAVE_ERROR);
+    throw new MutationConflictError();
+  }
+
+  if (operation === "ARCHIVE") {
+    if (archived) throw new MutationNotFoundError("Doctor profile");
+    throw new MutationConflictError();
+  }
+
+  if (!archived) throw new MutationNotFoundError("Doctor profile");
+  throw new MutationConflictError();
+}
 
 export type LoadedDoctor = {
   id: string;
@@ -138,26 +182,42 @@ export async function createDoctor(
   actorEmail: string,
 ): Promise<{ outcome: "APPLIED" }> {
   const lifecycle = deriveLifecycleFromVisibility(fields.isVisible);
-  const result = await repo.run(
-    `INSERT INTO doctor_profiles
-      (id, slug, name, speciality, qualification, department_slug, photo_url, profile_note, consent_status, status, is_visible, approved_by, blocked_dates, is_deleted, lifecycle_status, version, deleted_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED_SOURCE', ?, ?, ?, ?, ?, ?, 1, NULL, CURRENT_TIMESTAMP)`,
-    `doctor-${slug}`,
-    slug,
-    fields.name,
-    fields.speciality,
-    fields.qualification,
-    fields.departmentSlug,
-    fields.photoUrl,
-    fields.profileNote,
-    lifecycle.status,
-    lifecycle.is_visible,
-    actorEmail,
-    fields.blockedDates,
-    lifecycle.is_deleted,
-    lifecycle.lifecycle_status,
-  );
-  requireAppliedMutation(result, Number(result.meta?.changes || 0) > 0, "Doctor profile");
+  let result: { success?: boolean; meta?: { changes?: number } };
+  try {
+    result = await repo.run(
+      `INSERT INTO doctor_profiles
+        (id, slug, name, speciality, qualification, department_slug, photo_url, profile_note, consent_status, status, is_visible, approved_by, blocked_dates, is_deleted, lifecycle_status, version, deleted_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED_SOURCE', ?, ?, ?, ?, ?, ?, 1, NULL, CURRENT_TIMESTAMP)`,
+      `doctor-${slug}`,
+      slug,
+      fields.name,
+      fields.speciality,
+      fields.qualification,
+      fields.departmentSlug,
+      fields.photoUrl,
+      fields.profileNote,
+      lifecycle.status,
+      lifecycle.is_visible,
+      actorEmail,
+      fields.blockedDates,
+      lifecycle.is_deleted,
+      lifecycle.lifecycle_status,
+    );
+  } catch (error) {
+    const existing = await loadDoctor(repo, slug);
+    if (existing) {
+      throw new MutationConflictError("A doctor with this slug was created by another session.");
+    }
+    throw error;
+  }
+  const changes = Number(result.meta?.changes || 0);
+  if (changes < 1) {
+    const existing = await loadDoctor(repo, slug);
+    if (existing) {
+      throw new MutationConflictError("A doctor with this slug was created by another session.");
+    }
+    throw new Error("Doctor profile creation failed unexpectedly.");
+  }
   await repo.audit(actorEmail, "DOCTOR_APPROVED", "DoctorProfile", slug, fields.name);
   return { outcome: "APPLIED" };
 }
@@ -210,7 +270,9 @@ export async function updateDoctor(
     slug,
     expectedVersion,
   );
-  requireAppliedMutation(result, true, "Doctor profile");
+  if (Number(result.meta?.changes || 0) < 1) {
+    await throwDoctorGuardFailure(repo, slug, "SAVE");
+  }
   await repo.audit(actorEmail, "DOCTOR_APPROVED", "DoctorProfile", slug, fields.name);
   return { outcome: "APPLIED" };
 }
@@ -238,7 +300,9 @@ export async function archiveDoctor(
     slug,
     expectedVersion,
   );
-  requireAppliedMutation(result, true, "Doctor profile");
+  if (Number(result.meta?.changes || 0) < 1) {
+    await throwDoctorGuardFailure(repo, slug, "ARCHIVE");
+  }
   await repo.audit(actorEmail, "DOCTOR_ARCHIVED", "DoctorProfile", slug, "Doctor profile archived.");
   return { outcome: "APPLIED" };
 }
@@ -266,7 +330,9 @@ export async function restoreDoctor(
     slug,
     expectedVersion,
   );
-  requireAppliedMutation(result, true, "Doctor profile");
+  if (Number(result.meta?.changes || 0) < 1) {
+    await throwDoctorGuardFailure(repo, slug, "RESTORE");
+  }
   await repo.audit(actorEmail, "DOCTOR_RESTORED_TO_HIDDEN", "DoctorProfile", slug, "Doctor profile restored to hidden state for review.");
   return { outcome: "APPLIED" };
 }

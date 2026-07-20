@@ -23,6 +23,7 @@ import {
   ARCHIVED_SAVE_ERROR,
   ACTIVE_DOCTORS_ADMIN_SQL,
   ARCHIVED_DOCTORS_ADMIN_SQL,
+  throwInvalidExpectedVersion,
   type DoctorRepo,
 } from "@/app/lib/doctor-admin";
 import { departmentBySlug } from "@/app/lib/data";
@@ -179,7 +180,24 @@ async function applyDoctor(payload: Record<string, unknown>, actorEmail: string)
   const profileNote = clean(payload.profileNote, 1000);
   const isVisible = Number(payload.isVisible) === 0 ? 0 : 1;
   const blockedDates = clean(payload.blockedDates, 2000);
-  const expectedVersion = Number(payload.expectedVersion) || 0;
+
+  const rawExpectedVersion = payload.expectedVersion;
+  if (
+    rawExpectedVersion !== undefined &&
+    rawExpectedVersion !== null &&
+    (
+      typeof rawExpectedVersion !== "number" ||
+      !Number.isFinite(rawExpectedVersion) ||
+      !Number.isInteger(rawExpectedVersion) ||
+      rawExpectedVersion < 0
+    )
+  ) {
+    throwInvalidExpectedVersion();
+  }
+  const expectedVersion =
+    rawExpectedVersion === undefined || rawExpectedVersion === null
+      ? 0
+      : (rawExpectedVersion as number);
 
   if (!name || !slug || !speciality || !department) throw new Error("Invalid doctor profile payload.");
 
@@ -773,10 +791,10 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (typeof obj.youtubeUrl !== "string" || !obj.youtubeUrl.trim()) return { ok: false, error: "YouTube URL is required." };
   } else if (action === "doctor.restore") {
     if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Doctor slug is required." };
-    if (typeof obj.expectedVersion !== "number" || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion is required." };
+    if (typeof obj.expectedVersion !== "number" || !Number.isFinite(obj.expectedVersion) || !Number.isInteger(obj.expectedVersion) || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion must be a positive integer." };
   } else if (action === "doctor.delete") {
     if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Doctor slug is required." };
-    if (typeof obj.expectedVersion !== "number" || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion is required." };
+    if (typeof obj.expectedVersion !== "number" || !Number.isFinite(obj.expectedVersion) || !Number.isInteger(obj.expectedVersion) || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion must be a positive integer." };
   }
   return { ok: true };
 }
@@ -854,20 +872,34 @@ async function applyDeleteClosure(payload: Record<string, unknown>, actorEmail: 
 
 async function applyDeleteDoctor(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 120);
-  const expectedVersion = Number(payload.expectedVersion) || 0;
   if (!slug) throw new Error("Doctor slug is required.");
-  if (expectedVersion < 1) throw new Error("expectedVersion is required for archive.");
+  const rawExpectedVersion = payload.expectedVersion;
+  if (
+    typeof rawExpectedVersion !== "number" ||
+    !Number.isFinite(rawExpectedVersion) ||
+    !Number.isInteger(rawExpectedVersion) ||
+    rawExpectedVersion < 1
+  ) {
+    throwInvalidExpectedVersion();
+  }
   const repo: DoctorRepo = { query, run, audit };
-  return archiveDoctor(repo, slug, expectedVersion, actorEmail);
+  return archiveDoctor(repo, slug, rawExpectedVersion as number, actorEmail);
 }
 
 async function applyRestoreDoctor(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 120);
-  const expectedVersion = Number(payload.expectedVersion) || 0;
   if (!slug) throw new Error("Doctor slug is required.");
-  if (expectedVersion < 1) throw new Error("expectedVersion is required for restore.");
+  const rawExpectedVersion = payload.expectedVersion;
+  if (
+    typeof rawExpectedVersion !== "number" ||
+    !Number.isFinite(rawExpectedVersion) ||
+    !Number.isInteger(rawExpectedVersion) ||
+    rawExpectedVersion < 1
+  ) {
+    throwInvalidExpectedVersion();
+  }
   const repo: DoctorRepo = { query, run, audit };
-  return restoreDoctor(repo, slug, expectedVersion, actorEmail);
+  return restoreDoctor(repo, slug, rawExpectedVersion as number, actorEmail);
 }
 
 async function applyDeleteBlog(payload: Record<string, unknown>, actorEmail: string) {

@@ -19,8 +19,9 @@ import {
   assertNotArchivedForEdit,
   deriveLifecycleFromVisibility,
   ARCHIVED_SAVE_ERROR,
+  parseExpectedVersion,
 } from "../app/lib/doctor-admin.ts";
-import { MutationConflictError, executeRoleMutation } from "../app/lib/mutation-result.ts";
+import { MutationConflictError, MutationNotFoundError, executeRoleMutation } from "../app/lib/mutation-result.ts";
 
 const PUBLISHED_ROW = {
   id: "d1", slug: "dr-a", name: "Dr A", lifecycle_status: "PUBLISHED",
@@ -493,4 +494,219 @@ test("source wiring guard: page.tsx and route.ts reference the SQL constants", a
     assert.ok(src.includes("ACTIVE_DOCTORS_ADMIN_SQL"), "source must reference ACTIVE_DOCTORS_ADMIN_SQL");
     assert.ok(src.includes("ARCHIVED_DOCTORS_ADMIN_SQL"), "source must reference ARCHIVED_DOCTORS_ADMIN_SQL");
   }
+});
+
+function makeInterleavingRepo({ rows = [], beforeGuard }) {
+  const base = makeRepo({ rows });
+  const originalRun = base.repo.run;
+  base.repo.run = async (sql, ...binds) => {
+    if (sql.includes("version = version + 1") && beforeGuard) {
+      await beforeGuard(base.db);
+      const slug = String(binds[binds.length - 2]);
+      const expectedVersion = Number(binds[binds.length - 1]);
+      const row = base.db.get(slug);
+      if (!row) return { success: true, meta: { changes: 0 } };
+      if (Number(row.version) !== expectedVersion) return { success: true, meta: { changes: 0 } };
+      if (sql.includes("is_deleted = 0 AND lifecycle_status != 'ARCHIVED'")) {
+        if (row.is_deleted === 1 || row.lifecycle_status === "ARCHIVED") {
+          return { success: true, meta: { changes: 0 } };
+        }
+      }
+      if (sql.includes("is_deleted = 1 AND lifecycle_status = 'ARCHIVED'")) {
+        if (row.is_deleted !== 1 || row.lifecycle_status !== "ARCHIVED") {
+          return { success: true, meta: { changes: 0 } };
+        }
+      }
+    }
+    return originalRun(sql, ...binds);
+  };
+  return base;
+}
+
+test("31. Interleave: update row version bumped between load and guard -> CONFLICT", async () => {
+  const { repo, db } = makeInterleavingRepo({
+    rows: [{ ...PUBLISHED_ROW, version: 1 }],
+    beforeGuard: async (db) => { db.get("dr-a").version = 2; },
+  });
+  await assert.rejects(
+    () => updateDoctor(repo, "dr-a", 1, fields(), "admin@x"),
+    (e) => e instanceof MutationConflictError && e.code === "CONFLICT",
+  );
+  assert.equal(db.get("dr-a").version, 2);
+});
+
+test("32. Interleave: update row deleted between load and guard -> NOT_FOUND", async () => {
+  const { repo, db } = makeInterleavingRepo({
+    rows: [{ ...PUBLISHED_ROW, version: 1 }],
+    beforeGuard: async (db) => { db.delete("dr-a"); },
+  });
+  await assert.rejects(
+    () => updateDoctor(repo, "dr-a", 1, fields(), "admin@x"),
+    (e) => e instanceof MutationNotFoundError && e.code === "NOT_FOUND",
+  );
+  assert.equal(db.get("dr-a"), undefined);
+});
+
+test("33. Interleave: update row archived between load and guard -> ARCHIVED_SAVE_ERROR", async () => {
+  const { repo } = makeInterleavingRepo({
+    rows: [{ ...PUBLISHED_ROW, version: 1 }],
+    beforeGuard: async (db) => {
+      const row = db.get("dr-a");
+      row.lifecycle_status = "ARCHIVED";
+      row.is_deleted = 1;
+      row.status = "HIDDEN";
+      row.is_visible = 0;
+      row.deleted_at = "2026-07-20 12:00:00";
+    },
+  });
+  await assert.rejects(
+    () => updateDoctor(repo, "dr-a", 1, fields(), "admin@x"),
+    (e) => e.message === ARCHIVED_SAVE_ERROR,
+  );
+});
+
+test("34. Interleave: archive row version bumped while still active -> CONFLICT", async () => {
+  const { repo, db } = makeInterleavingRepo({
+    rows: [{ ...PUBLISHED_ROW, version: 2 }],
+    beforeGuard: async (db) => { db.get("dr-a").version = 3; },
+  });
+  await assert.rejects(
+    () => archiveDoctor(repo, "dr-a", 2, "admin@x"),
+    (e) => e instanceof MutationConflictError && e.code === "CONFLICT",
+  );
+  assert.equal(db.get("dr-a").version, 3);
+});
+
+test("35. Interleave: archive row deleted between load and guard -> NOT_FOUND", async () => {
+  const { repo } = makeInterleavingRepo({
+    rows: [{ ...PUBLISHED_ROW, version: 2 }],
+    beforeGuard: async (db) => { db.delete("dr-a"); },
+  });
+  await assert.rejects(
+    () => archiveDoctor(repo, "dr-a", 2, "admin@x"),
+    (e) => e instanceof MutationNotFoundError && e.code === "NOT_FOUND",
+  );
+});
+
+test("36. Interleave: archive already completed by competitor -> NOT_FOUND, no audit", async () => {
+  const { repo, getAuditCalls } = makeInterleavingRepo({
+    rows: [{ ...PUBLISHED_ROW, version: 2 }],
+    beforeGuard: async (db) => {
+      const row = db.get("dr-a");
+      row.lifecycle_status = "ARCHIVED";
+      row.is_deleted = 1;
+      row.status = "HIDDEN";
+      row.is_visible = 0;
+      row.deleted_at = "2026-07-20 12:00:00";
+    },
+  });
+  await assert.rejects(
+    () => archiveDoctor(repo, "dr-a", 2, "admin@x"),
+    (e) => e instanceof MutationNotFoundError && e.code === "NOT_FOUND",
+  );
+  assert.equal(getAuditCalls().length, 0);
+});
+
+test("37. Interleave: restore row version bumped while still archived -> CONFLICT", async () => {
+  const { repo, db } = makeInterleavingRepo({
+    rows: [{ ...ARCHIVED_ROW, version: 3 }],
+    beforeGuard: async (db) => { db.get("dr-b").version = 4; },
+  });
+  await assert.rejects(
+    () => restoreDoctor(repo, "dr-b", 3, "admin@x"),
+    (e) => e instanceof MutationConflictError && e.code === "CONFLICT",
+  );
+  assert.equal(db.get("dr-b").version, 4);
+});
+
+test("38. Interleave: restore row deleted between load and guard -> NOT_FOUND", async () => {
+  const { repo } = makeInterleavingRepo({
+    rows: [{ ...ARCHIVED_ROW, version: 3 }],
+    beforeGuard: async (db) => { db.delete("dr-b"); },
+  });
+  await assert.rejects(
+    () => restoreDoctor(repo, "dr-b", 3, "admin@x"),
+    (e) => e instanceof MutationNotFoundError && e.code === "NOT_FOUND",
+  );
+});
+
+test("39. Interleave: restore completed by competitor (row now active) -> NOT_FOUND, no audit", async () => {
+  const { repo, getAuditCalls } = makeInterleavingRepo({
+    rows: [{ ...ARCHIVED_ROW, version: 3 }],
+    beforeGuard: async (db) => {
+      const row = db.get("dr-b");
+      row.lifecycle_status = "HIDDEN";
+      row.is_deleted = 0;
+      row.status = "HIDDEN";
+      row.is_visible = 0;
+      row.deleted_at = null;
+    },
+  });
+  await assert.rejects(
+    () => restoreDoctor(repo, "dr-b", 3, "admin@x"),
+    (e) => e instanceof MutationNotFoundError && e.code === "NOT_FOUND",
+  );
+  assert.equal(getAuditCalls().length, 0);
+});
+
+test("40. Concurrent same-slug create: duplicate insert throws -> CONFLICT, no audit", async () => {
+  const { repo, getAuditCalls } = makeRepo({ rows: [PUBLISHED_ROW] });
+  const conflictRepo = {
+    ...repo,
+    run: async () => {
+      throw new Error("UNIQUE constraint failed: doctor_profiles.slug");
+    },
+  };
+  await assert.rejects(
+    () => createDoctor(conflictRepo, "dr-a", fields(), "admin@x"),
+    (e) => e instanceof MutationConflictError,
+  );
+  assert.equal(getAuditCalls().length, 0);
+});
+
+test("41. Create zero-row and slug now exists -> CONFLICT, no audit", async () => {
+  const { repo, db, getAuditCalls } = makeRepo({ rows: [] });
+  const zeroRowRepo = {
+    ...repo,
+    run: async () => {
+      db.set("dr-a", { ...PUBLISHED_ROW });
+      return { success: true, meta: { changes: 0 } };
+    },
+  };
+  await assert.rejects(
+    () => createDoctor(zeroRowRepo, "dr-a", fields({ isVisible: true }), "admin@x"),
+    (e) => e instanceof MutationConflictError,
+  );
+  assert.equal(getAuditCalls().length, 0);
+});
+
+test("42. Create zero-row and slug still absent -> internal failure, not NOT_FOUND", async () => {
+  const { repo, getAuditCalls } = makeRepo({ rows: [] });
+  const zeroRowRepo = {
+    ...repo,
+    run: async () => ({ success: true, meta: { changes: 0 } }),
+  };
+  await assert.rejects(
+    () => createDoctor(zeroRowRepo, "dr-new", fields({ isVisible: true }), "admin@x"),
+    (e) => e.message === "Doctor profile creation failed unexpectedly.",
+  );
+  assert.equal(getAuditCalls().length, 0);
+});
+
+test("43. parseExpectedVersion: strict raw-value validation", () => {
+  assert.equal(parseExpectedVersion(undefined), 0);
+  assert.equal(parseExpectedVersion(null), 0);
+  assert.equal(parseExpectedVersion(1), 1);
+  assert.equal(parseExpectedVersion(0), 0);
+  assert.ok(Number.isNaN(parseExpectedVersion("1")));
+  assert.ok(Number.isNaN(parseExpectedVersion(1.5)));
+  assert.ok(Number.isNaN(parseExpectedVersion(NaN)));
+  assert.ok(Number.isNaN(parseExpectedVersion(Infinity)));
+  assert.ok(Number.isNaN(parseExpectedVersion(-1)));
+  assert.ok(Number.isNaN(parseExpectedVersion(true)));
+  assert.ok(Number.isNaN(parseExpectedVersion({})));
+  assert.ok(Number.isNaN(parseExpectedVersion([])));
+  assert.equal(parseExpectedVersion(undefined, { minimum: 1 }), NaN);
+  assert.equal(parseExpectedVersion(null, { minimum: 1 }), NaN);
+  assert.equal(parseExpectedVersion(1, { minimum: 1 }), 1);
 });

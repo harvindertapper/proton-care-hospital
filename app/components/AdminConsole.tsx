@@ -717,6 +717,7 @@ export function AdminConsole({
       await refreshData(true);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Action failed.");
+      await refreshData(true);
     } finally {
       setBusy(false);
     }
