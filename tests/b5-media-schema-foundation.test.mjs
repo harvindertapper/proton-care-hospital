@@ -14,6 +14,8 @@ import {
   M0003_PUBLIC_SEED_IDS,
   M0003_GALLERY_SECTION_ID,
   M0003_GALLERY_ITEM_IDS,
+  REQUIRED_GALLERY_SECTION_COLUMNS,
+  REQUIRED_GALLERY_ITEM_COLUMNS,
   isPublicStorage,
   isValidMediaCategory,
   isValidRightsStatus,
@@ -22,6 +24,7 @@ import {
   isDormantGalleryRow,
   collectSchemaReport,
   assertMediaGallerySchemaCapabilities,
+  inspectM1FoundationState,
 } from "../app/lib/media-schema.ts";
 
 const BASELINE_SQL = await readFile(new URL("../migrations/0000_baseline.sql", import.meta.url), "utf8");
@@ -40,18 +43,20 @@ function computeSha256(content) {
   return createHash("sha256").update(content).digest("hex").toUpperCase();
 }
 
-function createBaselineDb() {
-  const db = new DatabaseSync(":memory:");
-  db.exec(BASELINE_SQL);
-  return db;
-}
-
 function createFullyMigratedDb() {
   const db = new DatabaseSync(":memory:");
   db.exec(BASELINE_SQL);
   db.exec(MIGRATION_0001_SQL);
   db.exec(MIGRATION_0002_SQL);
   db.exec(MIGRATION_0003_SQL);
+  return db;
+}
+
+function createPreM0003Db() {
+  const db = new DatabaseSync(":memory:");
+  db.exec(BASELINE_SQL);
+  db.exec(MIGRATION_0001_SQL);
+  db.exec(MIGRATION_0002_SQL);
   return db;
 }
 
@@ -90,6 +95,10 @@ function insertR2MediaRow(db, opts) {
   );
 }
 
+function getMediaCount(db) {
+  return db.prepare(`SELECT COUNT(*) AS cnt FROM media_assets`).get().cnt;
+}
+
 function countTableRows(db, table) {
   const result = db.prepare(`SELECT COUNT(*) AS cnt FROM ${table}`).get();
   return result.cnt;
@@ -116,10 +125,6 @@ function getMediaRow(db, id) {
   return db.prepare(`SELECT * FROM media_assets WHERE id = ?`).get(id);
 }
 
-function getMediaCount(db) {
-  return db.prepare(`SELECT COUNT(*) AS cnt FROM media_assets`).get().cnt;
-}
-
 function stripSqlComments(sql) {
   return sql.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
 }
@@ -133,6 +138,94 @@ function countAlterAdds(sql, table) {
   const regex = new RegExp(`ALTER\\s+TABLE\\s+${table}\\s+ADD\\s+COLUMN\\s+\\w+`, "gi");
   const matches = stripped.match(regex);
   return matches ? matches.length : 0;
+}
+
+function createDbWithMissingColumn(table, column) {
+  const db = createFullyMigratedDb();
+  if (table === "gallery_sections") {
+    db.exec("DELETE FROM gallery_items");
+  }
+  const info = db.prepare(`PRAGMA table_info('${table}')`).all();
+  const colNames = info.map((c) => c.name);
+  const filteredNames = colNames.filter((n) => n !== column);
+  const allRows = db.prepare(`SELECT * FROM ${table}`).all();
+  db.exec(`DROP TABLE ${table}`);
+  const colDefs = filteredNames.map((n) => `"${n}"`).join(", ");
+  db.exec(`CREATE TABLE ${table} (${colDefs})`);
+  for (const row of allRows) {
+    const vals = filteredNames.map((n) => row[n]);
+    const placeholders = filteredNames.map(() => "?").join(", ");
+    db.prepare(`INSERT INTO ${table} (${filteredNames.map((n) => `"${n}"`).join(", ")}) VALUES (${placeholders})`).run(...vals);
+  }
+  return db;
+}
+
+function createDbWithBrokenFk(breakType) {
+  const db = createFullyMigratedDb();
+  const allItems = db.prepare("SELECT * FROM gallery_items").all();
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec("DROP TABLE gallery_items");
+  const fkClauses = [];
+  if (breakType === "no-section-fk") {
+    fkClauses.push("FOREIGN KEY (media_id) REFERENCES media_assets(id)");
+  } else if (breakType === "no-media-fk") {
+    fkClauses.push("FOREIGN KEY (section_id) REFERENCES gallery_sections(id)");
+  } else if (breakType === "wrong-section-target") {
+    fkClauses.push("FOREIGN KEY (section_id) REFERENCES media_assets(id)");
+    fkClauses.push("FOREIGN KEY (media_id) REFERENCES media_assets(id)");
+  } else if (breakType === "wrong-media-target") {
+    fkClauses.push("FOREIGN KEY (section_id) REFERENCES gallery_sections(id)");
+    fkClauses.push("FOREIGN KEY (media_id) REFERENCES gallery_sections(id)");
+  }
+  const createSql = `CREATE TABLE gallery_items (
+    id TEXT PRIMARY KEY,
+    section_id TEXT NOT NULL,
+    media_id TEXT NOT NULL,
+    slot_key TEXT,
+    title_override TEXT NOT NULL DEFAULT '',
+    alt_text_override TEXT NOT NULL DEFAULT '',
+    caption_override TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
+    lifecycle_status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (lifecycle_status IN ('DRAFT','IN_REVIEW','PUBLISHED','HIDDEN','ARCHIVED')),
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+    created_by TEXT NOT NULL,
+    updated_by TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    published_at TEXT,
+    deleted_at TEXT,
+    ${fkClauses.join(", ")}
+  )`;
+  db.exec(createSql);
+  if (breakType !== "wrong-section-target" && breakType !== "wrong-media-target") {
+    for (const row of allItems) {
+      const cols = ["id", "section_id", "media_id", "slot_key", "title_override", "alt_text_override", "caption_override", "sort_order", "lifecycle_status", "version", "created_by", "updated_by", "created_at", "updated_at", "published_at", "deleted_at"];
+      const vals = cols.map((n) => row[n]);
+      const placeholders = cols.map(() => "?").join(", ");
+      db.prepare(`INSERT INTO gallery_items (${cols.map((n) => `"${n}"`).join(", ")}) VALUES (${placeholders})`).run(...vals);
+    }
+  }
+  db.exec("PRAGMA foreign_keys = ON");
+  return db;
+}
+
+function createDbWithNonUniqueIndex(idxName) {
+  const db = createFullyMigratedDb();
+  db.exec(`DROP INDEX IF EXISTS ${idxName}`);
+  if (idxName === "idx_media_active_public_path") {
+    db.exec(`CREATE INDEX ${idxName} ON media_assets(public_path) WHERE storage_type = 'PUBLIC' AND public_path IS NOT NULL AND deleted_at IS NULL`);
+  } else if (idxName === "idx_media_active_checksum") {
+    db.exec(`CREATE INDEX ${idxName} ON media_assets(storage_type, checksum_sha256) WHERE checksum_sha256 IS NOT NULL AND deleted_at IS NULL AND purge_status != 'PURGED'`);
+  } else if (idxName === "idx_gallery_items_active_slot") {
+    db.exec(`CREATE INDEX ${idxName} ON gallery_items(slot_key) WHERE slot_key IS NOT NULL AND deleted_at IS NULL`);
+  }
+  return db;
+}
+
+function createDbWithoutIndex(idxName) {
+  const db = createFullyMigratedDb();
+  db.exec(`DROP INDEX IF EXISTS ${idxName}`);
+  return db;
 }
 
 // ============================================================
@@ -182,7 +275,72 @@ test("0003 migration contains no DELETE FROM statements", () => {
 });
 
 // ============================================================
-// PART 3: Fresh Install Compatibility (8 tests)
+// PART 3: Migration 0003 statement inspection (1 test)
+// ============================================================
+
+test("parseStatements finds exactly 26 ALTER TABLE media_assets ADD COLUMN in migration 0003", () => {
+  const stmts = parseStatements(MIGRATION_0003_RAW);
+  const alterStmts = stmts.filter((s) => /^ALTER\s+TABLE\s+media_assets\s+ADD\s+COLUMN/i.test(s));
+  assert.equal(alterStmts.length, 26, `Expected exactly 26 ALTER TABLE media_assets ADD COLUMN, found ${alterStmts.length}`);
+});
+
+// ============================================================
+// PART 4: Enum set exactness (4 tests)
+// ============================================================
+
+test("MEDIA_STORAGE_TYPES contains exactly R2 and PUBLIC, no more", () => {
+  assert.equal(MEDIA_STORAGE_TYPES.size, 2);
+  assert.ok(MEDIA_STORAGE_TYPES.has("R2"));
+  assert.ok(MEDIA_STORAGE_TYPES.has("PUBLIC"));
+});
+
+test("MEDIA_CATEGORIES contains exactly five categories", () => {
+  assert.equal(MEDIA_CATEGORIES.size, 5);
+  const expected = ["GENERAL", "GALLERY", "DOCTOR", "BLOG", "VIDEO_POSTER"];
+  for (const cat of expected) {
+    assert.ok(MEDIA_CATEGORIES.has(cat), `MEDIA_CATEGORIES missing: ${cat}`);
+  }
+});
+
+test("MEDIA_RIGHTS_STATUSES contains exactly four statuses", () => {
+  assert.equal(MEDIA_RIGHTS_STATUSES.size, 4);
+  const expected = ["UNVERIFIED", "VERIFIED_INTERNAL", "LICENSED", "PUBLIC_DOMAIN"];
+  for (const s of expected) {
+    assert.ok(MEDIA_RIGHTS_STATUSES.has(s), `MEDIA_RIGHTS_STATUSES missing: ${s}`);
+  }
+});
+
+test("MEDIA_PURGE_STATUSES contains exactly six statuses", () => {
+  assert.equal(MEDIA_PURGE_STATUSES.size, 6);
+  const expected = ["NONE", "CANDIDATE", "BLOCKED", "READY", "FAILED", "PURGED"];
+  for (const s of expected) {
+    assert.ok(MEDIA_PURGE_STATUSES.has(s), `MEDIA_PURGE_STATUSES missing: ${s}`);
+  }
+});
+
+// ============================================================
+// PART 5: M0003_MEDIA_ASSET_COLUMNS count = 26 (1 test)
+// ============================================================
+
+test("M0003_MEDIA_ASSET_COLUMNS has length 26 and countAlterAdds proves 26 ALTERs", () => {
+  assert.equal(M0003_MEDIA_ASSET_COLUMNS.length, 26);
+  assert.equal(countAlterAdds(MIGRATION_0003_RAW, "media_assets"), 26);
+});
+
+// ============================================================
+// PART 6: M0003_TABLES used to assert table existence (1 test)
+// ============================================================
+
+test("M0003_TABLES iterates to verify both gallery tables exist", () => {
+  const db = createFullyMigratedDb();
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
+  for (const table of M0003_TABLES) {
+    assert.ok(tables.includes(table), `M0003 table missing: ${table}`);
+  }
+});
+
+// ============================================================
+// PART 7: Fresh install compatibility (8 tests)
 // ============================================================
 
 test("fresh install creates media_assets table with all M0003 columns", () => {
@@ -243,24 +401,22 @@ test("fresh install gallery_items has all required columns", () => {
 });
 
 // ============================================================
-// PART 4: Upgrade Compatibility (5 tests)
+// PART 8: Upgrade compatibility (5 tests)
 // ============================================================
 
 test("upgrade from 0000+0002 applies 0003 without error", () => {
-  const db = createBaselineDb();
-  db.exec(MIGRATION_0001_SQL);
-  db.exec(MIGRATION_0002_SQL);
+  const db = createPreM0003Db();
   db.exec(MIGRATION_0003_SQL);
   assert.ok(true, "Upgrade applied without error");
 });
 
 test("upgrade preserves existing media_assets rows", () => {
-  const db = createBaselineDb();
-  db.exec(MIGRATION_0001_SQL);
-  db.exec(MIGRATION_0002_SQL);
+  const db = createPreM0003Db();
 
   insertLegacyMediaRow(db, { id: "legacy-1", r2Key: "legacy/test.webp", purpose: "gallery" });
   insertLegacyMediaRow(db, { id: "legacy-2", r2Key: "legacy/test2.jpg", purpose: "doctor-photo" });
+
+  const preCount = getMediaCount(db);
 
   db.exec(MIGRATION_0003_SQL);
 
@@ -270,25 +426,30 @@ test("upgrade preserves existing media_assets rows", () => {
   const row2 = getMediaRow(db, "legacy-2");
   assert.ok(row2, "legacy-2 must exist");
   assert.equal(row2.r2_key, "legacy/test2.jpg");
+  assert.ok(getMediaCount(db) >= preCount, "Row count should not decrease after upgrade");
 });
 
-test("upgrade backfills storage_type to R2 for existing rows", () => {
-  const db = createBaselineDb();
-  db.exec(MIGRATION_0001_SQL);
-  db.exec(MIGRATION_0002_SQL);
+test("upgrade with insertR2MediaRow preserves R2 row and backfills storage_type", () => {
+  const db = createPreM0003Db();
 
-  insertLegacyMediaRow(db, { id: "legacy-backfill", r2Key: "backfill/test.webp", purpose: "gallery" });
+  insertR2MediaRow(db, { id: "r2-legacy-1", r2Key: "r2/legacy-1.webp", purpose: "gallery", sizeBytes: 2048 });
+  insertR2MediaRow(db, { id: "r2-legacy-2", r2Key: "r2/legacy-2.jpg", purpose: "doctor-photo", sizeBytes: 4096 });
 
   db.exec(MIGRATION_0003_SQL);
 
-  const row = getMediaRow(db, "legacy-backfill");
-  assert.equal(row.storage_type, "R2");
+  const row1 = getMediaRow(db, "r2-legacy-1");
+  assert.ok(row1, "r2-legacy-1 must survive upgrade");
+  assert.equal(row1.r2_key, "r2/legacy-1.webp");
+  assert.equal(row1.storage_type, "R2", "r2-legacy-1 storage_type backfilled to R2");
+
+  const row2 = getMediaRow(db, "r2-legacy-2");
+  assert.ok(row2, "r2-legacy-2 must survive upgrade");
+  assert.equal(row2.r2_key, "r2/legacy-2.jpg");
+  assert.equal(row2.storage_type, "R2", "r2-legacy-2 storage_type backfilled to R2");
 });
 
 test("upgrade backfills category from purpose", () => {
-  const db = createBaselineDb();
-  db.exec(MIGRATION_0001_SQL);
-  db.exec(MIGRATION_0002_SQL);
+  const db = createPreM0003Db();
 
   insertLegacyMediaRow(db, { id: "cat-gallery", r2Key: "cat/g.webp", purpose: "gallery" });
   insertLegacyMediaRow(db, { id: "cat-doctor", r2Key: "cat/d.webp", purpose: "doctor-photo" });
@@ -302,9 +463,7 @@ test("upgrade backfills category from purpose", () => {
 });
 
 test("upgrade preserves existing lifecycle_status on media_assets rows", () => {
-  const db = createBaselineDb();
-  db.exec(MIGRATION_0001_SQL);
-  db.exec(MIGRATION_0002_SQL);
+  const db = createPreM0003Db();
 
   insertLegacyMediaRow(db, { id: "lifecycle-preserved", r2Key: "lc/test.webp", lifecycleStatus: "PUBLISHED" });
 
@@ -315,124 +474,81 @@ test("upgrade preserves existing lifecycle_status on media_assets rows", () => {
 });
 
 // ============================================================
-// PART 5: Backfill Correctness (7 tests)
+// PART 9: Backfill Correctness (7 tests)
 // ============================================================
 
 test("backfill sets updated_at from created_at for existing rows", () => {
-  const db = createBaselineDb();
-  db.exec(MIGRATION_0001_SQL);
-  db.exec(MIGRATION_0002_SQL);
-
+  const db = createPreM0003Db();
   insertLegacyMediaRow(db, { id: "ba-updated", r2Key: "ba/u.webp" });
-
   db.exec(MIGRATION_0003_SQL);
-
   const row = getMediaRow(db, "ba-updated");
   assert.ok(row.updated_at, "updated_at should be backfilled");
 });
 
 test("backfill sets display_r2_key from r2_key", () => {
-  const db = createBaselineDb();
-  db.exec(MIGRATION_0001_SQL);
-  db.exec(MIGRATION_0002_SQL);
-
+  const db = createPreM0003Db();
   insertLegacyMediaRow(db, { id: "ba-display", r2Key: "display/test.webp" });
-
   db.exec(MIGRATION_0003_SQL);
-
   const row = getMediaRow(db, "ba-display");
   assert.equal(row.display_r2_key, "display/test.webp");
 });
 
 test("backfill sets published_at for APPROVED+visible+PUBLISHED rows", () => {
-  const db = createBaselineDb();
-  db.exec(MIGRATION_0001_SQL);
-  db.exec(MIGRATION_0002_SQL);
-
+  const db = createPreM0003Db();
   insertLegacyMediaRow(db, {
-    id: "ba-published",
-    r2Key: "ba/p.webp",
-    status: "APPROVED",
-    isVisible: 1,
-    lifecycleStatus: "PUBLISHED",
+    id: "ba-published", r2Key: "ba/p.webp", status: "APPROVED", isVisible: 1, lifecycleStatus: "PUBLISHED",
   });
-
   db.exec(MIGRATION_0003_SQL);
-
   const row = getMediaRow(db, "ba-published");
   assert.ok(row.published_at, "published_at should be set for published rows");
 });
 
 test("backfill does NOT set published_at for HIDDEN rows", () => {
-  const db = createBaselineDb();
-  db.exec(MIGRATION_0001_SQL);
-  db.exec(MIGRATION_0002_SQL);
-
+  const db = createPreM0003Db();
   insertLegacyMediaRow(db, {
-    id: "ba-hidden",
-    r2Key: "ba/h.webp",
-    status: "HIDDEN",
-    isVisible: 0,
-    lifecycleStatus: "HIDDEN",
+    id: "ba-hidden", r2Key: "ba/h.webp", status: "HIDDEN", isVisible: 0, lifecycleStatus: "HIDDEN",
   });
-
   db.exec(MIGRATION_0003_SQL);
-
   const row = getMediaRow(db, "ba-hidden");
   assert.equal(row.published_at, null, "published_at should remain null for HIDDEN rows");
 });
 
 test("backfill only sets updated_at when NULL (WHERE updated_at IS NULL)", () => {
-  const db = createBaselineDb();
-  db.exec(MIGRATION_0001_SQL);
-  db.exec(MIGRATION_0002_SQL);
-
+  const db = createPreM0003Db();
   db.prepare(
     `INSERT INTO media_assets (id, r2_key, file_name, content_type, size_bytes, purpose, uploaded_by, consent_note, status, is_visible, lifecycle_status)
      VALUES (?, ?, ?, 'image/webp', 1024, 'gallery', 'test@example.com', '', 'APPROVED', 1, 'PUBLISHED')`
   ).run("ba-verify-updated", "ba/vu.webp", "vu.webp");
-
   db.exec(MIGRATION_0003_SQL);
-
   const row = getMediaRow(db, "ba-verify-updated");
   assert.ok(row.updated_at, "updated_at should be backfilled for pre-existing rows");
   assert.equal(row.updated_at, row.created_at, "updated_at should equal created_at after backfill");
 });
 
 test("backfill sets display_size_bytes from size_bytes for zero-value rows", () => {
-  const db = createBaselineDb();
-  db.exec(MIGRATION_0001_SQL);
-  db.exec(MIGRATION_0002_SQL);
-
+  const db = createPreM0003Db();
   db.prepare(
     `INSERT INTO media_assets (id, r2_key, file_name, content_type, size_bytes, purpose, uploaded_by, consent_note, status, is_visible, lifecycle_status)
      VALUES (?, ?, ?, 'image/webp', 4096, 'gallery', 'test@example.com', '', 'APPROVED', 1, 'PUBLISHED')`
   ).run("ba-size", "ba/s.webp", "s.webp");
-
   db.exec(MIGRATION_0003_SQL);
-
   const row = getMediaRow(db, "ba-size");
   assert.equal(row.display_size_bytes, 4096);
 });
 
 test("backfill sets display_content_type from content_type", () => {
-  const db = createBaselineDb();
-  db.exec(MIGRATION_0001_SQL);
-  db.exec(MIGRATION_0002_SQL);
-
+  const db = createPreM0003Db();
   db.prepare(
     `INSERT INTO media_assets (id, r2_key, file_name, content_type, size_bytes, purpose, uploaded_by, consent_note, status, is_visible, lifecycle_status)
      VALUES (?, ?, ?, 'image/jpeg', 2048, 'gallery', 'test@example.com', '', 'APPROVED', 1, 'PUBLISHED')`
   ).run("ba-content", "ba/c.jpg", "c.jpg");
-
   db.exec(MIGRATION_0003_SQL);
-
   const row = getMediaRow(db, "ba-content");
   assert.equal(row.display_content_type, "image/jpeg");
 });
 
 // ============================================================
-// PART 6: Dormant PUBLIC Seeds - 7 assets (10 tests)
+// PART 10: Dormant PUBLIC Seeds (10 tests)
 // ============================================================
 
 test("0003 inserts exactly 7 PUBLIC asset seeds", () => {
@@ -525,7 +641,7 @@ test("isDormantAsset returns true for PUBLIC seeds", () => {
 });
 
 // ============================================================
-// PART 7: Dormant Gallery Seed (5 tests)
+// PART 11: Dormant Gallery Seed (5 tests)
 // ============================================================
 
 test("0003 inserts 1 gallery section (facilities)", () => {
@@ -570,7 +686,7 @@ test("gallery items have sequential sort_order 0-6", () => {
 });
 
 // ============================================================
-// PART 8: gallery_v2_initialized marker (2 tests)
+// PART 12: gallery_v2_initialized marker (2 tests)
 // ============================================================
 
 test("0003 inserts gallery_v2_initialized=0 marker", () => {
@@ -583,9 +699,7 @@ test("0003 inserts gallery_v2_initialized=0 marker", () => {
 });
 
 test("gallery_v2_initialized marker is not overwritten if already present", () => {
-  const db = createBaselineDb();
-  db.exec(MIGRATION_0001_SQL);
-  db.exec(MIGRATION_0002_SQL);
+  const db = createPreM0003Db();
   db.prepare(
     "INSERT OR REPLACE INTO site_configs (key, value) VALUES ('gallery_v2_initialized', '1')"
   ).run();
@@ -597,7 +711,7 @@ test("gallery_v2_initialized marker is not overwritten if already present", () =
 });
 
 // ============================================================
-// PART 9: Constraints and CHECK enums (6 tests)
+// PART 13: Constraints and CHECK enums (6 tests)
 // ============================================================
 
 test("gallery_sections lifecycle_status CHECK enum matches lifecycle foundation", () => {
@@ -682,7 +796,7 @@ test("gallery_items slot_key UNIQUE constraint enforced for active rows", () => 
 });
 
 // ============================================================
-// PART 10: Index existence and structure (4 tests)
+// PART 14: Index existence and structure (4 tests)
 // ============================================================
 
 test("idx_media_lifecycle_category_created exists on media_assets", () => {
@@ -710,7 +824,7 @@ test("idx_gallery_items_media_deleted exists on gallery_items", () => {
 });
 
 // ============================================================
-// PART 11: Schema capability helper (5 tests)
+// PART 15: Schema capability — full validation (14 tests)
 // ============================================================
 
 test("assertMediaGallerySchemaCapabilities returns ok:true on fully migrated DB", () => {
@@ -726,9 +840,7 @@ test("assertMediaGallerySchemaCapabilities returns ok:true on fully migrated DB"
 });
 
 test("assertMediaGallerySchemaCapabilities returns ok:false on pre-0003 DB", () => {
-  const db = createBaselineDb();
-  db.exec(MIGRATION_0001_SQL);
-  db.exec(MIGRATION_0002_SQL);
+  const db = createPreM0003Db();
   const result = assertMediaGallerySchemaCapabilities(db);
   assert.equal(result.ok, false);
   if (!result.ok) {
@@ -745,26 +857,148 @@ test("collectSchemaReport reports all tables on fully migrated DB", () => {
   assert.ok(report.tables.includes("media_assets"));
 });
 
-test("collectSchemaReport reports gallery section columns", () => {
+test("collectSchemaReport reports all gallery section columns", () => {
   const db = createFullyMigratedDb();
   const report = collectSchemaReport(db);
-  assert.ok(report.gallerySectionColumnNames.includes("lifecycle_status"));
-  assert.ok(report.gallerySectionColumnNames.includes("version"));
-  assert.ok(report.gallerySectionColumnNames.includes("deleted_at"));
-  assert.ok(report.gallerySectionColumnNames.includes("slug"));
+  for (const col of REQUIRED_GALLERY_SECTION_COLUMNS) {
+    assert.ok(report.gallerySectionColumnNames.includes(col), `gallery_sections missing column in report: ${col}`);
+  }
 });
 
-test("collectSchemaReport reports gallery item columns", () => {
+test("collectSchemaReport reports all gallery item columns", () => {
   const db = createFullyMigratedDb();
   const report = collectSchemaReport(db);
-  assert.ok(report.galleryItemColumnNames.includes("section_id"));
-  assert.ok(report.galleryItemColumnNames.includes("media_id"));
-  assert.ok(report.galleryItemColumnNames.includes("slot_key"));
-  assert.ok(report.galleryItemColumnNames.includes("lifecycle_status"));
+  for (const col of REQUIRED_GALLERY_ITEM_COLUMNS) {
+    assert.ok(report.galleryItemColumnNames.includes(col), `gallery_items missing column in report: ${col}`);
+  }
+});
+
+test("collectSchemaReport provides gallery_section CREATE TABLE SQL", () => {
+  const db = createFullyMigratedDb();
+  const report = collectSchemaReport(db);
+  assert.ok(report.gallerySectionCreateSql, "gallery_section CREATE SQL must not be empty");
+  assert.ok(report.gallerySectionCreateSql.includes("gallery_sections"), "CREATE SQL must reference gallery_sections");
+  assert.ok(report.gallerySectionCreateSql.includes("lifecycle_status"), "CREATE SQL must include lifecycle_status");
+});
+
+test("collectSchemaReport provides gallery_item CREATE TABLE SQL with FOREIGN KEYs", () => {
+  const db = createFullyMigratedDb();
+  const report = collectSchemaReport(db);
+  assert.ok(report.galleryItemCreateSql, "gallery_item CREATE SQL must not be empty");
+  assert.ok(report.galleryItemCreateSql.includes("FOREIGN KEY"), "CREATE SQL must include FOREIGN KEY");
+  assert.ok(report.galleryItemCreateSql.includes("section_id"), "CREATE SQL must include section_id FK");
+  assert.ok(report.galleryItemCreateSql.includes("media_id"), "CREATE SQL must include media_id FK");
+});
+
+test("collectSchemaReport reports foreign keys for gallery_items", () => {
+  const db = createFullyMigratedDb();
+  const report = collectSchemaReport(db);
+  const sectionFk = report.foreignKeys.find((fk) => fk.table === "gallery_items" && fk.from === "section_id");
+  assert.ok(sectionFk, "gallery_items must have FK on section_id");
+  assert.equal(sectionFk.referencedTable, "gallery_sections");
+  assert.equal(sectionFk.to, "id");
+
+  const mediaFk = report.foreignKeys.find((fk) => fk.table === "gallery_items" && fk.from === "media_id");
+  assert.ok(mediaFk, "gallery_items must have FK on media_id");
+  assert.equal(mediaFk.referencedTable, "media_assets");
+  assert.equal(mediaFk.to, "id");
+});
+
+test("collectSchemaReport reports unique/partial index metadata", () => {
+  const db = createFullyMigratedDb();
+  const report = collectSchemaReport(db);
+
+  const publicPathIdx = report.indexes.find((i) => i.indexName === "idx_media_active_public_path");
+  assert.ok(publicPathIdx, "idx_media_active_public_path must exist in report");
+  assert.equal(publicPathIdx.unique, 1, "idx_media_active_public_path must be unique");
+  assert.equal(publicPathIdx.partial, 1, "idx_media_active_public_path must be partial");
+
+  const slotIdx = report.indexes.find((i) => i.indexName === "idx_gallery_items_active_slot");
+  assert.ok(slotIdx, "idx_gallery_items_active_slot must exist in report");
+  assert.equal(slotIdx.unique, 1, "idx_gallery_items_active_slot must be unique");
+  assert.equal(slotIdx.partial, 1, "idx_gallery_items_active_slot must be partial");
+});
+
+test("missing one gallery_sections column causes capability failure", () => {
+  const db = createDbWithMissingColumn("gallery_sections", "slug");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("gallery_sections") && e.includes("slug")));
+  }
+});
+
+test("missing one gallery_items column causes capability failure", () => {
+  const db = createDbWithMissingColumn("gallery_items", "slot_key");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("gallery_items") && e.includes("slot_key")));
+  }
+});
+
+test("missing section FK causes capability failure", () => {
+  const db = createDbWithBrokenFk("no-section-fk");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("section_id") && e.includes("FOREIGN KEY")));
+  }
+});
+
+test("missing media FK causes capability failure", () => {
+  const db = createDbWithBrokenFk("no-media-fk");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("media_id") && e.includes("FOREIGN KEY")));
+  }
+});
+
+test("wrong FK target causes capability failure", () => {
+  const db = createDbWithBrokenFk("wrong-section-target");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("gallery_items.section_id FK references") && e.includes("instead of gallery_sections")));
+  }
 });
 
 // ============================================================
-// PART 12: Dormancy proof — dormant rows excluded from active queries (3 tests)
+// PART 16: Index uniqueness/partial failures (3 tests)
+// ============================================================
+
+test("non-unique required index causes capability failure", () => {
+  const db = createDbWithNonUniqueIndex("idx_media_active_public_path");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("idx_media_active_public_path") && e.includes("UNIQUE")));
+  }
+});
+
+test("non-partial required index causes capability failure", () => {
+  const db = createFullyMigratedDb();
+  db.exec("DROP INDEX IF EXISTS idx_media_active_checksum");
+  db.exec("CREATE UNIQUE INDEX idx_media_active_checksum ON media_assets(storage_type, checksum_sha256)");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("idx_media_active_checksum") && e.includes("partial")));
+  }
+});
+
+test("missing required index causes capability failure", () => {
+  const db = createDbWithoutIndex("idx_gallery_items_section_lifecycle_order");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("Missing index: idx_gallery_items_section_lifecycle_order")));
+  }
+});
+
+// ============================================================
+// PART 17: Dormancy proof (3 tests)
 // ============================================================
 
 test("dormant PUBLIC seeds excluded from published+visible media query", () => {
@@ -792,7 +1026,7 @@ test("dormant gallery items excluded from published gallery items query", () => 
 });
 
 // ============================================================
-// PART 13: media-schema.ts enum validators (6 tests)
+// PART 18: media-schema.ts enum validators (6 tests)
 // ============================================================
 
 test("isPublicStorage returns true for PUBLIC", () => {
@@ -829,4 +1063,70 @@ test("isValidPurgeStatus accepts all valid statuses", () => {
   assert.ok(isValidPurgeStatus("READY"));
   assert.ok(isValidPurgeStatus("FAILED"));
   assert.ok(isValidPurgeStatus("PURGED"));
+});
+
+// ============================================================
+// PART 19: inspectM1FoundationState (6 tests)
+// ============================================================
+
+test("inspectM1FoundationState reports gallery_v2_initialized=0 after fresh install", () => {
+  const db = createFullyMigratedDb();
+  const state = inspectM1FoundationState(db);
+  assert.equal(state.gallery_v2_initialized_exists, true);
+  assert.equal(state.gallery_v2_initialized_value, "0");
+});
+
+test("inspectM1FoundationState reports 7 public seeds all found, zero missing", () => {
+  const db = createFullyMigratedDb();
+  const state = inspectM1FoundationState(db);
+  assert.equal(state.public_seed_count, 7);
+  assert.equal(state.public_seed_ids_missing.length, 0);
+  assert.equal(state.dormant_seed_count, 7);
+});
+
+test("inspectM1FoundationState reports 1 section and 7 items", () => {
+  const db = createFullyMigratedDb();
+  const state = inspectM1FoundationState(db);
+  assert.equal(state.section_count, 1);
+  assert.equal(state.item_count, 7);
+});
+
+test("inspectM1FoundationState reports missing seed when DB has fewer seeds", () => {
+  const db = createFullyMigratedDb();
+  db.prepare("DELETE FROM gallery_items WHERE media_id = ?").run("media-public-gallery-front-exterior-hero");
+  db.prepare("DELETE FROM media_assets WHERE id = ?").run("media-public-gallery-front-exterior-hero");
+  const state = inspectM1FoundationState(db);
+  assert.equal(state.public_seed_count, 6);
+  assert.ok(state.public_seed_ids_missing.includes("media-public-gallery-front-exterior-hero"));
+  assert.equal(state.dormant_seed_count, 6);
+});
+
+test("inspectM1FoundationState reports marker absent when not in DB", () => {
+  const db = createPreM0003Db();
+  const state = inspectM1FoundationState(db);
+  assert.equal(state.gallery_v2_initialized_exists, false);
+  assert.equal(state.gallery_v2_initialized_value, null);
+});
+
+test("inspectM1FoundationState reports gallery_v2_initialized=1 after manual set", () => {
+  const db = createFullyMigratedDb();
+  db.prepare("INSERT OR REPLACE INTO site_configs (key, value) VALUES ('gallery_v2_initialized', '1')").run();
+  const state = inspectM1FoundationState(db);
+  assert.equal(state.gallery_v2_initialized_value, "1");
+});
+
+// ============================================================
+// PART 20: No live route imports media-schema (1 test)
+// ============================================================
+
+test("no runtime route file imports media-schema", async () => {
+  const routeFiles = [
+    "app/api/admin/media/route.ts",
+    "app/api/media/[...key]/route.ts",
+    "app/api/gallery/route.ts",
+  ];
+  for (const route of routeFiles) {
+    const content = await readFile(new URL(`../${route}`, import.meta.url), "utf8");
+    assert.ok(!content.includes("media-schema"), `${route} must not import media-schema`);
+  }
 });
