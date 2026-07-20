@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { Department, Doctor } from "@/app/lib/data";
 import { slugify } from "@/app/lib/utils";
+import { resolveDoctorManagerRows } from "@/app/lib/doctor-admin.ts";
 
 type AdminSession = {
   email: string;
@@ -2065,7 +2066,7 @@ function ImageCropUploader({
 function DoctorManager({
   rows,
   departments,
-  staticDoctors,
+  staticDoctors: _staticDoctors,
   busy,
   onSave,
   onDelete,
@@ -2079,22 +2080,7 @@ function DoctorManager({
   onDelete?: (slug: string) => void;
   onUpload?: (formData: FormData) => Promise<string>;
 }) {
-  const source = ((rows && rows.length)
-    ? rows
-    : (staticDoctors ?? []).map((item) => {
-        if (!item) return null;
-        return {
-          slug: item.slug || "",
-          name: item.name || "",
-          speciality: item.speciality || "",
-          qualification: item.qualification || "",
-          department_slug: item.departmentSlug || "",
-          photo_url: item.photo || "",
-          profile_note: "",
-          is_visible: 1,
-          blocked_dates: "",
-        };
-      }).filter(Boolean)) as Record<string, string | number | null>[];
+  const source = resolveDoctorManagerRows(rows);
 
   const first = source && source.length > 0 ? source[0] : null;
   const [form, setForm] = useState({

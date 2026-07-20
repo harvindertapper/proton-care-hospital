@@ -1,5 +1,12 @@
-import { defaultBlogs, defaultJobs, doctors, type Doctor } from "@/app/lib/data";
+import { defaultBlogs, defaultJobs, type Doctor } from "@/app/lib/data";
 import { query } from "@/app/lib/server";
+import {
+  resolvePublicDoctors,
+  resolveDoctorBySlug,
+  dbDoctorToPublic,
+  DOCTOR_LIST_SQL,
+  DOCTOR_BY_SLUG_SQL,
+} from "./doctor-public.ts";
 
 export type PublicBlog = {
   id?: string;
@@ -37,29 +44,11 @@ export type PublicVideo = {
   consent_note: string;
 };
 
-function dbDoctorToPublic(row: Record<string, unknown>): Doctor {
-  return {
-    slug: String(row.slug || ""),
-    name: String(row.name || ""),
-    speciality: String(row.speciality || ""),
-    qualification: row.qualification ? String(row.qualification) : undefined,
-    departmentSlug: String(row.department_slug || ""),
-    photo: row.photo_url ? String(row.photo_url) : undefined,
-    regNo: row.registration_number ? String(row.registration_number) : undefined,
-    consultantType: row.consultant_type ? String(row.consultant_type) : undefined,
-  };
-}
+export type { DoctorQuery } from "./doctor-public.ts";
+export { dbDoctorToPublic, DOCTOR_LIST_SQL, DOCTOR_BY_SLUG_SQL };
 
 export async function getPublicDoctors() {
-  try {
-    const rows = await query<Record<string, unknown>>(
-      "SELECT slug, name, speciality, qualification, department_slug, photo_url, registration_number, consultant_type FROM doctor_profiles WHERE status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 ORDER BY name",
-    );
-    if (rows.results?.length) return rows.results.map(dbDoctorToPublic);
-  } catch {
-    return doctors;
-  }
-  return doctors;
+  return resolvePublicDoctors(query);
 }
 
 export async function getPublishedBlogs() {
@@ -155,14 +144,8 @@ export async function getJobBySlug(slug: string): Promise<PublicJob | null> {
 }
 
 export async function getDoctorBySlug(slug: string): Promise<Doctor | null> {
-  try {
-    const rows = await query<Record<string, unknown>>(
-      "SELECT slug, name, speciality, qualification, department_slug, photo_url, registration_number, consultant_type FROM doctor_profiles WHERE slug = ? AND status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 LIMIT 1",
-      slug
-    );
-    if (rows.results?.length) return dbDoctorToPublic(rows.results[0]);
-  } catch {
-    // fallback
-  }
-  return doctors.find((item) => item.slug === slug) || null;
+  return resolveDoctorBySlug(
+    query,
+    slug
+  );
 }
