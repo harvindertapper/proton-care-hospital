@@ -63,6 +63,231 @@ export const LIFECYCLE_FOUNDATION_COLUMNS = [
   "deleted_at",
 ];
 
+export const PROTECTED_MIGRATION_HASHES = {
+  "0000_baseline.sql": "F72C5CBA5D08DB5F46A178EF7792192D847B6EB8AD67AB2A008473A57ED01530",
+  "0001_enforce_department_slot_exclusivity.sql": "95CC50AAC38ED9A4EC2F298EE67E652FF4DFA40DD23920DFB4D0D54A59F87BFB",
+  "0002_add_content_lifecycle_foundation.sql": "69456A06436FAFCC8EF3C003FCC1E01E453B2B9D3410240940FED2ABEA7E5971",
+};
+
+export const M1_MIGRATION_FILE = "0003_add_media_library_and_gallery.sql";
+
+export const M1_EXPECTED_MEDIA_COLUMNS = [
+  "storage_type",
+  "public_path",
+  "display_r2_key",
+  "display_public_path",
+  "display_content_type",
+  "display_size_bytes",
+  "thumbnail_r2_key",
+  "thumbnail_public_path",
+  "thumbnail_content_type",
+  "thumbnail_size_bytes",
+  "title",
+  "alt_text",
+  "caption",
+  "width",
+  "height",
+  "checksum_sha256",
+  "category",
+  "rights_status",
+  "rights_source",
+  "source_url",
+  "updated_at",
+  "published_at",
+  "cleanup_candidate_at",
+  "purge_after",
+  "purge_status",
+  "purge_error",
+];
+
+export const M1_EXPECTED_TABLES = ["gallery_sections", "gallery_items"];
+
+export const M1_EXPECTED_INDEXES = [
+  "idx_media_lifecycle_category_created",
+  "idx_media_active_public_path",
+  "idx_media_active_checksum",
+  "idx_gallery_sections_lifecycle_order",
+  "idx_gallery_items_section_lifecycle_order",
+  "idx_gallery_items_media_deleted",
+  "idx_gallery_items_active_slot",
+];
+
+export const M1_PUBLIC_SEED_IDS = [
+  "media-public-gallery-front-exterior-hero",
+  "media-public-gallery-front-exterior-wide",
+  "media-public-gallery-reception",
+  "media-public-gallery-corridor",
+  "media-public-gallery-ward-bed-01",
+  "media-public-gallery-patient-room-twin",
+  "media-public-gallery-patient-room-single",
+];
+
+export const M1_GALLERY_SECTION_ID = "gallery-section-facilities";
+
+export const M1_GALLERY_ITEM_IDS = [
+  "gallery-item-hero",
+  "gallery-item-wide",
+  "gallery-item-reception",
+  "gallery-item-corridor",
+  "gallery-item-ward",
+  "gallery-item-twin",
+  "gallery-item-single",
+];
+
+export async function computeFileSha256(filePath) {
+  const crypto = await import("node:crypto");
+  const content = fs.readFileSync(filePath);
+  return crypto.createHash("sha256").update(content).digest("hex").toUpperCase();
+}
+
+export async function verifyProtectedHashes(migrationsDir) {
+  const errors = [];
+  const crypto = await import("node:crypto");
+  for (const [file, expectedHash] of Object.entries(PROTECTED_MIGRATION_HASHES)) {
+    const fullPath = path.join(migrationsDir, file);
+    if (!fs.existsSync(fullPath)) {
+      errors.push(`Protected migration file missing: ${file}`);
+      continue;
+    }
+    const content = fs.readFileSync(fullPath);
+    const actualHash = crypto.createHash("sha256").update(content).digest("hex").toUpperCase();
+    if (actualHash !== expectedHash) {
+      errors.push(`Protected hash mismatch for ${file}: expected ${expectedHash}, got ${actualHash}`);
+    }
+  }
+  return errors;
+}
+
+export function validateM1Migration(migrationsDir) {
+  const errors = [];
+  const m1Path = path.join(migrationsDir, M1_MIGRATION_FILE);
+
+  if (!fs.existsSync(m1Path)) {
+    errors.push(`Migration 0003 file missing: ${M1_MIGRATION_FILE}`);
+    return errors;
+  }
+
+  const content = fs.readFileSync(m1Path, "utf8");
+  const stripped = stripComments(content);
+  const statements = parseSqlStatements(content).map(normalizeSql);
+
+  // Check no destructive SQL
+  for (const stmt of statements) {
+    const destructiveReason = checkDestructiveStatement(stmt);
+    if (destructiveReason) {
+      errors.push(`Migration 0003 contains destructive SQL: ${destructiveReason}`);
+    }
+  }
+
+  // Verify ALTER TABLE media_assets ADD COLUMN statements for all expected columns
+  for (const col of M1_EXPECTED_MEDIA_COLUMNS) {
+    const alterRegex = new RegExp(
+      `ALTER\\s+TABLE\\s+media_assets\\s+ADD\\s+COLUMN\\s+${col}\\b`,
+      "i"
+    );
+    if (!alterRegex.test(stripped)) {
+      errors.push(`Migration 0003 missing ALTER TABLE media_assets ADD COLUMN ${col}`);
+    }
+  }
+
+  // Verify gallery_sections CREATE TABLE
+  if (!/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?gallery_sections\b/i.test(stripped)) {
+    errors.push("Migration 0003 missing CREATE TABLE gallery_sections");
+  }
+
+  // Verify gallery_items CREATE TABLE
+  if (!/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?gallery_items\b/i.test(stripped)) {
+    errors.push("Migration 0003 missing CREATE TABLE gallery_items");
+  }
+
+  // Verify gallery_items has FOREIGN KEY references
+  if (!/FOREIGN\s+KEY\s*\(\s*section_id\s*\)\s*REFERENCES\s+gallery_sections/i.test(stripped)) {
+    errors.push("Migration 0003 gallery_items missing FOREIGN KEY to gallery_sections");
+  }
+  if (!/FOREIGN\s+KEY\s*\(\s*media_id\s*\)\s*REFERENCES\s+media_assets/i.test(stripped)) {
+    errors.push("Migration 0003 gallery_items missing FOREIGN KEY to media_assets");
+  }
+
+  // Verify indexes
+  for (const idx of M1_EXPECTED_INDEXES) {
+    const idxRegex = new RegExp(`CREATE\\s+(?:UNIQUE\\s+)?INDEX.*\\b${idx}\\b`, "i");
+    if (!idxRegex.test(stripped)) {
+      errors.push(`Migration 0003 missing index: ${idx}`);
+    }
+  }
+
+  // Verify PUBLIC seed INSERTs exist
+  for (const seedId of M1_PUBLIC_SEED_IDS) {
+    if (!stripped.includes(`'${seedId}'`)) {
+      errors.push(`Migration 0003 missing PUBLIC seed: ${seedId}`);
+    }
+  }
+
+  // Verify the INSERT column list includes storage_type
+  if (!/INSERT\s+OR\s+IGNORE\s+INTO\s+media_assets\s*\([^)]*\bstorage_type\b/i.test(stripped)) {
+    errors.push("Migration 0003 media_assets INSERT missing storage_type in column list");
+  }
+
+  // Verify each seed row is dormant via positional values:
+  // status='HIDDEN', is_visible=0, lifecycle_status='DRAFT', storage_type='PUBLIC'
+  const DORMANT_POSITIONAL = /'HIDDEN',\s*0,\s*'DRAFT',\s*'PUBLIC'/g;
+  const dormantMatches = stripped.match(DORMANT_POSITIONAL);
+  const expectedDormantCount = M1_PUBLIC_SEED_IDS.length;
+  if (!dormantMatches || dormantMatches.length < expectedDormantCount) {
+    errors.push(`Migration 0003 PUBLIC seeds must have dormant positional pattern 'HIDDEN', 0, 'DRAFT', 'PUBLIC' for all ${expectedDormantCount} seeds`);
+  }
+
+  // Verify gallery section seed
+  if (!stripped.includes(`'${M1_GALLERY_SECTION_ID}'`)) {
+    errors.push(`Migration 0003 missing gallery section seed: ${M1_GALLERY_SECTION_ID}`);
+  }
+
+  // Verify gallery item seeds
+  for (const itemId of M1_GALLERY_ITEM_IDS) {
+    if (!stripped.includes(`'${itemId}'`)) {
+      errors.push(`Migration 0003 missing gallery item seed: ${itemId}`);
+    }
+  }
+
+  // Verify gallery_v2_initialized=0 marker
+  if (!/gallery_v2_initialized['"]\s*,\s*['"]0['"]/i.test(stripped)) {
+    errors.push("Migration 0003 missing gallery_v2_initialized=0 marker");
+  }
+
+  // Verify backfill UPDATE exists
+  if (!/UPDATE\s+media_assets\s+SET/i.test(stripped)) {
+    errors.push("Migration 0003 missing backfill UPDATE for media_assets");
+  }
+
+  return errors;
+}
+
+export function validateMediaLifecycleColumns(migrationsDir) {
+  const errors = [];
+  const m1Path = path.join(migrationsDir, M1_MIGRATION_FILE);
+  if (!fs.existsSync(m1Path)) return errors;
+
+  const content = fs.readFileSync(m1Path, "utf8");
+  const stripped = stripComments(content);
+
+  // gallery_sections and gallery_items are CREATE TABLE (not ALTER), so verify
+  // their definitions include lifecycle_status, version, deleted_at columns.
+  const tablesToCheck = ["gallery_sections", "gallery_items"];
+  for (const table of tablesToCheck) {
+    for (const col of ["lifecycle_status", "version", "deleted_at"]) {
+      const inCreateTable = new RegExp(
+        `CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${table}[\\s\\S]*?\\b${col}\\b`,
+        "i"
+      );
+      if (!inCreateTable.test(stripped)) {
+        errors.push(`Migration 0003 ${table} missing lifecycle column: ${col}`);
+      }
+    }
+  }
+
+  return errors;
+}
+
 function findAlterAddColumn(stmt, table, column) {
   const addColRegex = new RegExp(
     `^ALTER\\s+TABLE\\s+${table}\\s+ADD\\s+COLUMN\\s+${column}\\b`,
@@ -454,8 +679,37 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
       console.error(`  - ${err}`);
     }
     process.exit(1);
-  } else {
-    console.log(`✅ Migration Check Passed: Verified ${result.filesCount} migration file(s) with zero schema drift.`);
-    process.exit(0);
   }
+
+  const protectedErrors = await verifyProtectedHashes(migrationsDir);
+  if (protectedErrors.length > 0) {
+    console.error("❌ Protected Hash Verification Failed:");
+    for (const err of protectedErrors) {
+      console.error(`  - ${err}`);
+    }
+    process.exit(1);
+  }
+
+  const m1Errors = validateM1Migration(migrationsDir);
+  if (m1Errors.length > 0) {
+    console.error("❌ Migration 0003 Validation Failed:");
+    for (const err of m1Errors) {
+      console.error(`  - ${err}`);
+    }
+    process.exit(1);
+  }
+
+  const mediaLifecycleErrors = validateMediaLifecycleColumns(migrationsDir);
+  if (mediaLifecycleErrors.length > 0) {
+    console.error("❌ Media Lifecycle Column Validation Failed:");
+    for (const err of mediaLifecycleErrors) {
+      console.error(`  - ${err}`);
+    }
+    process.exit(1);
+  }
+
+  console.log(`✅ Migration Check Passed: Verified ${result.filesCount} migration file(s) with zero schema drift.`);
+  console.log("✅ Protected hashes verified for 0000-0002.");
+  console.log("✅ Migration 0003 validated: additive media library + gallery foundation.");
+  process.exit(0);
 }
