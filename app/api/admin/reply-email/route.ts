@@ -1,5 +1,6 @@
-import { audit, json, requireAdmin, run, verifyCsrf } from "@/app/lib/server";
+import { audit, json, query, requireAdmin, run, verifyCsrf } from "@/app/lib/server";
 import { sendEmail } from "@/app/lib/resend";
+import { requireAppliedMutation } from "@/app/lib/mutation-result";
 
 export async function POST(request: Request) {
   const admin = await requireAdmin();
@@ -22,6 +23,16 @@ export async function POST(request: Request) {
       throw new Error("Required fields: contactId, replyText, recipientEmail are missing.");
     }
 
+    // Prove contact exists before sending email
+    const existing = await query(
+      "SELECT id FROM contact_messages WHERE id = ?",
+      contactId
+    );
+    const contactExists = Boolean(existing.results && existing.results.length);
+    if (!contactExists) {
+      throw new Error("Contact message not found.");
+    }
+
     // Send email using Resend
     await sendEmail({
       to: recipientEmail,
@@ -42,13 +53,14 @@ export async function POST(request: Request) {
       `,
     });
 
-    // Update the message state in contact_messages
-    await run(
-      "UPDATE contact_messages SET status = 'CONTACTED', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    // Update the message state in contact_messages (schema-compatible: no updated_at)
+    const result = await run(
+      "UPDATE contact_messages SET status = 'CONTACTED' WHERE id = ?",
       contactId
     );
+    requireAppliedMutation(result, contactExists, "Contact message");
 
-    // Audit the action
+    // Audit only after the database mutation is proved applied
     await audit(admin.session.email, "CONTACT_REPLIED", "ContactMessage", contactId, `Replied to ${recipientEmail}`);
 
     return json({ success: true });
