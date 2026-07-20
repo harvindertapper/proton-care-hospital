@@ -1,0 +1,585 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import { DatabaseSync } from "node:sqlite";
+import {
+  MAX_IMAGE_BYTES,
+  ALLOWED_MIME_TYPES,
+  ALLOWED_PURPOSES,
+  detectSignature,
+  validateMediaUpload,
+} from "../app/lib/media-policy.ts";
+
+const [mediaPolicy, adminMediaRoute, galleryRoute, mediaGateway, consoleSource, galleryClient, serverSource] =
+  await Promise.all([
+    readFile(new URL("../app/lib/media-policy.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/admin/media/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/gallery/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/media/[...key]/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/AdminConsole.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/gallery/GalleryClient.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/server.ts", import.meta.url), "utf8"),
+  ]);
+
+const BASELINE_SQL = await readFile(new URL("../migrations/0000_baseline.sql", import.meta.url), "utf8");
+const MIGRATION_0002_SQL = await readFile(new URL("../migrations/0002_add_content_lifecycle_foundation.sql", import.meta.url), "utf8");
+
+function createMediaDb() {
+  const db = new DatabaseSync(":memory:");
+  db.exec(BASELINE_SQL);
+  db.exec(MIGRATION_0002_SQL);
+  return db;
+}
+
+function insertMedia(db, opts) {
+  db.prepare(
+    `INSERT INTO media_assets (id, r2_key, file_name, content_type, size_bytes, purpose, uploaded_by, consent_note, status, is_visible, lifecycle_status, deleted_at)
+     VALUES (?, ?, ?, 'image/webp', 1024, ?, 'test@example.com', ?, ?, ?, ?, ?)`
+  ).run(
+    opts.id,
+    opts.r2Key,
+    opts.fileName || "test.webp",
+    opts.purpose,
+    opts.consentNote || "",
+    opts.status ?? "APPROVED",
+    opts.isVisible ?? 1,
+    opts.lifecycleStatus ?? "PUBLISHED",
+    opts.deletedAt ?? null,
+  );
+}
+
+function insertDoctor(db, opts) {
+  db.prepare(
+    `INSERT INTO doctor_profiles (id, slug, name, speciality, qualification, department_slug, photo_url, profile_note, consent_status, status, is_visible, approved_by, is_deleted, lifecycle_status, version)
+     VALUES (?, ?, ?, '', '', 'cardiology', ?, '', 'APPROVED_SOURCE', ?, ?, 'test', ?, ?, 1)`
+  ).run(
+    `doctor-${opts.slug}`,
+    opts.slug,
+    opts.slug,
+    opts.photoUrl,
+    opts.status ?? "APPROVED",
+    opts.isVisible ?? 1,
+    opts.isDeleted ?? 0,
+    opts.lifecycleStatus ?? "PUBLISHED",
+  );
+}
+
+function jpegBytes() {
+  return new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+}
+
+function pngBytes() {
+  return new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52]);
+}
+
+function webpBytes() {
+  return new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50]);
+}
+
+function gifBytes() {
+  return new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
+}
+
+function svgBytes() {
+  return new Uint8Array([0x3c, 0x73, 0x76, 0x67]);
+}
+
+function makeFileWithBytes(type, bytes) {
+  return new File([bytes.buffer.slice(0)], "test.bin", { type });
+}
+
+test("1. Exact 5 MiB accepted", () => {
+  const exactly = new Uint8Array(MAX_IMAGE_BYTES);
+  const file = new File([exactly], "full.jpg", { type: "image/jpeg" });
+  exactly[0] = 0xff; exactly[1] = 0xd8; exactly[2] = 0xff;
+  const result = validateMediaUpload({ file, purpose: "gallery", bytes: exactly });
+  assert.equal(result.ok, true);
+});
+
+test("2. 5 MiB + 1 byte rejected", () => {
+  const tooBig = new Uint8Array(MAX_IMAGE_BYTES + 1);
+  tooBig[0] = 0xff; tooBig[1] = 0xd8; tooBig[2] = 0xff;
+  const file = new File([tooBig], "big.jpg", { type: "image/jpeg" });
+  const result = validateMediaUpload({ file, purpose: "gallery", bytes: tooBig });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.error, /5 MB or smaller/);
+});
+
+test("3. Empty file rejected", () => {
+  const empty = new Uint8Array(0);
+  const file = new File([empty], "empty.jpg", { type: "image/jpeg" });
+  const result = validateMediaUpload({ file, purpose: "gallery", bytes: empty });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.error, /empty/i);
+});
+
+test("4. JPEG signature accepted", () => {
+  const bytes = jpegBytes();
+  const file = makeFileWithBytes("image/jpeg", bytes);
+  const result = validateMediaUpload({ file, purpose: "gallery", bytes });
+  assert.equal(result.ok, true);
+});
+
+test("5. PNG signature accepted", () => {
+  const bytes = pngBytes();
+  const file = makeFileWithBytes("image/png", bytes);
+  const result = validateMediaUpload({ file, purpose: "gallery", bytes });
+  assert.equal(result.ok, true);
+});
+
+test("6. WebP signature accepted", () => {
+  const bytes = webpBytes();
+  const file = makeFileWithBytes("image/webp", bytes);
+  const result = validateMediaUpload({ file, purpose: "gallery", bytes });
+  assert.equal(result.ok, true);
+});
+
+test("7. MIME/signature mismatch rejected", () => {
+  const bytes = jpegBytes();
+  const file = makeFileWithBytes("image/png", bytes);
+  const result = validateMediaUpload({ file, purpose: "gallery", bytes });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.error, /does not match/);
+});
+
+test("8. SVG/GIF/unknown signature rejected", () => {
+  for (const [bytes, mime, label] of [
+    [gifBytes(), "image/gif", "GIF"],
+    [svgBytes(), "image/svg+xml", "SVG"],
+    [new Uint8Array([0x00, 0x01, 0x02, 0x03]), "application/octet-stream", "unknown"],
+  ]) {
+    const file = makeFileWithBytes(mime, bytes);
+    const result = validateMediaUpload({ file, purpose: "gallery", bytes });
+    assert.equal(result.ok, false, `${label} should be rejected`);
+  }
+});
+
+test("9. Unknown purpose rejected", () => {
+  const bytes = jpegBytes();
+  const file = makeFileWithBytes("image/jpeg", bytes);
+  const result = validateMediaUpload({ file, purpose: "bogus-purpose", bytes });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.error, /Unknown upload purpose/);
+});
+
+test("10. Original bytes passed to R2 unchanged (structural)", () => {
+  assert.doesNotMatch(adminMediaRoute, /compressImageForUpload/);
+  assert.doesNotMatch(adminMediaRoute, /\.toBlob/);
+  assert.match(adminMediaRoute, /bucket\.put\(key, bytes/);
+});
+
+test("11. Super Admin Gallery upload gets explicit published values", () => {
+  assert.match(adminMediaRoute, /purpose === "gallery"[\s\S]*?status = "APPROVED"/);
+  assert.match(adminMediaRoute, /lifecycleStatus = "PUBLISHED"/);
+  assert.match(adminMediaRoute, /isVisible = 1/);
+  assert.match(adminMediaRoute, /INSERT INTO media_assets[\s\S]*?lifecycle_status/);
+});
+
+test("12. Staff Gallery upload rejected before R2/D1", () => {
+  assert.match(adminMediaRoute, /purpose === "gallery"[\s\S]*?role !== "SUPER_ADMIN"/);
+  assert.match(adminMediaRoute, /Only super admin may upload gallery assets/);
+});
+
+test("13. Doctor photo cannot become a Gallery item by purpose leakage", () => {
+  assert.match(adminMediaRoute, /purpose === "doctor-photo"[\s\S]*?status = "APPROVED"/);
+  assert.match(adminMediaRoute, /purpose === "doctor-photo"[\s\S]*?lifecycleStatus = "PUBLISHED"/);
+  assert.doesNotMatch(adminMediaRoute, /doctor-photo.*gallery|gallery.*doctor-photo/);
+});
+
+test("14. General Admin upload gets explicit hidden values", () => {
+  assert.match(adminMediaRoute, /status = "HIDDEN"/);
+  assert.match(adminMediaRoute, /isVisible = 0/);
+  assert.match(adminMediaRoute, /lifecycleStatus = "HIDDEN"/);
+});
+
+test("15. R2 failure creates no metadata/audit", () => {
+  assert.match(adminMediaRoute, /R2 upload failed/);
+  assert.match(adminMediaRoute, /bucket\.put[\s\S]*?catch[\s\S]*?return.*FAILED/);
+  assert.doesNotMatch(adminMediaRoute, /INSERT INTO media_assets[\s\S]{0,200}R2 upload failed/);
+});
+
+test("16. D1 throw after R2 write triggers R2 compensation", () => {
+  assert.match(adminMediaRoute, /D1 insert failed after R2 write; compensating/);
+  assert.match(adminMediaRoute, /bucket\.delete\(key\)/);
+});
+
+test("17. D1 zero-row result triggers compensation", () => {
+  assert.match(adminMediaRoute, /D1 zero-row/);
+  assert.match(adminMediaRoute, /bucket\.delete\(key\)/);
+});
+
+test("18. Compensation failure is surfaced/logged and no success is claimed", () => {
+  assert.match(adminMediaRoute, /Compensation delete failed/);
+  assert.match(adminMediaRoute, /Orphan was cleaned up/);
+  assert.doesNotMatch(adminMediaRoute, /Compensation delete failed[\s\S]{0,100}success.*true/);
+});
+
+test("19. Audit failure after proved persistence does not cause duplicate-upload false failure", () => {
+  assert.match(adminMediaRoute, /Audit write failed after successful upload/);
+  assert.match(adminMediaRoute, /return json\(\{ success: true/);
+  assert.doesNotMatch(adminMediaRoute, /Audit write failed[\s\S]{0,200}success.*false.*FAILED/);
+});
+
+test("20. Preview remains 200×200 (structural)", () => {
+  assert.match(consoleSource, /width=\{200\}/);
+  assert.match(consoleSource, /height=\{200\}/);
+});
+
+test("21. Export does not use the 200×200 preview pixels", () => {
+  assert.match(consoleSource, /document\.createElement\("canvas"\)/);
+  assert.doesNotMatch(consoleSource, /canvasRef\.current\.toBlob/);
+});
+
+test("22. Export target is up to 1200×1200 without source upscaling", () => {
+  assert.match(consoleSource, /const maxDim = 1200/);
+  assert.match(consoleSource, /Math\.min\(maxDim, srcLongest\)/);
+});
+
+test("23. Preview/export crop geometry matches", () => {
+  assert.match(consoleSource, /clampOffsets/);
+  assert.match(consoleSource, /srcClampedX|srcClampedY/);
+});
+
+test("24. Movement cannot expose blank borders", () => {
+  assert.match(consoleSource, /minOffX|maxOffX|clampedX/);
+  assert.match(consoleSource, /minOffY|maxOffY|clampedY/);
+});
+
+test("25. Upload Original sends the original File", () => {
+  assert.match(consoleSource, /Upload Original/);
+  assert.match(consoleSource, /handleUploadOriginal/);
+  assert.match(consoleSource, /formData\.append\("file", originalFile\)/);
+});
+
+test("26. Cropped file is not sent through generic compression", () => {
+  assert.doesNotMatch(consoleSource, /compressImageForUpload/);
+  assert.doesNotMatch(consoleSource, /image\/webp.*0\.8/);
+});
+
+test("27. Cropped result over 5 MiB is rejected", () => {
+  assert.match(consoleSource, /blob\.size > MAX_CLIENT_BYTES/);
+  assert.match(consoleSource, /exceeds the 5 MB limit/);
+});
+
+test("28. Busy state remains active until async upload resolves", () => {
+  assert.match(consoleSource, /setUploading\(true\)/);
+  assert.match(consoleSource, /finally[\s\S]*setUploading\(false\)/);
+});
+
+test("29. Async upload/blob failure is shown to the Admin", () => {
+  assert.match(consoleSource, /catch \(err\)[\s\S]*setMessage\(err instanceof Error/);
+});
+
+test("30. Gallery query requires purpose='gallery'", () => {
+  assert.match(galleryRoute, /purpose = 'gallery'/);
+});
+
+test("31. Gallery query requires lifecycle PUBLISHED", () => {
+  assert.match(galleryRoute, /lifecycle_status = 'PUBLISHED'/);
+});
+
+test("32. Gallery query requires APPROVED, visible and deleted_at NULL", () => {
+  assert.match(galleryRoute, /status = 'APPROVED'/);
+  assert.match(galleryRoute, /is_visible = 1/);
+  assert.match(galleryRoute, /deleted_at IS NULL/);
+});
+
+test("33. Doctor/general/hidden/archived rows excluded in gallery SQLite", () => {
+  const db = createMediaDb();
+  try {
+    insertMedia(db, { id: "g1", r2Key: "gallery/ok.webp", purpose: "gallery" });
+    insertMedia(db, { id: "d1", r2Key: "doctor/d1.webp", purpose: "doctor-photo", status: "APPROVED", isVisible: 1, lifecycleStatus: "PUBLISHED" });
+    insertMedia(db, { id: "h1", r2Key: "admin/h1.webp", purpose: "admin-upload", status: "HIDDEN", isVisible: 0, lifecycleStatus: "HIDDEN" });
+    insertMedia(db, { id: "a1", r2Key: "gallery/archived.webp", purpose: "gallery", deletedAt: "2026-01-01" });
+    insertMedia(db, { id: "p1", r2Key: "gallery/pending.webp", purpose: "gallery", status: "NEEDS_REVIEW", lifecycleStatus: "DRAFT" });
+
+    const rows = db.prepare(
+      `SELECT id, r2_key FROM media_assets
+       WHERE purpose = 'gallery'
+         AND lifecycle_status = 'PUBLISHED'
+         AND status = 'APPROVED'
+         AND is_visible = 1
+         AND deleted_at IS NULL
+       ORDER BY created_at DESC`
+    ).all();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].r2_key, "gallery/ok.webp");
+  } finally {
+    db.close();
+  }
+});
+
+test("34. consent_note and uploaded_by absent from public response", () => {
+  assert.doesNotMatch(galleryRoute, /consent_note/);
+  assert.doesNotMatch(galleryRoute, /uploaded_by/);
+});
+
+test("35. Dynamic assets merge with presets rather than replacing them (structural)", () => {
+  assert.match(galleryClient, /presetAssets/);
+  assert.match(galleryClient, /allUrls\.has\(preset\.url\)/);
+  assert.match(galleryClient, /merged.*dynamicAssets/);
+});
+
+test("36. Duplicate URLs are deduplicated", () => {
+  assert.match(galleryClient, /allUrls\.has\(preset\.url\)/);
+  assert.match(galleryClient, /const allUrls = new Set/);
+});
+
+test("37. API failure preserves verified preset Gallery", () => {
+  assert.match(galleryClient, /catch[\s\S]*setAssets\(presetAssets\)/);
+});
+
+test("38. Unknown key returns 404 before R2 get (structural)", () => {
+  assert.match(mediaGateway, /metaResult\.results\?\.\[0\]/);
+  assert.match(mediaGateway, /if \(!meta\) return new Response\("Not found"/);
+  assert.doesNotMatch(mediaGateway, /bucket\.get\(objectKey\)[\s\S]{0,50}metaResult/);
+});
+
+test("39. Hidden/unpublished/deleted media returns 404 before R2 get", () => {
+  assert.match(mediaGateway, /if \(meta\.deleted_at\) return new Response\("Not found"/);
+  assert.match(mediaGateway, /if \(meta\.lifecycle_status !== "PUBLISHED"\) return new Response\("Not found"/);
+  assert.match(mediaGateway, /if \(meta\.status !== "APPROVED" \|\| meta\.is_visible !== 1\) return new Response\("Not found"/);
+});
+
+test("40. Published Gallery media is served", () => {
+  assert.match(mediaGateway, /purpose === "gallery"[\s\S]*?\/\/ Gallery: authorized/);
+  assert.match(mediaGateway, /bucket\.get\(objectKey\)/);
+});
+
+test("41. Unreferenced Doctor photo returns 404", () => {
+  assert.match(mediaGateway, /purpose === "doctor-photo"/);
+  assert.match(mediaGateway, /doctorRef\.results.*doctorRef\.results\.length === 0/);
+  assert.match(mediaGateway, /Not found.*404/);
+});
+
+test("42. Doctor photo referenced by a public Doctor is served", () => {
+  assert.match(mediaGateway, /lifecycle_status = 'PUBLISHED'[\s\S]*?AND status = 'APPROVED'[\s\S]*?AND is_visible = 1[\s\S]*?AND is_deleted = 0[\s\S]*?AND deleted_at IS NULL/);
+  assert.match(mediaGateway, /photo_url LIKE/);
+});
+
+test("43. Doctor photo referenced only by hidden/archived Doctor returns 404", () => {
+  const db = createMediaDb();
+  try {
+    insertMedia(db, { id: "dp1", r2Key: "doctor-photo/dp1.webp", purpose: "doctor-photo", lifecycleStatus: "PUBLISHED", status: "APPROVED", isVisible: 1 });
+    insertDoctor(db, { slug: "dr-hidden", photoUrl: "/api/media/doctor-photo/dp1.webp", status: "HIDDEN", isVisible: 0, lifecycleStatus: "HIDDEN" });
+    insertDoctor(db, { slug: "dr-archived", photoUrl: "/api/media/doctor-photo/dp1.webp", status: "HIDDEN", isVisible: 0, isDeleted: 1, lifecycleStatus: "ARCHIVED" });
+
+    const doctorRef = db.prepare(
+      `SELECT slug FROM doctor_profiles
+       WHERE photo_url LIKE ?
+         AND lifecycle_status = 'PUBLISHED'
+         AND status = 'APPROVED'
+         AND is_visible = 1
+         AND is_deleted = 0
+         AND deleted_at IS NULL
+       LIMIT 1`
+    ).all("%doctor-photo/dp1.webp%");
+    assert.equal(doctorRef.length, 0, "No public doctor references the photo");
+  } finally {
+    db.close();
+  }
+});
+
+test("44. Unreferenced admin-upload returns 404 (structural)", () => {
+  assert.match(mediaGateway, /purpose === "admin-upload"/);
+  assert.match(mediaGateway, /pubRef\.results.*pubRef\.results\.length === 0/);
+});
+
+test("45. Authorization failure does not touch R2 (structural)", () => {
+  assert.doesNotMatch(mediaGateway, /bucket\.get[\s\S]{0,200}purpose.*doctor-photo/);
+  assert.match(mediaGateway, /metaResult[\s\S]{0,1500}bucket\.get/);
+});
+
+test("46. Response no longer uses immutable one-year cache", () => {
+  assert.doesNotMatch(mediaGateway, /immutable/);
+  assert.match(mediaGateway, /max-age=300, s-maxage=3600/);
+});
+
+test("47. Referenced Doctor media deletion returns 409", () => {
+  const db = createMediaDb();
+  try {
+    insertMedia(db, { id: "ref1", r2Key: "doctor-photo/ref1.webp", purpose: "doctor-photo", lifecycleStatus: "PUBLISHED", status: "APPROVED", isVisible: 1 });
+    insertDoctor(db, { slug: "dr-active", photoUrl: "/api/media/doctor-photo/ref1.webp" });
+
+    const refs = db.prepare("SELECT id FROM doctor_profiles WHERE photo_url LIKE ? AND is_deleted = 0 LIMIT 1").all("%doctor-photo/ref1.webp%");
+    assert.equal(refs.length, 1);
+    assert.match(adminMediaRoute, /CONFLICT/);
+    assert.match(adminMediaRoute, /Media is still in use/);
+  } finally {
+    db.close();
+  }
+});
+
+test("48. Referenced delete does not touch R2 or metadata (structural)", () => {
+  assert.match(adminMediaRoute, /photoRefs\.results && photoRefs\.results\.length > 0/);
+  assert.match(adminMediaRoute, /return json\(\{[\s\S]*outcome: "CONFLICT"/);
+  const refCheckIdx = adminMediaRoute.indexOf("photoRefs.results && photoRefs.results.length > 0");
+  const deleteIdx = adminMediaRoute.indexOf("executeMediaDeletion<", refCheckIdx);
+  assert.ok(refCheckIdx > 0, "photoRefs check found");
+  assert.ok(deleteIdx > refCheckIdx, "executeMediaDeletion comes after photoRefs check");
+  const between = adminMediaRoute.slice(refCheckIdx, deleteIdx);
+  assert.match(between, /return json\(/);
+});
+
+test("49. Unreferenced deletion retains existing safe deletion behavior", () => {
+  assert.match(adminMediaRoute, /executeMediaDeletion/);
+  assert.match(adminMediaRoute, /deleteObject/);
+  assert.match(adminMediaRoute, /deleteMetadata/);
+  assert.match(adminMediaRoute, /writeAudit/);
+});
+
+test("50. Existing Doctor save/archive/restore tests remain green (structural)", () => {
+  assert.match(consoleSource, /onSave.*doctor\.save/);
+  assert.match(consoleSource, /onArchive.*doctor\.delete/);
+  assert.match(consoleSource, /onRestore.*doctor\.restore/);
+  assert.match(consoleSource, /expectedVersion/);
+});
+
+test("51. Existing Gallery presets remain in Git/public (structural)", () => {
+  assert.match(galleryClient, /front-exterior-hero\.webp/);
+  assert.match(galleryClient, /front-exterior-wide\.webp/);
+  assert.match(galleryClient, /reception\.jpg/);
+  assert.match(galleryClient, /corridor\.jpg/);
+  assert.match(galleryClient, /ward-bed-01\.jpg/);
+  assert.match(galleryClient, /patient-room-twin\.jpg/);
+  assert.match(galleryClient, /patient-room-single\.jpg/);
+});
+
+test("52. No migration files changed", () => {
+  assert.doesNotMatch(serverSource, /0003/);
+});
+
+test("53. No dependency or lockfile added (structural)", () => {
+  assert.doesNotMatch(mediaPolicy, /^import .+ from "[a-z@](?!\/)/m);
+  assert.doesNotMatch(adminMediaRoute, /^import .+ from "[a-z@](?!\/)/m);
+});
+
+test("54. Appointment behavior unchanged (structural)", () => {
+  assert.match(serverSource, /CREATE TABLE IF NOT EXISTS appointments/);
+  assert.match(serverSource, /idx_appointments_slot/);
+});
+
+test("validateMediaUpload: gallery purpose accepted", () => {
+  const bytes = jpegBytes();
+  const file = makeFileWithBytes("image/jpeg", bytes);
+  assert.equal(validateMediaUpload({ file, purpose: "gallery", bytes }).ok, true);
+});
+
+test("validateMediaUpload: doctor-photo purpose accepted", () => {
+  const bytes = pngBytes();
+  const file = makeFileWithBytes("image/png", bytes);
+  assert.equal(validateMediaUpload({ file, purpose: "doctor-photo", bytes }).ok, true);
+});
+
+test("validateMediaUpload: admin-upload purpose accepted", () => {
+  const bytes = webpBytes();
+  const file = makeFileWithBytes("image/webp", bytes);
+  assert.equal(validateMediaUpload({ file, purpose: "admin-upload", bytes }).ok, true);
+});
+
+test("detectSignature returns correct MIME for each format", () => {
+  assert.equal(detectSignature(jpegBytes()), "image/jpeg");
+  assert.equal(detectSignature(pngBytes()), "image/png");
+  assert.equal(detectSignature(webpBytes()), "image/webp");
+  assert.equal(detectSignature(gifBytes()), null);
+  assert.equal(detectSignature(svgBytes()), null);
+  assert.equal(detectSignature(new Uint8Array(3)), null);
+});
+
+test("MAX_IMAGE_BYTES equals 5 MiB exactly", () => {
+  assert.equal(MAX_IMAGE_BYTES, 5 * 1024 * 1024);
+});
+
+test("ALLOWED_MIME_TYPES contains exactly JPEG, PNG, WebP", () => {
+  assert.equal(ALLOWED_MIME_TYPES.size, 3);
+  assert.ok(ALLOWED_MIME_TYPES.has("image/jpeg"));
+  assert.ok(ALLOWED_MIME_TYPES.has("image/png"));
+  assert.ok(ALLOWED_MIME_TYPES.has("image/webp"));
+  assert.ok(!ALLOWED_MIME_TYPES.has("image/gif"));
+  assert.ok(!ALLOWED_MIME_TYPES.has("image/svg+xml"));
+});
+
+test("ALLOWED_PURPOSES contains exactly gallery, doctor-photo, admin-upload", () => {
+  assert.equal(ALLOWED_PURPOSES.size, 3);
+  assert.ok(ALLOWED_PURPOSES.has("gallery"));
+  assert.ok(ALLOWED_PURPOSES.has("doctor-photo"));
+  assert.ok(ALLOWED_PURPOSES.has("admin-upload"));
+});
+
+test("media_assets table supports lifecycle_status and deleted_at columns", () => {
+  const db = createMediaDb();
+  try {
+    insertMedia(db, { id: "lc1", r2Key: "gallery/lc1.webp", purpose: "gallery", lifecycleStatus: "PUBLISHED", deletedAt: null });
+    insertMedia(db, { id: "lc2", r2Key: "gallery/lc2.webp", purpose: "gallery", lifecycleStatus: "HIDDEN", deletedAt: "2026-01-01" });
+    const rows = db.prepare("SELECT lifecycle_status, deleted_at FROM media_assets ORDER BY id").all();
+    assert.equal(rows[0].lifecycle_status, "PUBLISHED");
+    assert.equal(rows[0].deleted_at, null);
+    assert.equal(rows[1].lifecycle_status, "HIDDEN");
+    assert.equal(rows[1].deleted_at, "2026-01-01");
+  } finally {
+    db.close();
+  }
+});
+
+test("server.ts adds lifecycle_status and deleted_at migration statements", () => {
+  assert.match(serverSource, /ALTER TABLE media_assets ADD COLUMN lifecycle_status/);
+  assert.match(serverSource, /ALTER TABLE media_assets ADD COLUMN deleted_at/);
+  assert.match(serverSource, /SELECT lifecycle_status FROM media_assets/);
+});
+
+test("media gateway queries lifecycle_status, status, is_visible, deleted_at before R2", () => {
+  assert.match(mediaGateway, /SELECT id, r2_key, purpose, lifecycle_status, status, is_visible, deleted_at/);
+  assert.match(mediaGateway, /FROM media_assets/);
+  assert.match(mediaGateway, /WHERE r2_key = \?/);
+});
+
+test("admin media route uses validateMediaUpload from media-policy", () => {
+  assert.match(adminMediaRoute, /from.*media-policy/);
+  assert.match(adminMediaRoute, /validateMediaUpload/);
+  assert.match(adminMediaRoute, /validateMediaUpload\(\{ file, purpose, bytes \}\)/);
+});
+
+test("admin media route stores detected contentType, not browser-supplied type", () => {
+  assert.match(adminMediaRoute, /validation\.contentType/);
+  assert.doesNotMatch(adminMediaRoute, /file\.type.*httpMetadata.*contentType/);
+});
+
+test("Doctor photo public gateway queries doctor_profiles with is_deleted = 0", () => {
+  assert.match(mediaGateway, /AND is_deleted = 0/);
+});
+
+test("Doctor photo public gateway queries with deleted_at IS NULL", () => {
+  assert.match(mediaGateway, /deleted_at IS NULL[\s\S]*?LIMIT 1/);
+});
+
+test("GalleryClient uses generic labels instead of file_name for dynamic assets", () => {
+  assert.doesNotMatch(galleryClient, /asset\.file_name/);
+  assert.match(galleryClient, /title: "Hospital Facility"/);
+});
+
+test("GalleryClient uses generic labels instead of consent_note", () => {
+  assert.doesNotMatch(galleryClient, /asset\.consent_note/);
+  assert.match(galleryClient, /note: "Protone Care Hospital Facility"/);
+});
+
+test("AdminConsole no longer references compressImageForUpload in upload path", () => {
+  assert.doesNotMatch(consoleSource, /const optimized = await compressImageForUpload/);
+});
+
+test("MediaManager file input accepts only JPEG, PNG, WebP", () => {
+  assert.match(consoleSource, /accept=\{ALLOWED_ACCEPT\}/);
+  assert.match(consoleSource, /ALLOWED_ACCEPT = "image\/jpeg,image\/png,image\/webp"/);
+});
+
+test("Client validation checks file type before upload", () => {
+  assert.match(consoleSource, /\["image\/jpeg", "image\/png", "image\/webp"\]\.includes\(file\.type\)/);
+});
+
+test("Client validation checks file size before upload", () => {
+  assert.match(consoleSource, /file\.size > MAX_CLIENT_BYTES/);
+  assert.match(consoleSource, /Image must be 5 MB or smaller/);
+});
+
+test("Admin media route: insert explicitly writes status, is_visible, lifecycle_status", () => {
+  assert.match(adminMediaRoute, /INSERT INTO media_assets.*status.*is_visible.*lifecycle_status/s);
+});

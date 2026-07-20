@@ -12,8 +12,6 @@ type GalleryAsset = {
 
 type ApiGalleryAsset = {
   r2_key: string;
-  file_name?: string;
-  consent_note?: string;
 };
 
 const presetAssets: GalleryAsset[] = [
@@ -66,12 +64,19 @@ export default function GalleryClient() {
         const res = await fetch("/api/gallery");
         const data = (await res.json()) as { success?: boolean; assets?: ApiGalleryAsset[] };
         if (data.success && data.assets && data.assets.length > 0) {
-          const formatted = data.assets.map((asset: ApiGalleryAsset) => ({
+          const dynamicAssets: GalleryAsset[] = data.assets.map((asset: ApiGalleryAsset) => ({
             url: `/api/media/${asset.r2_key}`,
-            title: asset.file_name || "Gallery Asset",
-            note: asset.consent_note || "Protone Care Hospital Facility",
+            title: "Hospital Facility",
+            note: "Protone Care Hospital Facility",
           }));
-          setAssets(formatted);
+          const allUrls = new Set(dynamicAssets.map((a) => a.url));
+          const merged = [...dynamicAssets];
+          for (const preset of presetAssets) {
+            if (!allUrls.has(preset.url)) {
+              merged.push(preset);
+            }
+          }
+          setAssets(merged);
         } else {
           setAssets(presetAssets);
         }

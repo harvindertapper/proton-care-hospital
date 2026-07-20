@@ -309,6 +309,14 @@ export async function getD1() {
         await db.prepare("ALTER TABLE media_assets ADD COLUMN is_visible INTEGER NOT NULL DEFAULT 1").run();
       } catch {}
     }
+    try {
+      await db.prepare("SELECT lifecycle_status FROM media_assets LIMIT 1").all();
+    } catch {
+      try {
+        await db.prepare("ALTER TABLE media_assets ADD COLUMN lifecycle_status TEXT NOT NULL DEFAULT 'PUBLISHED'").run();
+        await db.prepare("ALTER TABLE media_assets ADD COLUMN deleted_at TEXT").run();
+      } catch {}
+    }
     await seedDepartmentTimings(db);
     await seedDoctorProfiles(db);
     await seedAdminUsers(db);

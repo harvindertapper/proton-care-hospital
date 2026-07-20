@@ -1839,52 +1839,8 @@ function TimingManager({
   );
 }
 
-// Downscale + re-encode an image File in the browser before upload so mobile
-// users don't download full-size desktop images. Zero-cost: runs entirely in the
-// browser at upload time. Non-image files and animated GIFs pass through
-// unchanged, and it falls back to the original file if anything fails or if the
-// re-encoded result is not smaller.
-async function compressImageForUpload(
-  file: File,
-  maxEdge = 1600,
-  quality = 0.8
-): Promise<File> {
-  if (!file.type.startsWith("image/") || file.type === "image/gif") {
-    return file;
-  }
-  try {
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = () => reject(new Error("Could not read file."));
-      reader.readAsDataURL(file);
-    });
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve(image);
-      image.onerror = () => reject(new Error("Could not load image."));
-      image.src = dataUrl;
-    });
-    const longest = Math.max(img.width, img.height);
-    const scale = longest > maxEdge ? maxEdge / longest : 1;
-    const width = Math.round(img.width * scale);
-    const height = Math.round(img.height * scale);
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return file;
-    ctx.drawImage(img, 0, 0, width, height);
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob((b) => resolve(b), "image/webp", quality)
-    );
-    if (!blob || blob.size >= file.size) return file;
-    const baseName = file.name.replace(/\.[^./\\]+$/, "") || "upload";
-    return new File([blob], `${baseName}.webp`, { type: "image/webp" });
-  } catch {
-    return file;
-  }
-}
+const ALLOWED_ACCEPT = "image/jpeg,image/png,image/webp";
+const MAX_CLIENT_BYTES = 5 * 1024 * 1024;
 
 function ImageCropUploader({
   onUpload,
@@ -1894,36 +1850,46 @@ function ImageCropUploader({
   onComplete: (url: string) => void;
 }) {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [originalFile, setOriginalFile] = useState<File | null>(null);
   const [zoom, setZoom] = useState(1);
   const [offsetX, setOffsetX] = useState(0);
   const [offsetY, setOffsetY] = useState(0);
-  const [rotation, setRotation] = useState(0); // in degrees: 0, 90, 180, 270
+  const [rotation, setRotation] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState("");
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [cropInfo, setCropInfo] = useState("");
+  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // When a file is selected
   function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0];
+      if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+        setMessage("Only JPEG, PNG, and WebP images are supported.");
+        return;
+      }
+      if (file.size > MAX_CLIENT_BYTES) {
+        setMessage("Image must be 5 MB or smaller.");
+        return;
+      }
       const reader = new FileReader();
       reader.onload = () => {
         setImageSrc(reader.result as string);
+        setOriginalFile(file);
         setZoom(1);
         setOffsetX(0);
         setOffsetY(0);
         setRotation(0);
         setMessage("");
+        setCropInfo("");
       };
       reader.readAsDataURL(file);
     }
   }
 
-  // Draw image on canvas in real-time
   useEffect(() => {
     if (!imageSrc) return;
-    const canvas = canvasRef.current;
+    const canvas = previewCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -1931,47 +1897,134 @@ function ImageCropUploader({
     const img = new Image();
     img.src = imageSrc;
     img.onload = () => {
-      // Clear canvas
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.save();
-
-      // Move center of canvas to origin for rotation & zoom
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.rotate((rotation * Math.PI) / 180);
       ctx.scale(zoom, zoom);
-
-      // Draw the image centered
-      // We want to scale the image to fill the canvas as base
       const scale = Math.max(canvas.width / img.width, canvas.height / img.height);
       const iw = img.width * scale;
       const ih = img.height * scale;
-
       ctx.drawImage(img, -iw / 2 + offsetX, -ih / 2 + offsetY, iw, ih);
       ctx.restore();
     };
   }, [imageSrc, zoom, offsetX, offsetY, rotation]);
 
-  async function handleCropAndUpload() {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    setUploading(true);
-    setMessage("Optimizing & uploading...");
-    try {
-      canvas.toBlob(async (blob) => {
-        if (!blob) {
-          throw new Error("Could not crop image.");
-        }
-        const file = new File([blob], "doctor-profile.webp", { type: "image/webp" });
-        const formData = new FormData();
-        formData.append("file", file);
-        formData.append("purpose", "doctor-photo");
+  function promisifyToBlob(canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob> {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (!blob) return reject(new Error("Could not generate image."));
+        resolve(blob);
+      }, type, quality);
+    });
+  }
 
-        const url = await onUpload(formData);
-        onComplete(url);
-        setImageSrc(null); // Reset
-        setMessage("Uploaded successfully!");
-        if (fileInputRef.current) fileInputRef.current.value = "";
-      }, "image/webp", 0.85);
+  function clampOffsets(imgW: number, imgH: number, offX: number, offY: number, _rot: number, zm: number, canW: number, canH: number) {
+    const baseScale = Math.max(canW / imgW, canH / imgH);
+    const effectiveScale = baseScale * zm;
+    const visibleW = canW / effectiveScale;
+    const visibleH = canH / effectiveScale;
+    const drawnW = imgW * baseScale;
+    const drawnH = imgH * baseScale;
+    const halfDrawW = drawnW / 2;
+    const halfDrawH = drawnH / 2;
+    const minOffX = -(halfDrawW - visibleW / 2);
+    const maxOffX = halfDrawW - visibleW / 2;
+    const minOffY = -(halfDrawH - visibleH / 2);
+    const maxOffY = halfDrawH - visibleH / 2;
+    const clampedX = Math.max(minOffX, Math.min(maxOffX, offX));
+    const clampedY = Math.max(minOffY, Math.min(maxOffY, offY));
+    return { clampedX, clampedY, effectiveScale, drawnW };
+  }
+
+  async function generateExport(srcImageSrc: string, offX: number, offY: number, rot: number, zm: number): Promise<{ blob: Blob; width: number }> {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("Could not load image."));
+      image.src = srcImageSrc;
+    });
+
+    const maxDim = 1200;
+    const previewSize = 200;
+    const srcW = img.naturalWidth;
+    const srcH = img.naturalHeight;
+    const srcLongest = Math.max(srcW, srcH);
+    const exportSize = Math.min(maxDim, srcLongest);
+
+    const { clampedX, clampedY, effectiveScale, drawnW } = clampOffsets(srcW, srcH, offX, offY, rot, zm, previewSize, previewSize);
+
+    const scaleToSrc = srcW / (drawnW / effectiveScale);
+    const srcClampedX = clampedX * scaleToSrc;
+    const srcClampedY = clampedY * scaleToSrc;
+
+    const exportCanvas = document.createElement("canvas");
+    const exportDrawSize = exportSize;
+    exportCanvas.width = exportDrawSize;
+    exportCanvas.height = exportDrawSize;
+    const ctx = exportCanvas.getContext("2d")!;
+
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, exportDrawSize, exportDrawSize);
+    ctx.save();
+    ctx.translate(exportDrawSize / 2, exportDrawSize / 2);
+    ctx.rotate((rot * Math.PI) / 180);
+    const baseScale = Math.max(exportDrawSize / srcW, exportDrawSize / srcH);
+    ctx.scale(zm, zm);
+    const dw = srcW * baseScale;
+    const dh = srcH * baseScale;
+    ctx.drawImage(img, -dw / 2 + srcClampedX, -dh / 2 + srcClampedY, dw, dh);
+    ctx.restore();
+
+    const blob = await promisifyToBlob(exportCanvas, "image/webp", 0.95);
+    return { blob, width: exportDrawSize };
+  }
+
+  async function handleUploadOriginal() {
+    if (!originalFile) return;
+    setUploading(true);
+    setMessage("Uploading original image…");
+    try {
+      const formData = new FormData();
+      formData.append("file", originalFile);
+      formData.append("purpose", "doctor-photo");
+      const url = await onUpload(formData);
+      onComplete(url);
+      setImageSrc(null);
+      setOriginalFile(null);
+      setMessage("Original uploaded successfully!");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleCropAndUpload() {
+    if (!imageSrc) return;
+    setUploading(true);
+    setMessage("Generating crop…");
+    try {
+      const { blob, width: cropW } = await generateExport(imageSrc, offsetX, offsetY, rotation, zoom);
+      if (blob.size > MAX_CLIENT_BYTES) {
+        setMessage(`Cropped image is ${(blob.size / (1024 * 1024)).toFixed(1)} MB, which exceeds the 5 MB limit. Try adjusting zoom or crop.`);
+        setUploading(false);
+        return;
+      }
+      setCropInfo(`${cropW}×${cropW} px · ${(blob.size / 1024).toFixed(0)} KB`);
+      setMessage("Uploading cropped image…");
+      const file = new File([blob], "doctor-photo.webp", { type: "image/webp" });
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("purpose", "doctor-photo");
+      const url = await onUpload(formData);
+      onComplete(url);
+      setImageSrc(null);
+      setOriginalFile(null);
+      setCropInfo("");
+      setMessage("Cropped photo uploaded successfully!");
+      if (fileInputRef.current) fileInputRef.current.value = "";
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Upload failed.");
     } finally {
@@ -1982,20 +2035,18 @@ function ImageCropUploader({
   return (
     <div style={{ marginTop: 12, padding: 14, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
       <span style={{ display: "block", fontSize: 13, fontWeight: "600", color: "#1e293b", marginBottom: 8 }}>
-        📷 Crop & Upload Doctor Photo (R2 Gateway)
+        Doctor Photo Upload
       </span>
-      <input type="file" accept="image/*" onChange={onFileChange} ref={fileInputRef} style={{ fontSize: 12 }} />
+      <input type="file" accept={ALLOWED_ACCEPT} onChange={onFileChange} ref={fileInputRef} style={{ fontSize: 12 }} />
       {imageSrc && (
         <div style={{ marginTop: 12, display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-          {/* Canvas for Preview */}
           <canvas
-            ref={canvasRef}
+            ref={previewCanvasRef}
             width={200}
             height={200}
             style={{ border: "2px solid #cbd5e1", borderRadius: "50%", background: "#f1f5f9", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)" }}
           />
 
-          {/* Controls */}
           <div style={{ width: "105%", display: "flex", flexDirection: "column", gap: 8 }}>
             <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "#475569" }}>
               Zoom: {zoom.toFixed(1)}x
@@ -2051,17 +2102,29 @@ function ImageCropUploader({
             </div>
           </div>
 
-          <button
-            type="button"
-            className="button primary small"
-            onClick={handleCropAndUpload}
-            disabled={uploading}
-            style={{ width: "100%", marginTop: 8 }}
-          >
-            {uploading ? "Uploading to R2..." : "Crop & Set Photo"}
-          </button>
+          <div style={{ display: "flex", gap: 8, width: "100%", marginTop: 8 }}>
+            <button
+              type="button"
+              className="button secondary"
+              onClick={handleUploadOriginal}
+              disabled={uploading || !originalFile}
+              style={{ flex: 1, fontSize: 12 }}
+            >
+              Upload Original
+            </button>
+            <button
+              type="button"
+              className="button primary"
+              onClick={handleCropAndUpload}
+              disabled={uploading}
+              style={{ flex: 1, fontSize: 12 }}
+            >
+              Crop &amp; Set Photo
+            </button>
+          </div>
         </div>
       )}
+      {cropInfo && <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>{cropInfo}</div>}
       {message && <div style={{ fontSize: 11, color: "#0d9488", marginTop: 6 }}>{message}</div>}
     </div>
   );
@@ -2478,12 +2541,19 @@ function MediaManager({
       setMessage("Please select a file to upload.");
       return;
     }
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setMessage("Only JPEG, PNG, and WebP images are supported.");
+      return;
+    }
+    if (file.size > MAX_CLIENT_BYTES) {
+      setMessage("Image must be 5 MB or smaller.");
+      return;
+    }
     setUploading(true);
     setMessage("");
     try {
-      const optimized = await compressImageForUpload(file);
       const formData = new FormData();
-      formData.append("file", optimized);
+      formData.append("file", file);
       formData.append("purpose", purpose);
       formData.append("consentNote", consentNote);
       await onUpload(formData);
@@ -2503,7 +2573,7 @@ function MediaManager({
         <h3 style={{ margin: "0 0 12px 0", fontSize: "16px", fontWeight: "600" }}>Upload New Media (R2 Gateway)</h3>
         <label>
           File
-          <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} required style={{ marginTop: 4, width: "100%" }} />
+          <input type="file" accept={ALLOWED_ACCEPT} onChange={(e) => setFile(e.target.files?.[0] || null)} required style={{ marginTop: 4, width: "100%" }} />
         </label>
         <label>
           Purpose
@@ -2518,7 +2588,7 @@ function MediaManager({
           <textarea rows={3} value={consentNote} onChange={(e) => setConsentNote(e.target.value)} placeholder="Explain consent status or asset details" style={{ marginTop: 4, width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }} />
         </label>
         <button className="button primary full" type="submit" disabled={busy || uploading} style={{ marginTop: 8 }}>
-          <Upload size={17} aria-hidden="true" /> {uploading ? "Uploading..." : "Upload Asset"}
+          <Upload size={17} aria-hidden="true" /> {uploading ? "Uploading…" : "Upload Asset"}
         </button>
         {message ? (
           <p style={{ fontSize: "13px", fontWeight: "600", marginTop: 8, color: message.includes("successfully") ? "green" : "red" }}>
