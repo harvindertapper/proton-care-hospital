@@ -1090,8 +1090,8 @@ export function AdminConsole({
             staticDoctors={staticDoctors}
             busy={busy}
             onSave={(payload) => mutate({ action: "doctor.save", payload }, "Doctor profile saved.")}
-            onArchive={(slug) => mutate({ action: "doctor.delete", slug }, "Doctor archived.")}
-            onRestore={(slug) => mutate({ action: "doctor.restore", payload: { slug } }, "Doctor restored as hidden. Review and publish it explicitly.")}
+            onArchive={(slug, expectedVersion) => mutate({ action: "doctor.delete", slug, expectedVersion }, "Doctor archived.")}
+            onRestore={(slug, expectedVersion) => mutate({ action: "doctor.restore", payload: { slug, expectedVersion } }, "Doctor restored as hidden. Review and publish it explicitly.")}
             onUpload={uploadMedia}
           />
         ) : null}
@@ -2083,8 +2083,8 @@ function DoctorManager({
   staticDoctors: Doctor[];
   busy: boolean;
   onSave: (payload: Record<string, unknown>) => void;
-  onArchive?: (slug: string) => void;
-  onRestore?: (slug: string) => void;
+  onArchive?: (slug: string, expectedVersion: number) => void;
+  onRestore?: (slug: string, expectedVersion: number) => void;
   onUpload?: (formData: FormData) => Promise<string>;
 }) {
   const source = resolveDoctorManagerRows(rows);
@@ -2100,6 +2100,7 @@ function DoctorManager({
     profileNote: String(first?.profile_note || ""),
     isVisible: String(first?.is_visible ?? "1"),
     blockedDates: String(first?.blocked_dates || ""),
+    expectedVersion: Number(first?.version) || 0,
   });
 
   function choose(slug: string) {
@@ -2115,6 +2116,7 @@ function DoctorManager({
       profileNote: String(row.profile_note || ""),
       isVisible: String(row.is_visible ?? "1"),
       blockedDates: String(row.blocked_dates || ""),
+      expectedVersion: Number(row.version) || 0,
     });
   }
 
@@ -2133,7 +2135,8 @@ function DoctorManager({
               photoUrl: "",
               profileNote: "",
               isVisible: "1",
-              blockedDates: ""
+              blockedDates: "",
+              expectedVersion: 0,
             })}>
               Create New
             </button>
@@ -2181,7 +2184,7 @@ function DoctorManager({
               disabled={busy}
               onClick={() => {
                 if (window.confirm(`Are you sure you want to archive ${form.name}? Archived doctors are hidden from the public site and can be restored later.`)) {
-                  onArchive?.(form.slug);
+                  onArchive?.(form.slug, form.expectedVersion);
                 }
               }}
             >
@@ -2216,7 +2219,7 @@ function DoctorManager({
                   disabled={busy}
                   onClick={() => {
                     if (window.confirm(`Restore ${String(row.name || "")}? It will return as hidden for review, not published.`)) {
-                      onRestore?.(String(row.slug || ""));
+                      onRestore?.(String(row.slug || ""), Number(row.version) || 0);
                     }
                   }}
                 >

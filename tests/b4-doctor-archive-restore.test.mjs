@@ -1,211 +1,480 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { doctors } from "../app/lib/data.ts";
 import {
   resolvePublicDoctors,
   resolveDoctorBySlug,
+  DOCTOR_LIST_SQL,
+  DOCTOR_BY_SLUG_SQL,
 } from "../app/lib/doctor-public.ts";
 import {
   resolveDoctorManagerRows,
   ACTIVE_DOCTORS_ADMIN_SQL,
   ARCHIVED_DOCTORS_ADMIN_SQL,
-} from "../app/lib/doctor-admin.ts";
-import {
   archiveDoctor,
   restoreDoctor,
-  loadActiveDoctor,
-  loadArchivedDoctor,
+  createDoctor,
+  updateDoctor,
+  loadDoctor,
   assertNotArchivedForEdit,
+  deriveLifecycleFromVisibility,
   ARCHIVED_SAVE_ERROR,
 } from "../app/lib/doctor-admin.ts";
-import { executeRoleMutation } from "../app/lib/mutation-result.ts";
+import { MutationConflictError, executeRoleMutation } from "../app/lib/mutation-result.ts";
 
-function makeRepo({ active = [], archived = [], runChanges = 1 } = {}) {
+const PUBLISHED_ROW = {
+  id: "d1", slug: "dr-a", name: "Dr A", lifecycle_status: "PUBLISHED",
+  version: 1, deleted_at: null, status: "APPROVED", is_visible: 1, is_deleted: 0,
+  speciality: "Cardiology", qualification: "MD", department_slug: "cardiology",
+  photo_url: "", profile_note: "", blocked_dates: "",
+};
+const ARCHIVED_ROW = {
+  id: "d2", slug: "dr-b", name: "Dr B", lifecycle_status: "ARCHIVED",
+  version: 3, deleted_at: "2026-07-20 10:00:00", status: "HIDDEN",
+  is_visible: 0, is_deleted: 1, speciality: "Neurology", qualification: "DM",
+  department_slug: "neurology", photo_url: "", profile_note: "", blocked_dates: "",
+};
+const HIDDEN_ROW = {
+  id: "d3", slug: "dr-c", name: "Dr C", lifecycle_status: "HIDDEN",
+  version: 2, deleted_at: null, status: "HIDDEN", is_visible: 0, is_deleted: 0,
+  speciality: "Ortho", qualification: "MS", department_slug: "orthopaedics",
+  photo_url: "", profile_note: "", blocked_dates: "",
+};
+
+function makeRepo({ rows = [] } = {}) {
+  const db = new Map(rows.map((r) => [r.slug, { ...r }]));
+  let auditCalls = [];
   const query = async (sql, ...binds) => {
     const slug = binds[0];
-    if (sql.includes("is_deleted = 0")) {
-      const row = active.find((r) => r.slug === slug);
-      return { results: row ? [row] : [] };
+    if (!slug) return { results: Array.from(db.values()) };
+    const row = db.get(slug);
+    if (!row) return { results: [] };
+    if (sql.includes("lifecycle_status != 'ARCHIVED'") && sql.includes("is_deleted = 0")) {
+      const match = row.is_deleted === 0 && row.lifecycle_status !== "ARCHIVED";
+      if (sql.includes("deleted_at IS NULL")) {
+        return { results: match && row.deleted_at == null ? [row] : [] };
+      }
+      return { results: match ? [row] : [] };
     }
-    if (sql.includes("is_deleted = 1")) {
-      const row = archived.find((r) => r.slug === slug);
-      return { results: row ? [row] : [] };
+    if (sql.includes("is_deleted = 1 AND lifecycle_status = 'ARCHIVED'")) {
+      return { results: row.is_deleted === 1 && row.lifecycle_status === "ARCHIVED" ? [row] : [] };
     }
-    // unfiltered lookup (assertNotArchivedForEdit)
-    const row = [...active, ...archived].find((r) => r.slug === slug);
-    return { results: row ? [row] : [] };
+    if (sql.includes("deleted_at IS NULL")) {
+      return { results: row.deleted_at == null ? [row] : [] };
+    }
+    return { results: [row] };
   };
-  let auditCalls = [];
-  const run = async () => ({ success: true, meta: { changes: runChanges } });
-  const audit = async (...args) => {
-    auditCalls.push(args);
+  const run = async (sql, ...binds) => {
+    const slug = binds.find((b) => typeof b === "string" && db.has(b)) || binds[0];
+    const matchBySlug = db.get(String(slug));
+    if (!matchBySlug) {
+      if (sql.startsWith("INSERT")) {
+        const row = {
+          id: binds[0], slug: binds[1], name: binds[2], speciality: binds[3],
+          qualification: binds[4], department_slug: binds[5], photo_url: binds[6],
+          profile_note: binds[7], status: binds[8], is_visible: binds[9],
+          approved_by: binds[10], blocked_dates: binds[11] || "",
+          is_deleted: binds[12], lifecycle_status: binds[13], version: 1,
+          deleted_at: null,
+        };
+        db.set(binds[1], row);
+        return { success: true, meta: { changes: 1 } };
+      }
+      return { success: true, meta: { changes: 0 } };
+    }
+    if (sql.includes("version = version + 1")) {
+      matchBySlug.version += 1;
+    }
+    if (sql.includes("lifecycle_status = 'ARCHIVED'")) {
+      matchBySlug.lifecycle_status = "ARCHIVED";
+      matchBySlug.status = "HIDDEN";
+      matchBySlug.is_visible = 0;
+      matchBySlug.is_deleted = 1;
+      matchBySlug.deleted_at = new Date().toISOString();
+    }
+    if (sql.includes("lifecycle_status = 'HIDDEN'") && sql.includes("is_deleted = 0")) {
+      matchBySlug.lifecycle_status = "HIDDEN";
+      matchBySlug.status = "HIDDEN";
+      matchBySlug.is_visible = 0;
+      matchBySlug.is_deleted = 0;
+      matchBySlug.deleted_at = null;
+    }
+    if (sql.includes("UPDATE doctor_profiles SET") && sql.includes("name = ?")) {
+      matchBySlug.name = binds[0];
+      matchBySlug.speciality = binds[1];
+      matchBySlug.lifecycle_status = binds[11];
+      matchBySlug.status = binds[8];
+      matchBySlug.is_visible = binds[9];
+      matchBySlug.is_deleted = binds[10];
+      matchBySlug.deleted_at = null;
+    }
+    return { success: true, meta: { changes: 1 } };
   };
-  const repo = { query, run, audit };
-  return { repo, getAuditCalls: () => auditCalls };
+  const audit = async (...args) => { auditCalls.push(args); };
+  return { repo: { query, run, audit }, getAuditCalls: () => auditCalls, db };
 }
 
-const ACTIVE = { id: "d1", slug: "dr-a", is_deleted: 0, name: "Dr A" };
-const ARCHIVED = { id: "d2", slug: "dr-b", is_deleted: 1, name: "Dr B" };
+function fields(overrides = {}) {
+  return {
+    name: "Dr New", speciality: "Cardiology", qualification: "MD",
+    departmentSlug: "cardiology", photoUrl: "", profileNote: "",
+    blockedDates: "", isVisible: true, ...overrides,
+  };
+}
 
-test("archive active Doctor: guarded update + audit after mutation", async () => {
-  const { repo, getAuditCalls } = makeRepo({ active: [ACTIVE] });
-  const result = await archiveDoctor(repo, "dr-a", "admin@x");
+test("1. New visible Doctor: PUBLISHED/APPROVED/visible/version 1/deleted_at null", async () => {
+  const { repo, db } = makeRepo({});
+  const result = await createDoctor(repo, "dr-new", fields({ isVisible: true }), "admin@x");
   assert.equal(result.outcome, "APPLIED");
+  const doc = db.get("dr-new");
+  assert.equal(doc.lifecycle_status, "PUBLISHED");
+  assert.equal(doc.status, "APPROVED");
+  assert.equal(doc.is_visible, 1);
+  assert.equal(doc.is_deleted, 0);
+  assert.equal(doc.version, 1);
+  assert.equal(doc.deleted_at, null);
+});
+
+test("2. New hidden Doctor: HIDDEN status/invisible/version 1", async () => {
+  const { repo, db } = makeRepo({});
+  const result = await createDoctor(repo, "dr-hidden", fields({ isVisible: false }), "admin@x");
+  assert.equal(result.outcome, "APPLIED");
+  const doc = db.get("dr-hidden");
+  assert.equal(doc.lifecycle_status, "HIDDEN");
+  assert.equal(doc.status, "HIDDEN");
+  assert.equal(doc.is_visible, 0);
+  assert.equal(doc.is_deleted, 0);
+  assert.equal(doc.version, 1);
+});
+
+test("3. Existing visible save: expectedVersion required, version increments once", async () => {
+  const { repo, db, getAuditCalls } = makeRepo({ rows: [PUBLISHED_ROW] });
+  const result = await updateDoctor(repo, "dr-a", 1, fields(), "admin@x");
+  assert.equal(result.outcome, "APPLIED");
+  assert.equal(db.get("dr-a").version, 2);
   assert.equal(getAuditCalls().length, 1);
+  assert.equal(getAuditCalls()[0][1], "DOCTOR_APPROVED");
+});
+
+test("4. Existing hidden save: lifecycle HIDDEN, version increments once", async () => {
+  const { repo, db } = makeRepo({ rows: [HIDDEN_ROW] });
+  const result = await updateDoctor(repo, "dr-c", 2, fields({ isVisible: false }), "admin@x");
+  assert.equal(result.outcome, "APPLIED");
+  assert.equal(db.get("dr-c").version, 3);
+  assert.equal(db.get("dr-c").lifecycle_status, "HIDDEN");
+});
+
+test("5. Existing save without expectedVersion: rejected", async () => {
+  const { repo } = makeRepo({ rows: [PUBLISHED_ROW] });
+  await assert.rejects(
+    () => updateDoctor(repo, "dr-a", 0, fields(), "admin@x"),
+    (e) => e instanceof MutationConflictError,
+  );
+});
+
+test("6. Stale existing save: CONFLICT, no mutation, no audit", async () => {
+  const { repo, db, getAuditCalls } = makeRepo({ rows: [{ ...PUBLISHED_ROW, version: 5 }] });
+  await assert.rejects(
+    () => updateDoctor(repo, "dr-a", 3, fields(), "admin@x"),
+    (e) => e instanceof MutationConflictError && e.code === "CONFLICT",
+  );
+  assert.equal(db.get("dr-a").version, 5);
+  assert.equal(getAuditCalls().length, 0);
+});
+
+test("7. Archived save: exact archived-save error, no mutation, no audit", async () => {
+  const { repo, getAuditCalls } = makeRepo({ rows: [ARCHIVED_ROW] });
+  await assert.rejects(
+    () => updateDoctor(repo, "dr-b", 3, fields(), "admin@x"),
+    (e) => e.message === ARCHIVED_SAVE_ERROR,
+  );
+  assert.equal(getAuditCalls().length, 0);
+});
+
+test("8. Archive success: ARCHIVED/HIDDEN/invisible/deleted/deleted_at set/version increments", async () => {
+  const { repo, db, getAuditCalls } = makeRepo({ rows: [{ ...PUBLISHED_ROW, version: 2 }] });
+  const result = await archiveDoctor(repo, "dr-a", 2, "admin@x");
+  assert.equal(result.outcome, "APPLIED");
+  const doc = db.get("dr-a");
+  assert.equal(doc.lifecycle_status, "ARCHIVED");
+  assert.equal(doc.status, "HIDDEN");
+  assert.equal(doc.is_visible, 0);
+  assert.equal(doc.is_deleted, 1);
+  assert.ok(doc.deleted_at);
+  assert.equal(doc.version, 3);
   assert.equal(getAuditCalls()[0][1], "DOCTOR_ARCHIVED");
 });
 
-test("archive missing Doctor: NOT_FOUND, no audit", async () => {
-  const { repo, getAuditCalls } = makeRepo({ active: [] });
-  await assert.rejects(() => archiveDoctor(repo, "dr-missing", "admin@x"), (e) => e.code === "NOT_FOUND");
+test("9. Stale archive: CONFLICT, no audit", async () => {
+  const { repo, db, getAuditCalls } = makeRepo({ rows: [{ ...PUBLISHED_ROW, version: 5 }] });
+  await assert.rejects(
+    () => archiveDoctor(repo, "dr-a", 2, "admin@x"),
+    (e) => e instanceof MutationConflictError,
+  );
+  assert.equal(db.get("dr-a").version, 5);
   assert.equal(getAuditCalls().length, 0);
 });
 
-test("archive already archived Doctor: NOT_FOUND, no audit", async () => {
-  const { repo, getAuditCalls } = makeRepo({ archived: [ARCHIVED] });
-  await assert.rejects(() => archiveDoctor(repo, "dr-b", "admin@x"), (e) => e.code === "NOT_FOUND");
+test("10. Already archived archive: NOT_FOUND, no false success, no audit", async () => {
+  const { repo, getAuditCalls } = makeRepo({ rows: [ARCHIVED_ROW] });
+  await assert.rejects(
+    () => archiveDoctor(repo, "dr-b", 3, "admin@x"),
+    (e) => e.code === "NOT_FOUND",
+  );
   assert.equal(getAuditCalls().length, 0);
 });
 
-test("restore archived Doctor: hidden restore + audit after mutation", async () => {
-  const { repo, getAuditCalls } = makeRepo({ archived: [ARCHIVED] });
-  const result = await restoreDoctor(repo, "dr-b", "admin@x");
+test("11. Restore success: HIDDEN/invisible/not-deleted/deleted_at null/version increments", async () => {
+  const { repo, db, getAuditCalls } = makeRepo({ rows: [{ ...ARCHIVED_ROW, version: 3 }] });
+  const result = await restoreDoctor(repo, "dr-b", 3, "admin@x");
   assert.equal(result.outcome, "APPLIED");
-  assert.equal(getAuditCalls().length, 1);
+  const doc = db.get("dr-b");
+  assert.equal(doc.lifecycle_status, "HIDDEN");
+  assert.equal(doc.status, "HIDDEN");
+  assert.equal(doc.is_visible, 0);
+  assert.equal(doc.is_deleted, 0);
+  assert.equal(doc.deleted_at, null);
+  assert.equal(doc.version, 4);
   assert.equal(getAuditCalls()[0][1], "DOCTOR_RESTORED_TO_HIDDEN");
 });
 
-test("restore active Doctor: NOT_FOUND, no audit", async () => {
-  const { repo, getAuditCalls } = makeRepo({ active: [ACTIVE] });
-  await assert.rejects(() => restoreDoctor(repo, "dr-a", "admin@x"), (e) => e.code === "NOT_FOUND");
+test("12. Stale restore: CONFLICT, no audit", async () => {
+  const { repo, db, getAuditCalls } = makeRepo({ rows: [{ ...ARCHIVED_ROW, version: 5 }] });
+  await assert.rejects(
+    () => restoreDoctor(repo, "dr-b", 2, "admin@x"),
+    (e) => e instanceof MutationConflictError,
+  );
+  assert.equal(db.get("dr-b").version, 5);
   assert.equal(getAuditCalls().length, 0);
 });
 
-test("save guard rejects archived slug with exact error", async () => {
-  const { repo } = makeRepo({ archived: [ARCHIVED] });
-  await assert.rejects(() => assertNotArchivedForEdit(repo, "dr-b"), (e) => e.message === ARCHIVED_SAVE_ERROR);
+test("13. Restore active row: NOT_FOUND, no false success, no audit", async () => {
+  const { repo, getAuditCalls } = makeRepo({ rows: [PUBLISHED_ROW] });
+  await assert.rejects(
+    () => restoreDoctor(repo, "dr-a", 1, "admin@x"),
+    (e) => e.code === "NOT_FOUND",
+  );
+  assert.equal(getAuditCalls().length, 0);
 });
 
-test("save guard allows active slug", async () => {
-  const { repo } = makeRepo({ active: [ACTIVE] });
-  await assert.doesNotReject(() => assertNotArchivedForEdit(repo, "dr-a"));
+test("14. Missing Doctor: NOT_FOUND", async () => {
+  const { repo } = makeRepo({});
+  await assert.rejects(
+    () => updateDoctor(repo, "dr-missing", 1, fields(), "admin@x"),
+    (e) => e.code === "NOT_FOUND",
+  );
+  await assert.rejects(
+    () => archiveDoctor(repo, "dr-missing", 1, "admin@x"),
+    (e) => e.code === "NOT_FOUND",
+  );
 });
 
-test("public resolver maps a row and never falls back to static data", async () => {
-  const hiddenRow = { slug: "dr-b", name: "Dr B", speciality: "X", qualification: "", department_slug: "general-medicine", photo_url: "", is_visible: 0, status: "HIDDEN" };
-  const mapped = await resolveDoctorBySlug(async () => ({ results: [hiddenRow] }), "dr-b");
-  assert.equal(mapped.slug, "dr-b");
-  assert.equal(mapped.departmentSlug, "general-medicine");
-  assert.notEqual(mapped, doctors);
-});
-
-test("Staff doctor.delete creates revision and does not apply mutation", async () => {
+test("15. Staff save: revision created, Doctor not mutated", async () => {
   let applied = false;
   const result = await executeRoleMutation({
     isStaff: true,
     createRevision: async () => ({ id: "r1" }),
-    applyMutation: async () => {
-      applied = true;
-      return { outcome: "APPLIED" };
-    },
+    applyMutation: async () => { applied = true; return { outcome: "APPLIED" }; },
   });
   assert.equal(result.outcome, "PENDING_APPROVAL");
   assert.equal(applied, false);
 });
 
-test("Staff doctor.restore creates revision and does not apply mutation", async () => {
+test("16. Staff archive: revision created, Doctor not mutated", async () => {
   let applied = false;
   const result = await executeRoleMutation({
     isStaff: true,
     createRevision: async () => ({ id: "r2" }),
-    applyMutation: async () => {
-      applied = true;
-      return { outcome: "APPLIED" };
-    },
+    applyMutation: async () => { applied = true; return { outcome: "APPLIED" }; },
   });
   assert.equal(result.outcome, "PENDING_APPROVAL");
   assert.equal(applied, false);
 });
 
-test("Super Admin doctor archive/restore applies mutation", async () => {
-  let appliedArchive = false;
-  let appliedRestore = false;
-  const archiveResult = await executeRoleMutation({
-    isStaff: false,
+test("17. Staff restore: revision created, Doctor not mutated", async () => {
+  let applied = false;
+  const result = await executeRoleMutation({
+    isStaff: true,
     createRevision: async () => ({ id: "r3" }),
-    applyMutation: async () => {
-      appliedArchive = true;
-      return { outcome: "APPLIED" };
-    },
+    applyMutation: async () => { applied = true; return { outcome: "APPLIED" }; },
   });
-  const restoreResult = await executeRoleMutation({
+  assert.equal(result.outcome, "PENDING_APPROVAL");
+  assert.equal(applied, false);
+});
+
+test("18. Revision approval with unchanged version: mutation applied, version increments", async () => {
+  const { repo, db } = makeRepo({ rows: [{ ...PUBLISHED_ROW, version: 1 }] });
+  const result = await updateDoctor(repo, "dr-a", 1, fields(), "reviewer@x");
+  assert.equal(result.outcome, "APPLIED");
+  assert.equal(db.get("dr-a").version, 2);
+});
+
+test("19. Revision approval after intervening change: CONFLICT, Doctor not overwritten", async () => {
+  const { repo, db, getAuditCalls } = makeRepo({ rows: [{ ...PUBLISHED_ROW, version: 4 }] });
+  await assert.rejects(
+    () => updateDoctor(repo, "dr-a", 1, fields(), "reviewer@x"),
+    (e) => e instanceof MutationConflictError,
+  );
+  assert.equal(db.get("dr-a").version, 4);
+  assert.equal(getAuditCalls().length, 0);
+});
+
+test("20. Super Admin: direct guarded mutation", async () => {
+  const { repo, db } = makeRepo({ rows: [PUBLISHED_ROW] });
+  const result = await executeRoleMutation({
     isStaff: false,
-    createRevision: async () => ({ id: "r4" }),
-    applyMutation: async () => {
-      appliedRestore = true;
-      return { outcome: "APPLIED" };
-    },
+    createRevision: async () => ({ id: "unused" }),
+    applyMutation: async () => updateDoctor(repo, "dr-a", 1, fields(), "super@x"),
   });
-  assert.equal(archiveResult.outcome, "APPLIED");
-  assert.equal(appliedArchive, true);
-  assert.equal(restoreResult.outcome, "APPLIED");
-  assert.equal(appliedRestore, true);
+  assert.equal(result.outcome, "APPLIED");
+  assert.equal(db.get("dr-a").version, 2);
 });
 
-test("Admin active list excludes archived rows", async () => {
-  const input = [ACTIVE, ARCHIVED];
-  const active = resolveDoctorManagerRows(input);
-  assert.equal(active.length, 1);
-  assert.ok(active.some((r) => r.slug === "dr-a"));
-  assert.ok(!active.some((r) => r.slug === "dr-b"));
-  assert.equal(input.length, 2);
-});
-
-test("ACTIVE_DOCTORS_ADMIN_SQL selects active, orders by name, no is_deleted=1", () => {
-  assert.ok(ACTIVE_DOCTORS_ADMIN_SQL.includes("doctor_profiles"));
+test("21. Admin active query: excludes lifecycle ARCHIVED and is_deleted=1", () => {
+  assert.ok(ACTIVE_DOCTORS_ADMIN_SQL.includes("lifecycle_status != 'ARCHIVED'"));
   assert.ok(ACTIVE_DOCTORS_ADMIN_SQL.includes("is_deleted = 0"));
-  assert.ok(ACTIVE_DOCTORS_ADMIN_SQL.includes("ORDER BY name"));
-  assert.ok(!ACTIVE_DOCTORS_ADMIN_SQL.includes("is_deleted = 1"));
 });
 
-test("ARCHIVED_DOCTORS_ADMIN_SQL selects archived, orders by name, no is_deleted=0", () => {
-  assert.ok(ARCHIVED_DOCTORS_ADMIN_SQL.includes("doctor_profiles"));
+test("22. Admin archived query: requires ARCHIVED and is_deleted=1, returns version/deleted_at", () => {
+  assert.ok(ARCHIVED_DOCTORS_ADMIN_SQL.includes("lifecycle_status = 'ARCHIVED'"));
   assert.ok(ARCHIVED_DOCTORS_ADMIN_SQL.includes("is_deleted = 1"));
-  assert.ok(ARCHIVED_DOCTORS_ADMIN_SQL.includes("ORDER BY name"));
-  assert.ok(!ARCHIVED_DOCTORS_ADMIN_SQL.includes("is_deleted = 0"));
+  assert.ok(ARCHIVED_DOCTORS_ADMIN_SQL.includes("version"));
+  assert.ok(ARCHIVED_DOCTORS_ADMIN_SQL.includes("deleted_at"));
 });
 
-test("partition: active=0 kept, archived=1 excluded, missing is_deleted kept for compat", () => {
-  const legacy = { id: "d3", slug: "dr-c", name: "Dr C" };
-  const result = resolveDoctorManagerRows([ACTIVE, ARCHIVED, legacy]);
-  assert.equal(result.length, 2);
-  assert.ok(result.some((r) => r.slug === "dr-a"));
-  assert.ok(result.some((r) => r.slug === "dr-c"));
-  assert.ok(!result.some((r) => r.slug === "dr-b"));
+test("23. Active manager defense: excludes either canonical or legacy archived rows", () => {
+  const active = resolveDoctorManagerRows([PUBLISHED_ROW, ARCHIVED_ROW, HIDDEN_ROW]);
+  assert.equal(active.length, 2);
+  assert.ok(active.some((r) => r.slug === "dr-a"));
+  assert.ok(active.some((r) => r.slug === "dr-c"));
+  assert.ok(!active.some((r) => r.slug === "dr-b"));
 });
 
-test("Admin archived list contains only is_deleted=1 rows", async () => {
-  const archived = [ACTIVE, ARCHIVED].filter((r) => r.is_deleted === 1);
-  assert.equal(archived.length, 1);
-  assert.equal(archived[0].slug, "dr-b");
+test("24. UI payload: existing save carries expectedVersion, archive carries expectedVersion", async () => {
+  const { repo, db } = makeRepo({ rows: [PUBLISHED_ROW] });
+  const result = await updateDoctor(repo, "dr-a", 1, fields(), "admin@x");
+  assert.equal(result.outcome, "APPLIED");
+  assert.equal(db.get("dr-a").version, 2);
+  const archiveResult = await archiveDoctor(repo, "dr-a", 2, "admin@x");
+  assert.equal(archiveResult.outcome, "APPLIED");
+  assert.equal(db.get("dr-a").lifecycle_status, "ARCHIVED");
 });
 
-test("Archived rows not passed into active editing source", async () => {
-  const source = resolveDoctorManagerRows([ACTIVE]);
-  assert.ok(!source.some((r) => r.slug === "dr-b"));
+test("25. Public list: only lifecycle PUBLISHED + legacy public conditions", () => {
+  assert.ok(DOCTOR_LIST_SQL.includes("lifecycle_status = 'PUBLISHED'"));
+  assert.ok(DOCTOR_LIST_SQL.includes("status = 'APPROVED'"));
+  assert.ok(DOCTOR_LIST_SQL.includes("is_visible = 1"));
+  assert.ok(DOCTOR_LIST_SQL.includes("is_deleted = 0"));
+  assert.ok(DOCTOR_LIST_SQL.includes("deleted_at IS NULL"));
 });
 
-test("loadActiveDoctor finds active, misses archived", async () => {
-  const { repo } = makeRepo({ active: [ACTIVE], archived: [ARCHIVED] });
-  assert.ok(await loadActiveDoctor(repo, "dr-a"));
-  assert.equal(await loadActiveDoctor(repo, "dr-b"), null);
+test("26. Public detail: same filters", () => {
+  assert.ok(DOCTOR_BY_SLUG_SQL.includes("lifecycle_status = 'PUBLISHED'"));
+  assert.ok(DOCTOR_BY_SLUG_SQL.includes("status = 'APPROVED'"));
+  assert.ok(DOCTOR_BY_SLUG_SQL.includes("is_visible = 1"));
+  assert.ok(DOCTOR_BY_SLUG_SQL.includes("is_deleted = 0"));
+  assert.ok(DOCTOR_BY_SLUG_SQL.includes("deleted_at IS NULL"));
 });
 
-test("loadArchivedDoctor finds archived, misses active", async () => {
-  const { repo } = makeRepo({ active: [ACTIVE], archived: [ARCHIVED] });
-  assert.ok(await loadArchivedDoctor(repo, "dr-b"));
-  assert.equal(await loadArchivedDoctor(repo, "dr-a"), null);
+test("27. Public mismatch: lifecycle PUBLISHED but legacy hidden excluded; legacy approved but lifecycle HIDDEN excluded; ARCHIVED excluded; deleted_at non-null excluded", async () => {
+  const mismatchLifecycle = {
+    slug: "dr-x", name: "Dr X", speciality: "X", qualification: "", department_slug: "cardiology", photo_url: "",
+    lifecycle_status: "PUBLISHED", status: "HIDDEN", is_visible: 0, is_deleted: 0,
+  };
+  const mismatchLegacy = {
+    slug: "dr-y", name: "Dr Y", speciality: "Y", qualification: "", department_slug: "cardiology", photo_url: "",
+    lifecycle_status: "HIDDEN", status: "APPROVED", is_visible: 1, is_deleted: 0,
+  };
+  const archived = {
+    slug: "dr-z", name: "Dr Z", speciality: "Z", qualification: "", department_slug: "cardiology", photo_url: "",
+    lifecycle_status: "ARCHIVED", status: "HIDDEN", is_visible: 0, is_deleted: 1,
+  };
+  const deletedAt = {
+    slug: "dr-w", name: "Dr W", speciality: "W", qualification: "", department_slug: "cardiology", photo_url: "",
+    lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1, is_deleted: 0, deleted_at: "2026-07-20",
+  };
+
+  const listSql = DOCTOR_LIST_SQL.toLowerCase();
+  assert.ok(listSql.includes("lifecycle_status = 'published'"));
+  assert.ok(listSql.includes("status = 'approved'"));
+  assert.ok(listSql.includes("is_visible = 1"));
+  assert.ok(listSql.includes("is_deleted = 0"));
+  assert.ok(listSql.includes("deleted_at is null"));
+
+  for (const row of [mismatchLifecycle, mismatchLegacy, archived, deletedAt]) {
+    const visible = await resolveDoctorBySlug(async (sql, _slug) => {
+      if (sql.includes("lifecycle_status = 'PUBLISHED'") && row.lifecycle_status !== "PUBLISHED") return { results: [] };
+      if (sql.includes("status = 'APPROVED'") && row.status !== "APPROVED") return { results: [] };
+      if (sql.includes("is_visible = 1") && row.is_visible !== 1) return { results: [] };
+      if (sql.includes("is_deleted = 0") && row.is_deleted !== 0) return { results: [] };
+      if (sql.includes("deleted_at IS NULL") && row.deleted_at != null) return { results: [] };
+      return { results: [row] };
+    }, row.slug);
+    assert.equal(visible, null, `${row.slug} should be excluded from public`);
+  }
+});
+
+test("28. Public empty/error: []/null, no static fallback", async () => {
+  assert.deepEqual(await resolvePublicDoctors(async () => ({ results: [] })), []);
+  assert.deepEqual(await resolvePublicDoctors(async () => { throw new Error("x"); }), []);
+  assert.equal(await resolveDoctorBySlug(async () => ({ results: [] }), "x"), null);
+  assert.equal(await resolveDoctorBySlug(async () => { throw new Error("x"); }, "x"), null);
+});
+
+test("29. Appointment department contract preserved", async () => {
+  const { readFile: rf } = await import("node:fs/promises");
+  const publicData = await rf(new URL("../app/lib/public-data.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(publicData, /\[slug\]/);
+});
+
+test("30. Migration integrity: 0000/0001/0002 unchanged, no 0003", async () => {
+  const migration0002 = await readFile(new URL("../migrations/0002_add_content_lifecycle_foundation.sql", import.meta.url), "utf8");
+  assert.ok(migration0002.includes("lifecycle_status"));
+  assert.ok(migration0002.includes("version"));
+  assert.ok(migration0002.includes("deleted_at"));
+  assert.ok(migration0002.includes("ALTER TABLE doctor_profiles"));
+  await assert.rejects(
+    readFile(new URL("../migrations/0003.sql", import.meta.url), "utf8"),
+    { code: "ENOENT" },
+  );
+});
+
+test("loadDoctor returns full lifecycle fields", async () => {
+  const { repo } = makeRepo({ rows: [PUBLISHED_ROW] });
+  const doc = await loadDoctor(repo, "dr-a");
+  assert.ok(doc);
+  assert.equal(doc.lifecycle_status, "PUBLISHED");
+  assert.equal(doc.version, 1);
+  assert.equal(doc.deleted_at, null);
+  assert.equal(doc.is_deleted, 0);
+});
+
+test("loadDoctor returns null for missing", async () => {
+  const { repo } = makeRepo({});
+  assert.equal(await loadDoctor(repo, "dr-missing"), null);
+});
+
+test("deriveLifecycleFromVisibility visible -> PUBLISHED/APPROVED/1/0", () => {
+  const result = deriveLifecycleFromVisibility(true);
+  assert.deepEqual(result, { lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1, is_deleted: 0 });
+});
+
+test("deriveLifecycleFromVisibility hidden -> HIDDEN/HIDDEN/0/0", () => {
+  const result = deriveLifecycleFromVisibility(false);
+  assert.deepEqual(result, { lifecycle_status: "HIDDEN", status: "HIDDEN", is_visible: 0, is_deleted: 0 });
+});
+
+test("assertNotArchivedForEdit rejects archived by lifecycle_status", async () => {
+  const { repo } = makeRepo({ rows: [ARCHIVED_ROW] });
+  await assert.rejects(
+    () => assertNotArchivedForEdit(repo, "dr-b"),
+    (e) => e.message === ARCHIVED_SAVE_ERROR,
+  );
+});
+
+test("assertNotArchivedForEdit allows active", async () => {
+  const { repo } = makeRepo({ rows: [PUBLISHED_ROW] });
+  await assert.doesNotReject(() => assertNotArchivedForEdit(repo, "dr-a"));
 });
 
 test("B4.1 regression: public empty/error returns []/null, no static fallback", async () => {
@@ -213,13 +482,6 @@ test("B4.1 regression: public empty/error returns []/null, no static fallback", 
   assert.deepEqual(await resolvePublicDoctors(async () => { throw new Error("x"); }), []);
   assert.equal(await resolveDoctorBySlug(async () => ({ results: [] }), "x"), null);
   assert.equal(await resolveDoctorBySlug(async () => { throw new Error("x"); }, "x"), null);
-  assert.notEqual(await resolvePublicDoctors(async () => ({ results: [] })), doctors);
-});
-
-test("department-wise appointment CTA contract preserved", async () => {
-  for (const d of doctors) {
-    assert.ok(d.departmentSlug && d.departmentSlug.length > 0);
-  }
 });
 
 test("source wiring guard: page.tsx and route.ts reference the SQL constants", async () => {

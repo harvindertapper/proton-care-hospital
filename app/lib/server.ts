@@ -9,7 +9,7 @@ import {
   type SuperAdminBootstrapResult,
 } from "./adminAuth";
 
-export { MutationNotFoundError, requireAppliedMutation } from "./mutation-result";
+export { MutationNotFoundError, MutationConflictError, requireAppliedMutation } from "./mutation-result";
 
 type D1Result<T = unknown> = { results?: T[]; success?: boolean };
 

@@ -13,10 +13,14 @@ import {
   hashPassword,
   nextRequestId,
 } from "@/app/lib/server";
-import { executeRoleMutation } from "@/app/lib/mutation-result";
+import { executeRoleMutation, MutationConflictError } from "@/app/lib/mutation-result";
 import {
   archiveDoctor,
   restoreDoctor,
+  loadDoctor,
+  createDoctor,
+  updateDoctor,
+  ARCHIVED_SAVE_ERROR,
   ACTIVE_DOCTORS_ADMIN_SQL,
   ARCHIVED_DOCTORS_ADMIN_SQL,
   type DoctorRepo,
@@ -175,44 +179,35 @@ async function applyDoctor(payload: Record<string, unknown>, actorEmail: string)
   const profileNote = clean(payload.profileNote, 1000);
   const isVisible = Number(payload.isVisible) === 0 ? 0 : 1;
   const blockedDates = clean(payload.blockedDates, 2000);
+  const expectedVersion = Number(payload.expectedVersion) || 0;
 
   if (!name || !slug || !speciality || !department) throw new Error("Invalid doctor profile payload.");
 
-  const existing = await query("SELECT id, is_deleted FROM doctor_profiles WHERE slug = ? LIMIT 1", slug);
-  if (existing.results?.length && Number(existing.results[0].is_deleted) === 1) {
-    throw new Error("Doctor profile is archived. Restore it before editing.");
+  const repo: DoctorRepo = { query, run, audit };
+  const current = await loadDoctor(repo, slug);
+
+  if (!current) {
+    if (expectedVersion > 0) {
+      throw new MutationConflictError("Doctor profile was changed by another session. Refresh and try again.");
+    }
+    return createDoctor(repo, slug, {
+      name, speciality, qualification, departmentSlug: department.slug,
+      photoUrl, profileNote, blockedDates, isVisible: isVisible === 1,
+    }, actorEmail);
   }
-  const result = await run(
-    `INSERT INTO doctor_profiles
-      (id, slug, name, speciality, qualification, department_slug, photo_url, profile_note, consent_status, status, is_visible, approved_by, blocked_dates, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED_SOURCE', 'APPROVED', ?, ?, ?, CURRENT_TIMESTAMP)
-      ON CONFLICT(slug) DO UPDATE SET
-        name = excluded.name,
-        speciality = excluded.speciality,
-        qualification = excluded.qualification,
-        department_slug = excluded.department_slug,
-        photo_url = excluded.photo_url,
-        profile_note = excluded.profile_note,
-        status = 'APPROVED',
-        is_visible = excluded.is_visible,
-        approved_by = excluded.approved_by,
-        blocked_dates = excluded.blocked_dates,
-        updated_at = CURRENT_TIMESTAMP`,
-    `doctor-${slug}`,
-    slug,
-    name,
-    speciality,
-    qualification,
-    department.slug,
-    photoUrl,
-    profileNote,
-    isVisible,
-    actorEmail,
-    blockedDates,
-  );
-  requireAppliedMutation(result, Boolean(existing.results?.length) || Number(result.meta?.changes || 0) > 0, "Doctor profile");
-  await audit(actorEmail, "DOCTOR_APPROVED", "DoctorProfile", slug, name);
-  return { outcome: "APPLIED" as const };
+
+  if (current.is_deleted === 1 || current.lifecycle_status === "ARCHIVED") {
+    throw new Error(ARCHIVED_SAVE_ERROR);
+  }
+
+  if (expectedVersion < 1) {
+    throw new Error("expectedVersion is required for existing Doctor profiles.");
+  }
+
+  return updateDoctor(repo, slug, expectedVersion, {
+    name, speciality, qualification, departmentSlug: department.slug,
+    photoUrl, profileNote, blockedDates, isVisible: isVisible === 1,
+  }, actorEmail);
 }
 
 async function applyBlog(payload: Record<string, unknown>, actorEmail: string) {
@@ -735,6 +730,9 @@ export async function POST(request: Request) {
     if (error instanceof MutationNotFoundError) {
       return json({ success: false, outcome: "NOT_FOUND", error: msg }, { status: 404 });
     }
+    if (error instanceof MutationConflictError) {
+      return json({ success: false, outcome: "CONFLICT", error: error.message }, { status: 409 });
+    }
     return json(
       {
         success: false,
@@ -775,6 +773,10 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (typeof obj.youtubeUrl !== "string" || !obj.youtubeUrl.trim()) return { ok: false, error: "YouTube URL is required." };
   } else if (action === "doctor.restore") {
     if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Doctor slug is required." };
+    if (typeof obj.expectedVersion !== "number" || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion is required." };
+  } else if (action === "doctor.delete") {
+    if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Doctor slug is required." };
+    if (typeof obj.expectedVersion !== "number" || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion is required." };
   }
   return { ok: true };
 }
@@ -852,16 +854,20 @@ async function applyDeleteClosure(payload: Record<string, unknown>, actorEmail: 
 
 async function applyDeleteDoctor(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 120);
+  const expectedVersion = Number(payload.expectedVersion) || 0;
   if (!slug) throw new Error("Doctor slug is required.");
+  if (expectedVersion < 1) throw new Error("expectedVersion is required for archive.");
   const repo: DoctorRepo = { query, run, audit };
-  return archiveDoctor(repo, slug, actorEmail);
+  return archiveDoctor(repo, slug, expectedVersion, actorEmail);
 }
 
 async function applyRestoreDoctor(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 120);
+  const expectedVersion = Number(payload.expectedVersion) || 0;
   if (!slug) throw new Error("Doctor slug is required.");
+  if (expectedVersion < 1) throw new Error("expectedVersion is required for restore.");
   const repo: DoctorRepo = { query, run, audit };
-  return restoreDoctor(repo, slug, actorEmail);
+  return restoreDoctor(repo, slug, expectedVersion, actorEmail);
 }
 
 async function applyDeleteBlog(payload: Record<string, unknown>, actorEmail: string) {

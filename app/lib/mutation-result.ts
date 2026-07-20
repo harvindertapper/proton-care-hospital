@@ -14,6 +14,15 @@ export class MutationNotFoundError extends Error {
   }
 }
 
+export class MutationConflictError extends Error {
+  readonly code = "CONFLICT";
+
+  constructor(message = "Doctor profile was changed by another session. Refresh and try again.") {
+    super(message);
+    this.name = "MutationConflictError";
+  }
+}
+
 export function requireAppliedMutation(
   result: D1MutationResult,
   entityExists: boolean,

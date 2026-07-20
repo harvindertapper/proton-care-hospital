@@ -6,10 +6,10 @@ export type DoctorQuery = (
 ) => Promise<{ results?: Record<string, unknown>[] }>;
 
 export const DOCTOR_LIST_SQL =
-  "SELECT slug, name, speciality, qualification, department_slug, photo_url FROM doctor_profiles WHERE status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 ORDER BY name";
+  "SELECT slug, name, speciality, qualification, department_slug, photo_url FROM doctor_profiles WHERE lifecycle_status = 'PUBLISHED' AND status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 AND deleted_at IS NULL ORDER BY name";
 
 export const DOCTOR_BY_SLUG_SQL =
-  "SELECT slug, name, speciality, qualification, department_slug, photo_url FROM doctor_profiles WHERE slug = ? AND status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 LIMIT 1";
+  "SELECT slug, name, speciality, qualification, department_slug, photo_url FROM doctor_profiles WHERE slug = ? AND lifecycle_status = 'PUBLISHED' AND status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 AND deleted_at IS NULL LIMIT 1";
 
 export function dbDoctorToPublic(row: Record<string, unknown>): Doctor {
   return {

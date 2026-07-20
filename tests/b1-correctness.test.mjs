@@ -9,7 +9,7 @@ import {
   requireAppliedMutation,
 } from "../app/lib/mutation-result.ts";
 
-const [baseline, slotMigration, publicData, adminRoute, server, mediaRoute, consoleSource] =
+const [baseline, slotMigration, publicData, adminRoute, server, mediaRoute, consoleSource, doctorAdminSource] =
   await Promise.all([
     readFile(new URL("../migrations/0000_baseline.sql", import.meta.url), "utf8"),
     readFile(new URL("../migrations/0001_enforce_department_slot_exclusivity.sql", import.meta.url), "utf8"),
@@ -18,6 +18,7 @@ const [baseline, slotMigration, publicData, adminRoute, server, mediaRoute, cons
     readFile(new URL("../app/lib/server.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/admin/media/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/components/AdminConsole.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/doctor-admin.ts", import.meta.url), "utf8"),
   ]);
 
 test("structural guard: immutable baseline and incremental slot indexes remain separated", () => {
@@ -36,11 +37,12 @@ test("detail-page D1 queries bind slug as a scalar", () => {
 });
 
 test("structural guard: high-risk admin mutations require affected-row proof before audit", () => {
-  assert.match(server, /export \{ MutationNotFoundError, requireAppliedMutation \}/);
+  assert.match(server, /export \{ MutationNotFoundError, MutationConflictError, requireAppliedMutation \}/);
   assert.match(adminRoute, /requireAppliedMutation/);
-  for (const entity of ["Doctor profile", "Blog post", "Career job", "Patient video", "Appointment"]) {
+  for (const entity of ["Blog post", "Career job", "Patient video", "Appointment"]) {
     assert.match(adminRoute, new RegExp(`requireAppliedMutation\\([^\\n]+${entity}`));
   }
+  assert.match(doctorAdminSource, /requireAppliedMutation\([^\n]+Doctor profile/);
   assert.match(mediaRoute, /executeMediaDeletion/);
   assert.match(adminRoute, /outcome: "NOT_FOUND"/);
 });
@@ -332,7 +334,7 @@ test("structural guard: affected-row proof precedes success audits in scoped mut
     "applyDeleteVideo",
   ];
 
-  const delegated = new Set(["applyDeleteDoctor", "applyRestoreDoctor"]);
+  const delegated = new Set(["applyDeleteDoctor", "applyRestoreDoctor", "applyDoctor"]);
   for (const functionName of functionNames) {
     const start = adminRoute.indexOf(`async function ${functionName}`);
     const next = adminRoute.indexOf("\nasync function ", start + 1);
@@ -342,8 +344,9 @@ test("structural guard: affected-row proof precedes success audits in scoped mut
     assert.ok(start >= 0, `${functionName} must exist`);
     if (delegated.has(functionName)) {
       // These delegate the affected-row proof + audit to doctor-admin helpers.
-      assert.ok(block.indexOf("archiveDoctor") >= 0 || block.indexOf("restoreDoctor") >= 0,
-        `${functionName} must delegate to the archive/restore helper`);
+      assert.ok(block.indexOf("archiveDoctor") >= 0 || block.indexOf("restoreDoctor") >= 0 ||
+        block.indexOf("createDoctor") >= 0 || block.indexOf("updateDoctor") >= 0,
+        `${functionName} must delegate to lifecycle-aware helpers`);
       continue;
     }
     assert.ok(proof >= 0, `${functionName} must verify affected rows`);
@@ -358,4 +361,22 @@ test("structural guard: affected-row proof precedes success audits in scoped mut
   assert.ok(archiveStart >= 0, "archiveDoctor must exist");
   assert.ok(archiveBlock.indexOf("requireAppliedMutation") < archiveBlock.indexOf("DOCTOR_ARCHIVED"),
     "archiveDoctor must verify affected rows before auditing");
+
+  const restoreStart = doctorAdmin.indexOf("async function restoreDoctor");
+  const restoreBlock = doctorAdmin.slice(restoreStart);
+  assert.ok(restoreStart >= 0, "restoreDoctor must exist");
+  assert.ok(restoreBlock.indexOf("requireAppliedMutation") < restoreBlock.indexOf("DOCTOR_RESTORED_TO_HIDDEN"),
+    "restoreDoctor must verify affected rows before auditing");
+
+  const createStart = doctorAdmin.indexOf("async function createDoctor");
+  const createBlock = doctorAdmin.slice(createStart);
+  assert.ok(createStart >= 0, "createDoctor must exist");
+  assert.ok(createBlock.indexOf("requireAppliedMutation") < createBlock.indexOf("DOCTOR_APPROVED"),
+    "createDoctor must verify affected rows before auditing");
+
+  const updateStart = doctorAdmin.indexOf("async function updateDoctor");
+  const updateBlock = doctorAdmin.slice(updateStart);
+  assert.ok(updateStart >= 0, "updateDoctor must exist");
+  assert.ok(updateBlock.indexOf("requireAppliedMutation") < updateBlock.indexOf("DOCTOR_APPROVED"),
+    "updateDoctor must verify affected rows before auditing");
 });
