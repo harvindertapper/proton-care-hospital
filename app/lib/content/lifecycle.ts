@@ -32,7 +32,7 @@ export function canTransition(
   return ALLOWED_TRANSITIONS[from].has(to);
 }
 
-export function assertValidTransition(
+export function assertValidLifecycleTransition(
   from: ContentLifecycleStatus,
   to: ContentLifecycleStatus,
 ): void {

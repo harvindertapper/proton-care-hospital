@@ -75,11 +75,16 @@ const realMigrationsDir = path.join(rootDir, "migrations");
 const realServerTsPath = path.join(rootDir, "app", "lib", "server.ts");
 
 const incrementalMigrationName = "0001_enforce_department_slot_exclusivity.sql";
+const lifecycleMigrationName = "0002_add_content_lifecycle_foundation.sql";
 
 function writeIncrementalMigration(directory) {
   fs.writeFileSync(
     path.join(directory, incrementalMigrationName),
     fs.readFileSync(path.join(realMigrationsDir, incrementalMigrationName), "utf8"),
+  );
+  fs.writeFileSync(
+    path.join(directory, lifecycleMigrationName),
+    fs.readFileSync(path.join(realMigrationsDir, lifecycleMigrationName), "utf8"),
   );
 }
 test("0000_baseline.sql exists and is non-empty", () => {
@@ -205,7 +210,7 @@ test("Unsorted filesystem input is handled deterministically by validator", () =
 
     const res = validateMigrationFiles(tmpDir);
     assert.equal(res.valid, true, `Unsorted file handling failed: ${res.errors?.join(", ")}`);
-    assert.equal(res.filesCount, 2);
+    assert.equal(res.filesCount, 3);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

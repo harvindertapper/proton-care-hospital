@@ -8,7 +8,7 @@ export class ContentVersionConflictError extends Error {
 
   constructor(recordId: string, expectedVersion: number, actualVersion: number) {
     super(
-      `Content version conflict id=${recordId}: expected version ${expectedVersion} but found ${actualVersion}`,
+      `Content version conflict: expected version ${expectedVersion} but found ${actualVersion}`,
     );
     this.name = "ContentVersionConflictError";
     this.recordId = recordId;

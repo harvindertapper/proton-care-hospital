@@ -5,8 +5,11 @@ import {
   ContentMutationFailedError,
   type ContentMutationFailureStage,
 } from "./errors.ts";
-import { assertValidTransition, type ContentLifecycleStatus } from "./lifecycle.ts";
-import { isContentLifecycleTable } from "./schema-capabilities.ts";
+import {
+  assertValidLifecycleTransition,
+  type ContentLifecycleStatus,
+} from "./lifecycle.ts";
+import { isContentLifecycleDomain } from "./schema-capabilities.ts";
 import {
   type ContentCacheInvalidator,
   contentCacheTag,
@@ -16,6 +19,11 @@ import {
 export interface ContentRowSnapshot {
   version: number;
   lifecycleStatus: ContentLifecycleStatus;
+  deletedAt: string | null;
+}
+
+function isDeletedSnapshot(snapshot: ContentRowSnapshot): boolean {
+  return snapshot.deletedAt !== null || snapshot.lifecycleStatus === "ARCHIVED";
 }
 
 // The backend is the ONLY place that knows table names, SQL, and bindings.
@@ -68,17 +76,17 @@ function fail(stage: ContentMutationFailureStage, appliedVersion: number, messag
 export async function executeOptimisticContentMutation(
   ctx: OptimisticContentMutationContext,
 ): Promise<OptimisticContentMutationResult> {
-  if (!isContentLifecycleTable(ctx.domain)) {
-    throw new Error(`Domain ${ctx.domain} is not a recognised content lifecycle table`);
+  if (!isContentLifecycleDomain(ctx.domain)) {
+    throw new Error(`Domain ${ctx.domain} is not a recognised content lifecycle domain`);
   }
   if (!Number.isInteger(ctx.expectedVersion) || ctx.expectedVersion < 1) {
     throw new Error(`expectedVersion must be a positive integer, received ${ctx.expectedVersion}`);
   }
 
-  // 1) Load current snapshot. Missing OR logically-deleted rows are not found.
+  // 1) Load current snapshot. Missing or logically-deleted rows are not found.
   const current = await ctx.backend.loadRow(ctx.id);
-  if (!current) {
-    throw new MutationNotFoundError(`Content record ${ctx.id} in ${ctx.domain}`);
+  if (!current || isDeletedSnapshot(current)) {
+    throw new MutationNotFoundError("content record");
   }
 
   // 2) Initial version mismatch => CONFLICT (lost optimistic-lock race upfront).
@@ -88,7 +96,7 @@ export async function executeOptimisticContentMutation(
 
   // 3) Validate the lifecycle transition before touching storage.
   try {
-    assertValidTransition(current.lifecycleStatus, ctx.targetLifecycle);
+    assertValidLifecycleTransition(current.lifecycleStatus, ctx.targetLifecycle);
   } catch (error) {
     if (error instanceof InvalidLifecycleTransitionError) throw error;
     fail("MUTATION", current.version, "lifecycle transition validation threw", error);
@@ -110,9 +118,13 @@ export async function executeOptimisticContentMutation(
   }
 
   // 5) A mutation is only proved when meta.changes >= 1. A zero-change result
-  //    means the row moved under us: post-zero-change version mismatch => CONFLICT.
+  //    means the row moved under us, so re-load to classify precisely.
   if (changes < 1) {
-    throw new ContentVersionConflictError(ctx.id, ctx.expectedVersion, current.version);
+    const reloaded = await ctx.backend.loadRow(ctx.id);
+    if (!reloaded || isDeletedSnapshot(reloaded)) {
+      throw new MutationNotFoundError("content record");
+    }
+    throw new ContentVersionConflictError(ctx.id, ctx.expectedVersion, reloaded.version);
   }
 
   // 6) Side-effect order: MUTATION -> AUDIT -> CACHE.

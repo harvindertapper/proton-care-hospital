@@ -71,6 +71,22 @@ function findAlterAddColumn(stmt, table, column) {
   return addColRegex.test(stmt);
 }
 
+// Map an unauthorized statement to a human-readable kind for validator errors.
+function classifyUnauthorized(stmt) {
+  if (/^\s*UPDATE\b/i.test(stmt)) return "UPDATE";
+  if (/^\s*CREATE\s+TABLE\b/i.test(stmt)) return "CREATE TABLE";
+  if (/^\s*CREATE\s+INDEX\b/i.test(stmt)) return "CREATE INDEX";
+  if (/^\s*INSERT\b/i.test(stmt)) return "INSERT";
+  if (/^\s*REPLACE\b/i.test(stmt)) return "REPLACE";
+  if (/^\s*DELETE\b/i.test(stmt)) return "DELETE";
+  if (/^\s*DROP\b/i.test(stmt)) return "DROP";
+  if (/^\s*TRUNCATE\b/i.test(stmt)) return "TRUNCATE";
+  if (/^\s*ALTER\b[\s\S]*\bRENAME\b/i.test(stmt)) return "RENAME";
+  if (/^\s*ALTER\b/i.test(stmt)) return "ALTER";
+  if (/^\s*CREATE\b/i.test(stmt)) return "CREATE";
+  return "statement";
+}
+
 export function stripComments(sql) {
   return sql
     .replace(/--.*$/gm, "")
@@ -273,7 +289,9 @@ export function validateMigrationFiles(migrationsDir, serverTsPath = null) {
   }
 
   const lifecyclePath = path.join(migrationsDir, LIFECYCLE_FOUNDATION_MIGRATION);
-  if (fs.existsSync(lifecyclePath)) {
+  if (!fs.existsSync(lifecyclePath)) {
+    errors.push("Migration 0002 (content lifecycle foundation) is missing.");
+  } else {
     const lifecycleContent = fs.readFileSync(lifecyclePath, "utf8");
     const stripped = stripComments(lifecycleContent);
     const statements = parseSqlStatements(lifecycleContent);
@@ -290,14 +308,17 @@ export function validateMigrationFiles(migrationsDir, serverTsPath = null) {
       `lifecycle_status\\s+IN\\s*\\(\\s*${EXPECTED_ENUM.replace(/'/g, "\\'")}\\s*\\)`,
       "i",
     );
-    const renameRegex = /\bALTER\s+TABLE\s+[\s\S]*?\bRENAME\b/i;
 
-    let alterCount = 0;
+    // Classify every statement. Only approved ALTER ADD COLUMN and approved
+    // backfill UPDATE statements are permitted; everything else is unauthorized.
+    let approvedAlterCount = 0;
+    let approvedUpdateCount = 0;
     const seenAlterColumns = new Set();
+    const seenBackfillTables = new Set();
+
     for (const stmt of statements) {
       const alterMatch = stmt.match(/^ALTER\s+TABLE\s+(\S+)\s+ADD\s+COLUMN\s+(\S+)/i);
       if (alterMatch) {
-        alterCount += 1;
         const tableName = alterMatch[1].replace(/;$/, "");
         const columnName = alterMatch[2].replace(/;$/, "");
         const key = `${tableName}.${columnName}`;
@@ -307,18 +328,67 @@ export function validateMigrationFiles(migrationsDir, serverTsPath = null) {
         seenAlterColumns.add(key);
         if (!LIFECYCLE_FOUNDATION_TABLES.includes(tableName)) {
           errors.push(`Migration 0002 adds lifecycle columns to non-canonical table ${tableName}.`);
+          continue;
         }
         if (!LIFECYCLE_FOUNDATION_COLUMNS.includes(columnName)) {
           errors.push(`Migration 0002 adds an unexpected column ${key}; only lifecycle_status, version, deleted_at are permitted.`);
+          continue;
         }
+        approvedAlterCount += 1;
+        continue;
       }
+
+      const backfillMatch = stmt.match(/^UPDATE\s+(\S+)\s+SET/i);
+      if (backfillMatch) {
+        const tableName = backfillMatch[1].replace(/;$/, "");
+        if (!LIFECYCLE_FOUNDATION_TABLES.includes(tableName)) {
+          errors.push(`Migration 0002 backfill targets non-canonical table ${tableName}.`);
+          continue;
+        }
+        if (seenBackfillTables.has(tableName)) {
+          errors.push(`Migration 0002 has a duplicate backfill UPDATE for ${tableName}.`);
+          continue;
+        }
+        seenBackfillTables.add(tableName);
+        if (!/SET\s+lifecycle_status\s*=\s*CASE/i.test(stmt)) {
+          errors.push(`Migration 0002 backfill for ${tableName} must assign lifecycle_status via a CASE expression.`);
+          continue;
+        }
+        if (!/\bWHERE\s+lifecycle_status\s*=\s*'PUBLISHED'/i.test(stmt)) {
+          errors.push(`Migration 0002 backfill for ${tableName} must only target rows still at lifecycle_status = 'PUBLISHED'.`);
+          continue;
+        }
+        if (/\bSET\b[\s\S]*is_deleted[\s\S]*THEN\s*'ARCHIVED'/i.test(stmt) !== TABLES_WITH_IS_DELETED.has(tableName)) {
+          errors.push(
+            `Migration 0002 backfill for ${tableName} ${TABLES_WITH_IS_DELETED.has(tableName) ? "must" : "must not"} map is_deleted = 1 to ARCHIVED.`,
+          );
+          continue;
+        }
+        if (TABLES_WITH_IS_DELETED.has(tableName) && !/is_deleted\s*=\s*1\s+AND\s+deleted_at\s+IS\s+NULL\s+THEN\s+CURRENT_TIMESTAMP/i.test(stmt)) {
+          errors.push(`Migration 0002 backfill for ${tableName} must stamp deleted_at = CURRENT_TIMESTAMP when is_deleted = 1 and deleted_at IS NULL.`);
+          continue;
+        }
+        approvedUpdateCount += 1;
+        continue;
+      }
+
+      // Anything else is an unauthorized statement type.
+      const kind = classifyUnauthorized(stmt);
+      errors.push(`Migration 0002 contains an unauthorized ${kind} statement: ${stmt.slice(0, 80)}`);
     }
 
-    // Exactly 18 additive ALTERs: 6 tables x 3 columns. No more, no less.
-    if (alterCount !== LIFECYCLE_FOUNDATION_TABLES.length * LIFECYCLE_FOUNDATION_COLUMNS.length) {
-      errors.push(
-        `Migration 0002 must contain exactly ${LIFECYCLE_FOUNDATION_TABLES.length * LIFECYCLE_FOUNDATION_COLUMNS.length} additive ALTER ADD COLUMN statements, found ${alterCount}.`,
-      );
+    // Req 8: exactly 18 approved ALTERs and exactly six approved UPDATEs.
+    const expectedAlter = LIFECYCLE_FOUNDATION_TABLES.length * LIFECYCLE_FOUNDATION_COLUMNS.length;
+    if (approvedAlterCount !== expectedAlter) {
+      errors.push(`Migration 0002 must contain exactly ${expectedAlter} approved ALTER ADD COLUMN statements, found ${approvedAlterCount}.`);
+    }
+    if (approvedUpdateCount !== LIFECYCLE_FOUNDATION_TABLES.length) {
+      errors.push(`Migration 0002 must contain exactly ${LIFECYCLE_FOUNDATION_TABLES.length} approved backfill UPDATE statements, found ${approvedUpdateCount}.`);
+    }
+    for (const table of LIFECYCLE_FOUNDATION_TABLES) {
+      if (!seenBackfillTables.has(table)) {
+        errors.push(`Migration 0002 is missing a backfill UPDATE for ${table}.`);
+      }
     }
 
     for (const table of LIFECYCLE_FOUNDATION_TABLES) {
@@ -356,50 +426,6 @@ export function validateMigrationFiles(migrationsDir, serverTsPath = null) {
       );
       if (!addDeletedRegex.test(stripped)) {
         errors.push(`Migration 0002 deleted_at for ${table} must be a nullable TEXT column.`);
-      }
-    }
-
-    // Backfill UPDATEs: one per table, with the canonical WHERE guard, and the
-    // is_deleted -> ARCHIVED branch only where the legacy table has is_deleted.
-    for (const table of LIFECYCLE_FOUNDATION_TABLES) {
-      const backfill = statements.find((stmt) => new RegExp(`^UPDATE\\s+${table}\\s+SET`, "i").test(stmt));
-      if (!backfill) {
-        errors.push(`Migration 0002 is missing a backfill UPDATE for ${table}.`);
-        continue;
-      }
-      if (!/\bWHERE\s+lifecycle_status\s*=\s*'PUBLISHED'/i.test(backfill)) {
-        errors.push(`Migration 0002 backfill for ${table} must only target rows still at lifecycle_status = 'PUBLISHED'.`);
-      }
-      if (!/SET\s+lifecycle_status\s*=\s*CASE/i.test(backfill)) {
-        errors.push(`Migration 0002 backfill for ${table} must assign lifecycle_status via a CASE expression.`);
-      }
-      if (/\bSET\b[\s\S]*is_deleted[\s\S]*THEN\s*'ARCHIVED'/i.test(backfill) !== TABLES_WITH_IS_DELETED.has(table)) {
-        errors.push(
-          `Migration 0002 backfill for ${table} ${TABLES_WITH_IS_DELETED.has(table) ? "must" : "must not"} map is_deleted = 1 to ARCHIVED.`,
-        );
-      }
-      if (TABLES_WITH_IS_DELETED.has(table) && !/is_deleted\s*=\s*1\s+AND\s+deleted_at\s+IS\s+NULL\s+THEN\s+CURRENT_TIMESTAMP/i.test(backfill)) {
-        errors.push(`Migration 0002 backfill for ${table} must stamp deleted_at = CURRENT_TIMESTAMP when is_deleted = 1 and deleted_at IS NULL.`);
-      }
-    }
-
-    // Destructive / structural guards.
-    for (const stmt of statements) {
-      if (/\bALTER\s+TABLE\s+[\s\S]*?\bDROP\b/i.test(stmt)) {
-        errors.push("Migration 0002 must not drop any legacy columns.");
-      }
-      if (renameRegex.test(stmt)) {
-        errors.push("Migration 0002 must not rename any table or column.");
-      }
-      if (/\bDROP\s+TABLE\b/i.test(stmt)) {
-        errors.push("Migration 0002 must not drop any table.");
-      }
-      if (/\bTRUNCATE\b/i.test(stmt)) {
-        errors.push("Migration 0002 must not truncate any table.");
-      }
-      // Unconditional DELETE (no WHERE) is destructive; conditional DELETE is also disallowed here.
-      if (/\bDELETE\s+FROM\b/i.test(stmt)) {
-        errors.push("Migration 0002 must not DELETE from any table.");
       }
     }
 

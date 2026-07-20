@@ -13,7 +13,7 @@ import {
 import {
   mapLegacyLifecycle,
   canTransition,
-  assertValidTransition,
+  assertValidLifecycleTransition,
   CONTENT_LIFECYCLE_STATES,
 } from "../app/lib/content/lifecycle.ts";
 import {
@@ -22,8 +22,10 @@ import {
   ContentMutationFailedError,
 } from "../app/lib/content/errors.ts";
 import { MutationNotFoundError } from "../app/lib/mutation-result.ts";
-import { isContentLifecycleTable } from "../app/lib/content/schema-capabilities.ts";
 import {
+  isContentLifecycleTable,
+  CONTENT_LIFECYCLE_DOMAINS,
+  createLifecycleSchemaInspector,
   getLifecycleColumnReport,
   assertSchemaSupportsLifecycle,
 } from "../app/lib/content/schema-capabilities.ts";
@@ -31,6 +33,7 @@ import {
   contentCacheTag,
   contentCacheKeyTag,
   isValidCacheKey,
+  isContentCacheDomain,
 } from "../app/lib/content/cache.ts";
 import {
   executeOptimisticContentMutation,
@@ -40,6 +43,15 @@ const __filename = fileURLToPath(import.meta.url);
 const rootDir = path.resolve(path.dirname(__filename), "..");
 const migrationsDir = path.join(rootDir, "migrations");
 const serverTsPath = path.join(rootDir, "app", "lib", "server.ts");
+
+const LIFECYCLE_FOUNDATION_TABLES_FOR_TEST = [
+  "department_timings",
+  "doctor_profiles",
+  "blog_posts",
+  "career_jobs",
+  "patient_videos",
+  "media_assets",
+];
 
 function readMigration(name) {
   return fs.readFileSync(path.join(migrationsDir, name), "utf8");
@@ -70,6 +82,19 @@ test("migration 0002 passes the repository validator", () => {
   assert.equal(result.valid, true, `Validator errors: ${result.errors.join(", ")}`);
 });
 
+test("validator fails when 0002 is missing", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b2-missing-"));
+  try {
+    fs.writeFileSync(path.join(dir, "0000_baseline.sql"), readMigration("0000_baseline.sql"));
+    fs.writeFileSync(path.join(dir, "0001_enforce_department_slot_exclusivity.sql"), readMigration("0001_enforce_department_slot_exclusivity.sql"));
+    const res = validateMigrationFiles(dir, serverTsPath);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => /0002.*missing/i.test(e)));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("validator rejects a 0002 missing one lifecycle ALTER", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b2-neg-"));
   try {
@@ -88,6 +113,79 @@ test("validator rejects a 0002 missing one lifecycle ALTER", () => {
   }
 });
 
+test("validator rejects fewer than 18 approved ALTERs", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b2-neg-"));
+  try {
+    fs.writeFileSync(path.join(dir, "0000_baseline.sql"), readMigration("0000_baseline.sql"));
+    fs.writeFileSync(path.join(dir, "0001_enforce_department_slot_exclusivity.sql"), readMigration("0001_enforce_department_slot_exclusivity.sql"));
+    // Drop the entire media_assets block (3 ALTERs + 1 backfill UPDATE).
+    const broken = readMigration(LIFECYCLE_FOUNDATION_MIGRATION).replace(
+      /-- media_assets[\s\S]*?WHERE lifecycle_status = 'PUBLISHED';/,
+      "",
+    );
+    fs.writeFileSync(path.join(dir, LIFECYCLE_FOUNDATION_MIGRATION), broken);
+    const res = validateMigrationFiles(dir, serverTsPath);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => /exactly 18/.test(e)));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("validator rejects more than 18 approved ALTERs (extra column)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b2-neg-"));
+  try {
+    fs.writeFileSync(path.join(dir, "0000_baseline.sql"), readMigration("0000_baseline.sql"));
+    fs.writeFileSync(path.join(dir, "0001_enforce_department_slot_exclusivity.sql"), readMigration("0001_enforce_department_slot_exclusivity.sql"));
+    const broken = readMigration(LIFECYCLE_FOUNDATION_MIGRATION).replace(
+      "ALTER TABLE media_assets ADD COLUMN deleted_at TEXT;",
+      "ALTER TABLE media_assets ADD COLUMN deleted_at TEXT;\nALTER TABLE media_assets ADD COLUMN extra_col TEXT;",
+    );
+    fs.writeFileSync(path.join(dir, LIFECYCLE_FOUNDATION_MIGRATION), broken);
+    const res = validateMigrationFiles(dir, serverTsPath);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => /exactly 18/.test(e) || /unexpected column/.test(e)));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("validator rejects fewer than six approved backfill UPDATEs", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b2-neg-"));
+  try {
+    fs.writeFileSync(path.join(dir, "0000_baseline.sql"), readMigration("0000_baseline.sql"));
+    fs.writeFileSync(path.join(dir, "0001_enforce_department_slot_exclusivity.sql"), readMigration("0001_enforce_department_slot_exclusivity.sql"));
+    const broken = readMigration(LIFECYCLE_FOUNDATION_MIGRATION).replace(
+      /-- media_assets[\s\S]*?WHERE lifecycle_status = 'PUBLISHED';/,
+      "",
+    );
+    fs.writeFileSync(path.join(dir, LIFECYCLE_FOUNDATION_MIGRATION), broken);
+    const res = validateMigrationFiles(dir, serverTsPath);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => /exactly 6/.test(e) || /missing a backfill UPDATE/.test(e)));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("validator rejects more than six approved backfill UPDATEs (duplicate)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b2-neg-"));
+  try {
+    fs.writeFileSync(path.join(dir, "0000_baseline.sql"), readMigration("0000_baseline.sql"));
+    fs.writeFileSync(path.join(dir, "0001_enforce_department_slot_exclusivity.sql"), readMigration("0001_enforce_department_slot_exclusivity.sql"));
+    const broken = readMigration(LIFECYCLE_FOUNDATION_MIGRATION).replace(
+      /UPDATE media_assets[\s\S]*?WHERE lifecycle_status = 'PUBLISHED';/,
+      (m) => `${m}\nUPDATE media_assets SET lifecycle_status = CASE WHEN is_visible = 0 THEN 'HIDDEN' ELSE 'PUBLISHED' END WHERE lifecycle_status = 'PUBLISHED';`,
+    );
+    fs.writeFileSync(path.join(dir, LIFECYCLE_FOUNDATION_MIGRATION), broken);
+    const res = validateMigrationFiles(dir, serverTsPath);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => /exactly 6/.test(e) || /duplicate backfill UPDATE/.test(e)));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("validator rejects a 0002 that drops a legacy column", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b2-neg-"));
   try {
@@ -100,7 +198,115 @@ test("validator rejects a 0002 that drops a legacy column", () => {
     fs.writeFileSync(path.join(dir, LIFECYCLE_FOUNDATION_MIGRATION), broken);
     const res = validateMigrationFiles(dir, serverTsPath);
     assert.equal(res.valid, false);
-    assert.ok(res.errors.some((e) => /drop|DROP/i.test(e)));
+    assert.ok(res.errors.some((e) => /unauthorized/.test(e) || /DROP/.test(e)));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("validator rejects an unauthorized INSERT in 0002", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b2-neg-"));
+  try {
+    fs.writeFileSync(path.join(dir, "0000_baseline.sql"), readMigration("0000_baseline.sql"));
+    fs.writeFileSync(path.join(dir, "0001_enforce_department_slot_exclusivity.sql"), readMigration("0001_enforce_department_slot_exclusivity.sql"));
+    const broken = readMigration(LIFECYCLE_FOUNDATION_MIGRATION) + "\nINSERT INTO blog_posts (id) VALUES ('x');";
+    fs.writeFileSync(path.join(dir, LIFECYCLE_FOUNDATION_MIGRATION), broken);
+    const res = validateMigrationFiles(dir, serverTsPath);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => /unauthorized/.test(e)));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("validator rejects an unauthorized CREATE TABLE in 0002", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b2-neg-"));
+  try {
+    fs.writeFileSync(path.join(dir, "0000_baseline.sql"), readMigration("0000_baseline.sql"));
+    fs.writeFileSync(path.join(dir, "0001_enforce_department_slot_exclusivity.sql"), readMigration("0001_enforce_department_slot_exclusivity.sql"));
+    const broken = readMigration(LIFECYCLE_FOUNDATION_MIGRATION) + "\nCREATE TABLE extra (id TEXT);";
+    fs.writeFileSync(path.join(dir, LIFECYCLE_FOUNDATION_MIGRATION), broken);
+    const res = validateMigrationFiles(dir, serverTsPath);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => /unauthorized/.test(e)));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("validator rejects an unauthorized CREATE INDEX in 0002", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b2-neg-"));
+  try {
+    fs.writeFileSync(path.join(dir, "0000_baseline.sql"), readMigration("0000_baseline.sql"));
+    fs.writeFileSync(path.join(dir, "0001_enforce_department_slot_exclusivity.sql"), readMigration("0001_enforce_department_slot_exclusivity.sql"));
+    const broken = readMigration(LIFECYCLE_FOUNDATION_MIGRATION) + "\nCREATE INDEX idx_x ON blog_posts(slug);";
+    fs.writeFileSync(path.join(dir, LIFECYCLE_FOUNDATION_MIGRATION), broken);
+    const res = validateMigrationFiles(dir, serverTsPath);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => /unauthorized/.test(e)));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("validator rejects an unauthorized REPLACE in 0002", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b2-neg-"));
+  try {
+    fs.writeFileSync(path.join(dir, "0000_baseline.sql"), readMigration("0000_baseline.sql"));
+    fs.writeFileSync(path.join(dir, "0001_enforce_department_slot_exclusivity.sql"), readMigration("0001_enforce_department_slot_exclusivity.sql"));
+    const broken = readMigration(LIFECYCLE_FOUNDATION_MIGRATION) + "\nREPLACE INTO blog_posts (id) VALUES ('x');";
+    fs.writeFileSync(path.join(dir, LIFECYCLE_FOUNDATION_MIGRATION), broken);
+    const res = validateMigrationFiles(dir, serverTsPath);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => /unauthorized/.test(e)));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("validator rejects an unauthorized DELETE in 0002", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b2-neg-"));
+  try {
+    fs.writeFileSync(path.join(dir, "0000_baseline.sql"), readMigration("0000_baseline.sql"));
+    fs.writeFileSync(path.join(dir, "0001_enforce_department_slot_exclusivity.sql"), readMigration("0001_enforce_department_slot_exclusivity.sql"));
+    const broken = readMigration(LIFECYCLE_FOUNDATION_MIGRATION) + "\nDELETE FROM blog_posts WHERE id = 'x';";
+    fs.writeFileSync(path.join(dir, LIFECYCLE_FOUNDATION_MIGRATION), broken);
+    const res = validateMigrationFiles(dir, serverTsPath);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => /unauthorized/.test(e)));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("validator rejects an unauthorized TRUNCATE in 0002", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b2-neg-"));
+  try {
+    fs.writeFileSync(path.join(dir, "0000_baseline.sql"), readMigration("0000_baseline.sql"));
+    fs.writeFileSync(path.join(dir, "0001_enforce_department_slot_exclusivity.sql"), readMigration("0001_enforce_department_slot_exclusivity.sql"));
+    const broken = readMigration(LIFECYCLE_FOUNDATION_MIGRATION) + "\nTRUNCATE blog_posts;";
+    fs.writeFileSync(path.join(dir, LIFECYCLE_FOUNDATION_MIGRATION), broken);
+    const res = validateMigrationFiles(dir, serverTsPath);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => /unauthorized/.test(e)));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("validator rejects an unauthorized RENAME in 0002", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b2-neg-"));
+  try {
+    fs.writeFileSync(path.join(dir, "0000_baseline.sql"), readMigration("0000_baseline.sql"));
+    fs.writeFileSync(path.join(dir, "0001_enforce_department_slot_exclusivity.sql"), readMigration("0001_enforce_department_slot_exclusivity.sql"));
+    const broken = readMigration(LIFECYCLE_FOUNDATION_MIGRATION).replace(
+      "ALTER TABLE media_assets ADD COLUMN deleted_at TEXT;",
+      "ALTER TABLE media_assets RENAME COLUMN deleted_at TO removed_at;",
+    );
+    fs.writeFileSync(path.join(dir, LIFECYCLE_FOUNDATION_MIGRATION), broken);
+    const res = validateMigrationFiles(dir, serverTsPath);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => /unauthorized/.test(e) || /RENAME/.test(e)));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -229,8 +435,8 @@ test("allowed lifecycle transitions match spec", () => {
   }
 });
 
-test("assertValidTransition throws INVALID_TRANSITION on illegal transition", () => {
-  assert.throws(() => assertValidTransition("DRAFT", "PUBLISHED"), InvalidLifecycleTransitionError);
+test("assertValidLifecycleTransition throws INVALID_TRANSITION on illegal transition", () => {
+  assert.throws(() => assertValidLifecycleTransition("DRAFT", "PUBLISHED"), InvalidLifecycleTransitionError);
   assert.equal(new InvalidLifecycleTransitionError("DRAFT", "PUBLISHED").code, "INVALID_TRANSITION");
 });
 
@@ -242,18 +448,53 @@ test("content lifecycle allowlist contains exactly the six canonical tables", ()
 });
 
 // ---------------------------------------------------------------------------
-// Cache keys (requirement 10)
+// Cache keys (requirement 3 + 4)
 // ---------------------------------------------------------------------------
 
-test("cache tags use content:<domain> and content:<domain>:<safe-key>", () => {
-  assert.equal(contentCacheTag("blog_posts"), "content:blog_posts");
-  assert.equal(contentCacheKeyTag("blog_posts", "b1"), "content:blog_posts:b1");
+test("cache tags use canonical domains (doctors/department-timings/blogs/careers/videos/media)", () => {
+  assert.equal(contentCacheTag("blogs"), "content:blogs");
+  assert.equal(contentCacheKeyTag("blogs", "b1"), "content:blogs:b1");
+  assert.equal(contentCacheTag("doctors"), "content:doctors");
+  assert.equal(contentCacheTag("department-timings"), "content:department-timings");
+  assert.equal(contentCacheTag("careers"), "content:careers");
+  assert.equal(contentCacheTag("videos"), "content:videos");
+  assert.equal(contentCacheTag("media"), "content:media");
+});
+
+test("cache domain validation rejects unknown domains", () => {
+  assert.equal(isContentCacheDomain("blogs"), true);
+  assert.equal(isContentCacheDomain("blog_posts"), false);
+  assert.equal(isContentCacheDomain("appointments"), false);
+  assert.throws(() => contentCacheTag("blog_posts"), /Unknown content cache domain/);
+  assert.throws(() => contentCacheKeyTag("blog_posts", "b1"), /Unknown content cache domain/);
+});
+
+test("safe keys reject colon, dot, slash, backslash, whitespace, and control chars", () => {
   assert.equal(isValidCacheKey("b1"), true);
-  assert.throws(() => contentCacheKeyTag("blog_posts", "../evil"), /unsafe/);
+  assert.equal(isValidCacheKey("a-b_c1"), true);
+  assert.equal(isValidCacheKey("a:b"), false);
+  assert.equal(isValidCacheKey("a.b"), false);
+  assert.equal(isValidCacheKey("a/b"), false);
+  assert.equal(isValidCacheKey("a\\b"), false);
+  assert.equal(isValidCacheKey("a b"), false);
+  assert.equal(isValidCacheKey("a\tb"), false);
+  assert.equal(isValidCacheKey("a\nb"), false);
+  assert.throws(() => contentCacheKeyTag("blogs", "a/b"), /unsafe/);
+  assert.throws(() => contentCacheKeyTag("blogs", "a.b"), /unsafe/);
+});
+
+test("domain-to-table mapping is bijective across the six canonical tables", () => {
+  assert.deepEqual(
+    [...CONTENT_LIFECYCLE_DOMAINS].sort(),
+    ["blogs", "careers", "department-timings", "doctors", "media", "videos"].sort(),
+  );
+  for (const t of LIFECYCLE_FOUNDATION_TABLES_FOR_TEST) {
+    assert.equal(isContentLifecycleTable(t), true);
+  }
 });
 
 // ---------------------------------------------------------------------------
-// PRAGMA schema-capability detection (requirement 11)
+// PRAGMA schema-capability detection (requirement 6 + 11)
 // ---------------------------------------------------------------------------
 
 test("PRAGMA-based detection reports lifecycle support correctly", () => {
@@ -283,32 +524,41 @@ test("real PRAGMA table_info from migrated DB passes schema capability", () => {
   }
 });
 
+test("injected, allowlist-first PRAGMA inspector rejects non-allowlisted tables", () => {
+  const inspector = createLifecycleSchemaInspector();
+  assert.equal(inspector.isAllowedTable("blog_posts"), true);
+  assert.equal(inspector.isAllowedTable("appointments"), false);
+  const rows = [
+    { name: "id" },
+    { name: "lifecycle_status", dflt_value: "'PUBLISHED'" },
+    { name: "version", type: "INTEGER CHECK (version >= 1)" },
+    { name: "deleted_at" },
+  ];
+  assert.doesNotThrow(() => inspector.inspect(rows, "blog_posts"));
+  assert.throws(() => inspector.inspect(rows, "appointments"), /not in the content lifecycle allowlist/);
+  // Custom allowlist is honored.
+  const scoped = createLifecycleSchemaInspector(["blog_posts"]);
+  assert.throws(() => scoped.inspect(rows, "doctor_profiles"), /not in the content lifecycle allowlist/);
+});
+
 // ---------------------------------------------------------------------------
 // Orchestrator (pure DI)
 // ---------------------------------------------------------------------------
-
-const LIFECYCLE_FOUNDATION_TABLES_FOR_TEST = [
-  "department_timings",
-  "doctor_profiles",
-  "blog_posts",
-  "career_jobs",
-  "patient_videos",
-  "media_assets",
-];
 
 function applyMigrationOnly(db) {
   db.exec(readMigration(LIFECYCLE_FOUNDATION_MIGRATION));
 }
 
-// A real-D1-shaped backend bound to an in-memory blog_posts table.
+// A real-D1-shaped backend bound to an in-memory blog_posts table. The snapshot
+// now carries deletedAt so the orchestrator can enforce null/deleted checks.
 function makeBlogBackend(db) {
   const backend = {
     async loadRow(id) {
       const row = db
-        .prepare("SELECT version, lifecycle_status FROM blog_posts WHERE id = ?")
+        .prepare("SELECT version, lifecycle_status, deleted_at FROM blog_posts WHERE id = ?")
         .get(id);
       if (!row) return null;
-      return { version: row.version, lifecycleStatus: row.lifecycle_status };
+      return { version: row.version, lifecycleStatus: row.lifecycle_status, deletedAt: row.deleted_at };
     },
     async applyMutation({ id, expectedVersion, targetLifecycle, newVersion }) {
       const info = db
@@ -322,9 +572,9 @@ function makeBlogBackend(db) {
   return backend;
 }
 
-function seedBlog(db, id, version, status) {
+function seedBlog(db, id, version, status, deletedAt = null) {
   db.exec(
-    `INSERT INTO blog_posts (id, slug, title, excerpt, body, status, is_visible, is_deleted, lifecycle_status, version) VALUES ('${id}','${id}','T','e','b','APPROVED',1,0,'${status}',${version})`,
+    `INSERT INTO blog_posts (id, slug, title, excerpt, body, status, is_visible, is_deleted, lifecycle_status, version, deleted_at) VALUES ('${id}','${id}','T','e','b','APPROVED',1,0,'${status}',${version},${deletedAt === null ? "NULL" : `'${deletedAt}'`})`,
   );
 }
 
@@ -335,7 +585,7 @@ test("orchestrator applies on matching expectedVersion and bumps version", async
   const audits = [];
   const res = await executeOptimisticContentMutation({
     backend,
-    domain: "blog_posts",
+    domain: "blogs",
     id: "b1",
     expectedVersion: 1,
     targetLifecycle: "HIDDEN",
@@ -352,94 +602,71 @@ test("orchestrator applies on matching expectedVersion and bumps version", async
   assert.equal(audits[0].appliedVersion, 2);
 });
 
-test("orchestrator maps missing/deleted rows to MutationNotFoundError", async () => {
+test("orchestrator maps missing rows to MutationNotFoundError", async () => {
   const db = openMigratedDb();
   const backend = makeBlogBackend(db);
-
-  await assert.rejects(
-    () =>
-      executeOptimisticContentMutation({
-        backend,
-        domain: "blog_posts",
-        id: "ghost",
-        expectedVersion: 1,
-        targetLifecycle: "HIDDEN",
-      }),
-    MutationNotFoundError,
+  const err = await captureReject(() =>
+    executeOptimisticContentMutation({
+      backend,
+      domain: "blogs",
+      id: "ghost",
+      expectedVersion: 1,
+      targetLifecycle: "HIDDEN",
+    }),
   );
+  assert.ok(err instanceof MutationNotFoundError);
+  // No record id / domain / table must leak into the message.
+  assert.ok(!/ghost/.test(err.message));
+  assert.ok(!/blogs/.test(err.message));
+  assert.ok(!/blog_posts/.test(err.message));
+});
 
-  // Logically-deleted (ARCHIVED) rows are reported as missing by the backend.
-  seedBlog(db, "del", 1, "ARCHIVED");
-  const deletedBackend = {
+test("orchestrator maps deleted (ARCHIVED + deleted_at) rows to MutationNotFoundError", async () => {
+  const db = openMigratedDb();
+  seedBlog(db, "del", 1, "ARCHIVED", "2026-01-01T00:00:00Z");
+  const backend = makeBlogBackend(db);
+  const err = await captureReject(() =>
+    executeOptimisticContentMutation({
+      backend,
+      domain: "blogs",
+      id: "del",
+      expectedVersion: 1,
+      targetLifecycle: "DRAFT",
+    }),
+  );
+  assert.ok(err instanceof MutationNotFoundError);
+  assert.ok(!/del/.test(err.message));
+});
+
+test("orchestrator maps deleted (null deletedAt but ARCHIVED) rows to MutationNotFoundError", async () => {
+  const backend = {
     async loadRow() {
-      return null;
+      return { version: 1, lifecycleStatus: "ARCHIVED", deletedAt: null };
     },
     async applyMutation() {
       return 0;
     },
   };
-  await assert.rejects(
-    () =>
-      executeOptimisticContentMutation({
-        backend: deletedBackend,
-        domain: "blog_posts",
-        id: "del",
-        expectedVersion: 1,
-        targetLifecycle: "DRAFT",
-      }),
-    MutationNotFoundError,
+  const err = await captureReject(() =>
+    executeOptimisticContentMutation({
+      backend,
+      domain: "blogs",
+      id: "del",
+      expectedVersion: 1,
+      targetLifecycle: "DRAFT",
+    }),
   );
+  assert.ok(err instanceof MutationNotFoundError);
 });
 
 test("orchestrator maps stale expectedVersion to CONFLICT (initial mismatch)", async () => {
   const db = openMigratedDb();
   seedBlog(db, "b1", 3, "PUBLISHED");
   const backend = makeBlogBackend(db);
-  await assert.rejects(
-    () =>
-      executeOptimisticContentMutation({
-        backend,
-        domain: "blog_posts",
-        id: "b1",
-        expectedVersion: 1,
-        targetLifecycle: "HIDDEN",
-      }),
-    ContentVersionConflictError,
-  );
   const err = await captureReject(() =>
     executeOptimisticContentMutation({
       backend,
-      domain: "blog_posts",
-      id: "b1",
-      expectedVersion: 1,
-      targetLifecycle: "HIDDEN",
-    }),
-  );
-  assert.equal(err.code, "CONFLICT");
-  assert.equal(err.expectedVersion, 1);
-  assert.equal(err.actualVersion, 3);
-  // Row must be untouched on conflict.
-  const row = db.prepare("SELECT version, lifecycle_status FROM blog_posts WHERE id='b1'").get();
-  assert.equal(row.version, 3);
-  assert.equal(row.lifecycle_status, "PUBLISHED");
-});
-
-test("orchestrator maps post-zero-change (lost race) to CONFLICT", async () => {
-  const db = openMigratedDb();
-  seedBlog(db, "b1", 1, "PUBLISHED");
-  // Backend claims success but reports 0 changes (row vanished/changed).
-  const zeroBackend = {
-    async loadRow() {
-      return { version: 1, lifecycleStatus: "PUBLISHED" };
-    },
-    async applyMutation() {
-      return 0;
-    },
-  };
-  const err = await captureReject(() =>
-    executeOptimisticContentMutation({
-      backend: zeroBackend,
-      domain: "blog_posts",
+      domain: "blogs",
       id: "b1",
       expectedVersion: 1,
       targetLifecycle: "HIDDEN",
@@ -447,6 +674,81 @@ test("orchestrator maps post-zero-change (lost race) to CONFLICT", async () => {
   );
   assert.ok(err instanceof ContentVersionConflictError);
   assert.equal(err.code, "CONFLICT");
+  assert.equal(err.expectedVersion, 1);
+  assert.equal(err.actualVersion, 3);
+  assert.ok(!/b1/.test(err.message));
+  // Row must be untouched on conflict.
+  const row = db.prepare("SELECT version, lifecycle_status FROM blog_posts WHERE id='b1'").get();
+  assert.equal(row.version, 3);
+  assert.equal(row.lifecycle_status, "PUBLISHED");
+});
+
+test("orchestrator reloads after zero affected rows: missing row => NOT_FOUND", async () => {
+  // Backend applies but reports 0 changes because the row was removed.
+  const backend = {
+    async loadRow() {
+      return null;
+    },
+    async applyMutation() {
+      return 0;
+    },
+  };
+  const err = await captureReject(() =>
+    executeOptimisticContentMutation({
+      backend,
+      domain: "blogs",
+      id: "b1",
+      expectedVersion: 1,
+      targetLifecycle: "HIDDEN",
+    }),
+  );
+  assert.ok(err instanceof MutationNotFoundError);
+});
+
+test("orchestrator reloads after zero affected rows: deleted row => NOT_FOUND", async () => {
+  const backend = {
+    async loadRow() {
+      return { version: 2, lifecycleStatus: "ARCHIVED", deletedAt: "2026-01-01T00:00:00Z" };
+    },
+    async applyMutation() {
+      return 0;
+    },
+  };
+  const err = await captureReject(() =>
+    executeOptimisticContentMutation({
+      backend,
+      domain: "blogs",
+      id: "b1",
+      expectedVersion: 1,
+      targetLifecycle: "DRAFT",
+    }),
+  );
+  assert.ok(err instanceof MutationNotFoundError);
+});
+
+test("orchestrator reloads after zero affected rows: surviving newer row => CONFLICT with reloaded version", async () => {
+  const backend = {
+    async loadRow() {
+      // Surviving row now at version 5 (someone else won the race).
+      return { version: 5, lifecycleStatus: "PUBLISHED", deletedAt: null };
+    },
+    async applyMutation() {
+      return 0;
+    },
+  };
+  const err = await captureReject(() =>
+    executeOptimisticContentMutation({
+      backend,
+      domain: "blogs",
+      id: "b1",
+      expectedVersion: 1,
+      targetLifecycle: "HIDDEN",
+    }),
+  );
+  assert.ok(err instanceof ContentVersionConflictError);
+  assert.equal(err.code, "CONFLICT");
+  assert.equal(err.actualVersion, 5);
+  assert.ok(!/b1/.test(err.message));
 });
 
 test("orchestrator throws FAILED at AUDIT stage and never returns APPLIED", async () => {
@@ -456,7 +758,7 @@ test("orchestrator throws FAILED at AUDIT stage and never returns APPLIED", asyn
   const err = await captureReject(() =>
     executeOptimisticContentMutation({
       backend,
-      domain: "blog_posts",
+      domain: "blogs",
       id: "b1",
       expectedVersion: 1,
       targetLifecycle: "HIDDEN",
@@ -484,7 +786,7 @@ test("orchestrator throws FAILED at CACHE stage and never returns APPLIED", asyn
   const err = await captureReject(() =>
     executeOptimisticContentMutation({
       backend,
-      domain: "blog_posts",
+      domain: "blogs",
       id: "b1",
       expectedVersion: 1,
       targetLifecycle: "HIDDEN",
@@ -502,7 +804,7 @@ test("orchestrator throws FAILED at CACHE stage and never returns APPLIED", asyn
   assert.equal(err.appliedVersion, 2);
   // Invalidation was attempted before the throw.
   assert.equal(invalidated.length, 1);
-  assert.deepEqual(invalidated[0], ["content:blog_posts", "content:blog_posts:b1"]);
+  assert.deepEqual(invalidated[0], ["content:blogs", "content:blogs:b1"]);
 });
 
 test("orchestrator invalidates content:<domain> and content:<domain>:<key> on success", async () => {
@@ -512,20 +814,20 @@ test("orchestrator invalidates content:<domain> and content:<domain>:<key> on su
   const invalidated = [];
   await executeOptimisticContentMutation({
     backend,
-    domain: "blog_posts",
+    domain: "blogs",
     id: "b1",
     expectedVersion: 1,
     targetLifecycle: "HIDDEN",
     cacheInvalidator: { invalidate: (tags) => invalidated.push(tags) },
   });
   assert.equal(invalidated.length, 1);
-  assert.deepEqual(invalidated[0], ["content:blog_posts", "content:blog_posts:b1"]);
+  assert.deepEqual(invalidated[0], ["content:blogs", "content:blogs:b1"]);
 });
 
 test("orchestrator rejects invalid lifecycle transition with INVALID_TRANSITION", async () => {
   const backend = {
     async loadRow() {
-      return { version: 1, lifecycleStatus: "DRAFT" };
+      return { version: 1, lifecycleStatus: "DRAFT", deletedAt: null };
     },
     async applyMutation() {
       return 1;
@@ -535,7 +837,7 @@ test("orchestrator rejects invalid lifecycle transition with INVALID_TRANSITION"
     () =>
       executeOptimisticContentMutation({
         backend,
-        domain: "blog_posts",
+        domain: "blogs",
         id: "b1",
         expectedVersion: 1,
         targetLifecycle: "PUBLISHED",
@@ -547,7 +849,7 @@ test("orchestrator rejects invalid lifecycle transition with INVALID_TRANSITION"
 test("orchestrator rejects unknown domain (security)", async () => {
   const backend = {
     async loadRow() {
-      return { version: 1, lifecycleStatus: "PUBLISHED" };
+      return { version: 1, lifecycleStatus: "PUBLISHED", deletedAt: null };
     },
     async applyMutation() {
       return 1;
@@ -562,14 +864,14 @@ test("orchestrator rejects unknown domain (security)", async () => {
         expectedVersion: 1,
         targetLifecycle: "HIDDEN",
       }),
-    /not a recognised content lifecycle table/,
+    /not a recognised content lifecycle domain/,
   );
 });
 
 test("orchestrator requires a positive integer expectedVersion", async () => {
   const backend = {
     async loadRow() {
-      return { version: 1, lifecycleStatus: "PUBLISHED" };
+      return { version: 1, lifecycleStatus: "PUBLISHED", deletedAt: null };
     },
     async applyMutation() {
       return 1;
@@ -579,7 +881,7 @@ test("orchestrator requires a positive integer expectedVersion", async () => {
     () =>
       executeOptimisticContentMutation({
         backend,
-        domain: "blog_posts",
+        domain: "blogs",
         id: "b1",
         expectedVersion: 0,
         targetLifecycle: "HIDDEN",

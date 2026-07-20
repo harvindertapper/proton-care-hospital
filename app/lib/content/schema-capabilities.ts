@@ -15,6 +15,50 @@ export function isContentLifecycleTable(table: string): table is ContentLifecycl
   return TABLE_SET.has(table);
 }
 
+// Canonical cache/domain slugs (replacing raw table names in cache keys).
+export const CONTENT_LIFECYCLE_DOMAINS = [
+  "doctors",
+  "department-timings",
+  "blogs",
+  "careers",
+  "videos",
+  "media",
+] as const;
+
+export type ContentLifecycleDomain = (typeof CONTENT_LIFECYCLE_DOMAINS)[number];
+
+const DOMAIN_TO_TABLE: Record<ContentLifecycleDomain, ContentLifecycleTable> = {
+  doctors: "doctor_profiles",
+  "department-timings": "department_timings",
+  blogs: "blog_posts",
+  careers: "career_jobs",
+  videos: "patient_videos",
+  media: "media_assets",
+};
+
+const TABLE_TO_DOMAIN: Record<ContentLifecycleTable, ContentLifecycleDomain> = {
+  doctor_profiles: "doctors",
+  department_timings: "department-timings",
+  blog_posts: "blogs",
+  career_jobs: "careers",
+  patient_videos: "videos",
+  media_assets: "media",
+};
+
+const DOMAIN_SET: ReadonlySet<string> = new Set<string>(CONTENT_LIFECYCLE_DOMAINS);
+
+export function isContentLifecycleDomain(domain: string): domain is ContentLifecycleDomain {
+  return DOMAIN_SET.has(domain);
+}
+
+export function lifecycleTableForDomain(domain: ContentLifecycleDomain): ContentLifecycleTable {
+  return DOMAIN_TO_TABLE[domain];
+}
+
+export function domainForLifecycleTable(table: ContentLifecycleTable): ContentLifecycleDomain {
+  return TABLE_TO_DOMAIN[table];
+}
+
 export const LIFECYCLE_COLUMNS = {
   lifecycleStatus: "lifecycle_status",
   version: "version",
@@ -84,4 +128,29 @@ export function assertSchemaSupportsLifecycle(rows: PragmaColumnRow[], table: st
   if (!report.hasDeletedAt) {
     throw new Error(`Table ${table} is missing column ${LIFECYCLE_COLUMNS.deletedAt}`);
   }
+}
+
+// Injected, allowlist-first PRAGMA table_info inspector. The allowlist is
+// supplied (defaulting to the canonical six tables) so the capability can be
+// reused against arbitrary D1/R2-attached databases without trusting the caller.
+export interface LifecycleSchemaInspector {
+  inspect(pragmaRows: PragmaColumnRow[], table: string): LifecycleColumnReport;
+  isAllowedTable(table: string): boolean;
+}
+
+export function createLifecycleSchemaInspector(
+  allowedTables: ReadonlyArray<string> = CONTENT_LIFECYCLE_TABLES,
+): LifecycleSchemaInspector {
+  const allow = new Set<string>(allowedTables);
+  return {
+    isAllowedTable(table: string): boolean {
+      return allow.has(table);
+    },
+    inspect(pragmaRows: PragmaColumnRow[], table: string): LifecycleColumnReport {
+      if (!allow.has(table)) {
+        throw new Error(`Table ${table} is not in the content lifecycle allowlist`);
+      }
+      return getLifecycleColumnReport(pragmaRows);
+    },
+  };
 }
