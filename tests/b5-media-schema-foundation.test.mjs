@@ -154,7 +154,7 @@ function createDbWithMissingColumn(table, column) {
   db.exec(`CREATE TABLE ${table} (${colDefs})`);
   for (const row of allRows) {
     const vals = filteredNames.map((n) => row[n]);
-    const placeholders = filteredNames.map(() => "?").join(", ");
+    const placeholders = vals.map(() => "?").join(", ");
     db.prepare(`INSERT INTO ${table} (${filteredNames.map((n) => `"${n}"`).join(", ")}) VALUES (${placeholders})`).run(...vals);
   }
   return db;
@@ -167,15 +167,15 @@ function createDbWithBrokenFk(breakType) {
   db.exec("DROP TABLE gallery_items");
   const fkClauses = [];
   if (breakType === "no-section-fk") {
-    fkClauses.push("FOREIGN KEY (media_id) REFERENCES media_assets(id)");
+    fkClauses.push("FOREIGN KEY (media_id) REFERENCES media_assets(id) ON DELETE RESTRICT");
   } else if (breakType === "no-media-fk") {
-    fkClauses.push("FOREIGN KEY (section_id) REFERENCES gallery_sections(id)");
+    fkClauses.push("FOREIGN KEY (section_id) REFERENCES gallery_sections(id) ON DELETE RESTRICT");
   } else if (breakType === "wrong-section-target") {
-    fkClauses.push("FOREIGN KEY (section_id) REFERENCES media_assets(id)");
-    fkClauses.push("FOREIGN KEY (media_id) REFERENCES media_assets(id)");
+    fkClauses.push("FOREIGN KEY (section_id) REFERENCES media_assets(id) ON DELETE RESTRICT");
+    fkClauses.push("FOREIGN KEY (media_id) REFERENCES media_assets(id) ON DELETE RESTRICT");
   } else if (breakType === "wrong-media-target") {
-    fkClauses.push("FOREIGN KEY (section_id) REFERENCES gallery_sections(id)");
-    fkClauses.push("FOREIGN KEY (media_id) REFERENCES gallery_sections(id)");
+    fkClauses.push("FOREIGN KEY (section_id) REFERENCES gallery_sections(id) ON DELETE RESTRICT");
+    fkClauses.push("FOREIGN KEY (media_id) REFERENCES gallery_sections(id) ON DELETE RESTRICT");
   }
   const createSql = `CREATE TABLE gallery_items (
     id TEXT PRIMARY KEY,
@@ -225,6 +225,93 @@ function createDbWithNonUniqueIndex(idxName) {
 function createDbWithoutIndex(idxName) {
   const db = createFullyMigratedDb();
   db.exec(`DROP INDEX IF EXISTS ${idxName}`);
+  return db;
+}
+
+const INDEX_TABLE_MAP = {
+  idx_media_lifecycle_category_created: "media_assets",
+  idx_media_active_public_path: "media_assets",
+  idx_media_active_checksum: "media_assets",
+  idx_gallery_sections_lifecycle_order: "gallery_sections",
+  idx_gallery_items_section_lifecycle_order: "gallery_items",
+  idx_gallery_items_media_deleted: "gallery_items",
+  idx_gallery_items_active_slot: "gallery_items",
+};
+
+function createDbWithFkOnDelete(fkField, action) {
+  const db = createFullyMigratedDb();
+  const allItems = db.prepare("SELECT * FROM gallery_items").all();
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec("DROP TABLE gallery_items");
+  const sectionFk = fkField === "section_id"
+    ? `FOREIGN KEY (section_id) REFERENCES gallery_sections(id) ON DELETE ${action}`
+    : "FOREIGN KEY (section_id) REFERENCES gallery_sections(id) ON DELETE RESTRICT";
+  const mediaFk = fkField === "media_id"
+    ? `FOREIGN KEY (media_id) REFERENCES media_assets(id) ON DELETE ${action}`
+    : "FOREIGN KEY (media_id) REFERENCES media_assets(id) ON DELETE RESTRICT";
+  const createSql = `CREATE TABLE gallery_items (
+    id TEXT PRIMARY KEY,
+    section_id TEXT NOT NULL,
+    media_id TEXT NOT NULL,
+    slot_key TEXT,
+    title_override TEXT NOT NULL DEFAULT '',
+    alt_text_override TEXT NOT NULL DEFAULT '',
+    caption_override TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
+    lifecycle_status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (lifecycle_status IN ('DRAFT','IN_REVIEW','PUBLISHED','HIDDEN','ARCHIVED')),
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+    created_by TEXT NOT NULL,
+    updated_by TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    published_at TEXT,
+    deleted_at TEXT,
+    ${sectionFk},
+    ${mediaFk}
+  )`;
+  db.exec(createSql);
+  for (const row of allItems) {
+    const cols = ["id", "section_id", "media_id", "slot_key", "title_override", "alt_text_override", "caption_override", "sort_order", "lifecycle_status", "version", "created_by", "updated_by", "created_at", "updated_at", "published_at", "deleted_at"];
+    const vals = cols.map((n) => row[n]);
+    const placeholders = cols.map(() => "?").join(", ");
+    db.prepare(`INSERT INTO gallery_items (${cols.map((n) => `"${n}"`).join(", ")}) VALUES (${placeholders})`).run(...vals);
+  }
+  db.exec("PRAGMA foreign_keys = ON");
+  return db;
+}
+
+function createDbWithWrongIndexColumns(idxName, wrongColumns) {
+  const db = createFullyMigratedDb();
+  db.exec(`DROP INDEX IF EXISTS ${idxName}`);
+  const tableName = INDEX_TABLE_MAP[idxName];
+  db.exec(`CREATE INDEX ${idxName} ON ${tableName}(${wrongColumns.join(", ")})`);
+  return db;
+}
+
+const UNIQUE_INDEX_COLUMNS = {
+  idx_media_active_public_path: ["public_path"],
+  idx_media_active_checksum: ["storage_type", "checksum_sha256"],
+  idx_gallery_items_active_slot: ["slot_key"],
+};
+
+function createDbWithWrongPredicate(idxName, wrongPredicate) {
+  const db = createFullyMigratedDb();
+  db.exec(`DROP INDEX IF EXISTS ${idxName}`);
+  const tableName = INDEX_TABLE_MAP[idxName];
+  const columns = UNIQUE_INDEX_COLUMNS[idxName];
+  db.exec(`CREATE UNIQUE INDEX ${idxName} ON ${tableName}(${columns.join(", ")}) ${wrongPredicate}`);
+  return db;
+}
+
+function createDbWithModifiedGalleryTable(tableName, newCreateSql) {
+  const db = createFullyMigratedDb();
+  db.exec("PRAGMA foreign_keys = OFF");
+  if (tableName === "gallery_sections") {
+    db.exec("DELETE FROM gallery_items");
+  }
+  db.exec(`DROP TABLE ${tableName}`);
+  db.exec(newCreateSql);
+  db.exec("PRAGMA foreign_keys = ON");
   return db;
 }
 
@@ -412,14 +499,10 @@ test("upgrade from 0000+0002 applies 0003 without error", () => {
 
 test("upgrade preserves existing media_assets rows", () => {
   const db = createPreM0003Db();
-
   insertLegacyMediaRow(db, { id: "legacy-1", r2Key: "legacy/test.webp", purpose: "gallery" });
   insertLegacyMediaRow(db, { id: "legacy-2", r2Key: "legacy/test2.jpg", purpose: "doctor-photo" });
-
   const preCount = getMediaCount(db);
-
   db.exec(MIGRATION_0003_SQL);
-
   const row1 = getMediaRow(db, "legacy-1");
   assert.ok(row1, "legacy-1 must exist");
   assert.equal(row1.r2_key, "legacy/test.webp");
@@ -431,17 +514,13 @@ test("upgrade preserves existing media_assets rows", () => {
 
 test("upgrade with insertR2MediaRow preserves R2 row and backfills storage_type", () => {
   const db = createPreM0003Db();
-
   insertR2MediaRow(db, { id: "r2-legacy-1", r2Key: "r2/legacy-1.webp", purpose: "gallery", sizeBytes: 2048 });
   insertR2MediaRow(db, { id: "r2-legacy-2", r2Key: "r2/legacy-2.jpg", purpose: "doctor-photo", sizeBytes: 4096 });
-
   db.exec(MIGRATION_0003_SQL);
-
   const row1 = getMediaRow(db, "r2-legacy-1");
   assert.ok(row1, "r2-legacy-1 must survive upgrade");
   assert.equal(row1.r2_key, "r2/legacy-1.webp");
   assert.equal(row1.storage_type, "R2", "r2-legacy-1 storage_type backfilled to R2");
-
   const row2 = getMediaRow(db, "r2-legacy-2");
   assert.ok(row2, "r2-legacy-2 must survive upgrade");
   assert.equal(row2.r2_key, "r2/legacy-2.jpg");
@@ -450,13 +529,10 @@ test("upgrade with insertR2MediaRow preserves R2 row and backfills storage_type"
 
 test("upgrade backfills category from purpose", () => {
   const db = createPreM0003Db();
-
   insertLegacyMediaRow(db, { id: "cat-gallery", r2Key: "cat/g.webp", purpose: "gallery" });
   insertLegacyMediaRow(db, { id: "cat-doctor", r2Key: "cat/d.webp", purpose: "doctor-photo" });
   insertLegacyMediaRow(db, { id: "cat-admin", r2Key: "cat/a.webp", purpose: "admin-upload" });
-
   db.exec(MIGRATION_0003_SQL);
-
   assert.equal(getMediaRow(db, "cat-gallery").category, "GALLERY");
   assert.equal(getMediaRow(db, "cat-doctor").category, "DOCTOR");
   assert.equal(getMediaRow(db, "cat-admin").category, "GENERAL");
@@ -464,11 +540,8 @@ test("upgrade backfills category from purpose", () => {
 
 test("upgrade preserves existing lifecycle_status on media_assets rows", () => {
   const db = createPreM0003Db();
-
   insertLegacyMediaRow(db, { id: "lifecycle-preserved", r2Key: "lc/test.webp", lifecycleStatus: "PUBLISHED" });
-
   db.exec(MIGRATION_0003_SQL);
-
   const row = getMediaRow(db, "lifecycle-preserved");
   assert.equal(row.lifecycle_status, "PUBLISHED");
 });
@@ -495,9 +568,7 @@ test("backfill sets display_r2_key from r2_key", () => {
 
 test("backfill sets published_at for APPROVED+visible+PUBLISHED rows", () => {
   const db = createPreM0003Db();
-  insertLegacyMediaRow(db, {
-    id: "ba-published", r2Key: "ba/p.webp", status: "APPROVED", isVisible: 1, lifecycleStatus: "PUBLISHED",
-  });
+  insertLegacyMediaRow(db, { id: "ba-published", r2Key: "ba/p.webp", status: "APPROVED", isVisible: 1, lifecycleStatus: "PUBLISHED" });
   db.exec(MIGRATION_0003_SQL);
   const row = getMediaRow(db, "ba-published");
   assert.ok(row.published_at, "published_at should be set for published rows");
@@ -505,9 +576,7 @@ test("backfill sets published_at for APPROVED+visible+PUBLISHED rows", () => {
 
 test("backfill does NOT set published_at for HIDDEN rows", () => {
   const db = createPreM0003Db();
-  insertLegacyMediaRow(db, {
-    id: "ba-hidden", r2Key: "ba/h.webp", status: "HIDDEN", isVisible: 0, lifecycleStatus: "HIDDEN",
-  });
+  insertLegacyMediaRow(db, { id: "ba-hidden", r2Key: "ba/h.webp", status: "HIDDEN", isVisible: 0, lifecycleStatus: "HIDDEN" });
   db.exec(MIGRATION_0003_SQL);
   const row = getMediaRow(db, "ba-hidden");
   assert.equal(row.published_at, null, "published_at should remain null for HIDDEN rows");
@@ -553,9 +622,7 @@ test("backfill sets display_content_type from content_type", () => {
 
 test("0003 inserts exactly 7 PUBLIC asset seeds", () => {
   const db = createFullyMigratedDb();
-  const seedCount = db.prepare(
-    `SELECT COUNT(*) AS cnt FROM media_assets WHERE id LIKE 'media-public-gallery-%'`
-  ).get().cnt;
+  const seedCount = db.prepare(`SELECT COUNT(*) AS cnt FROM media_assets WHERE id LIKE 'media-public-gallery-%'`).get().cnt;
   assert.equal(seedCount, 7);
 });
 
@@ -676,9 +743,7 @@ test("all 7 gallery item IDs exist", () => {
 
 test("gallery items have sequential sort_order 0-6", () => {
   const db = createFullyMigratedDb();
-  const items = db.prepare(
-    "SELECT id, sort_order FROM gallery_items ORDER BY sort_order"
-  ).all();
+  const items = db.prepare("SELECT id, sort_order FROM gallery_items ORDER BY sort_order").all();
   assert.equal(items.length, 7);
   for (let i = 0; i < 7; i++) {
     assert.equal(items[i].sort_order, i, `Item at position ${i} must have sort_order=${i}`);
@@ -691,22 +756,16 @@ test("gallery items have sequential sort_order 0-6", () => {
 
 test("0003 inserts gallery_v2_initialized=0 marker", () => {
   const db = createFullyMigratedDb();
-  const marker = db.prepare(
-    "SELECT value FROM site_configs WHERE key = 'gallery_v2_initialized'"
-  ).get();
+  const marker = db.prepare("SELECT value FROM site_configs WHERE key = 'gallery_v2_initialized'").get();
   assert.ok(marker, "gallery_v2_initialized marker must exist");
   assert.equal(marker.value, "0");
 });
 
 test("gallery_v2_initialized marker is not overwritten if already present", () => {
   const db = createPreM0003Db();
-  db.prepare(
-    "INSERT OR REPLACE INTO site_configs (key, value) VALUES ('gallery_v2_initialized', '1')"
-  ).run();
+  db.prepare("INSERT OR REPLACE INTO site_configs (key, value) VALUES ('gallery_v2_initialized', '1')").run();
   db.exec(MIGRATION_0003_SQL);
-  const marker = db.prepare(
-    "SELECT value FROM site_configs WHERE key = 'gallery_v2_initialized'"
-  ).get();
+  const marker = db.prepare("SELECT value FROM site_configs WHERE key = 'gallery_v2_initialized'").get();
   assert.equal(marker.value, "1", "Existing marker should not be overwritten");
 });
 
@@ -720,7 +779,6 @@ test("gallery_sections lifecycle_status CHECK enum matches lifecycle foundation"
     `INSERT INTO gallery_sections (id, slug, name, description, sort_order, lifecycle_status, version, created_by)
      VALUES (?, ?, ?, ?, 0, ?, 1, 'test')`
   ).run("test-valid", "test-valid", "Test", "Test desc", "DRAFT");
-
   assert.throws(() => {
     db.prepare(
       `INSERT INTO gallery_sections (id, slug, name, description, sort_order, lifecycle_status, version, created_by)
@@ -733,12 +791,10 @@ test("gallery_items lifecycle_status CHECK enum matches lifecycle foundation", (
   const db = createFullyMigratedDb();
   const sectionId = M0003_GALLERY_SECTION_ID;
   const mediaId = M0003_PUBLIC_SEED_IDS[0];
-
   db.prepare(
     `INSERT INTO gallery_items (id, section_id, media_id, sort_order, lifecycle_status, version, created_by)
      VALUES (?, ?, ?, 0, ?, 1, 'test')`
   ).run("test-valid-item", sectionId, mediaId, "PUBLISHED");
-
   assert.throws(() => {
     db.prepare(
       `INSERT INTO gallery_items (id, section_id, media_id, sort_order, lifecycle_status, version, created_by)
@@ -750,7 +806,6 @@ test("gallery_items lifecycle_status CHECK enum matches lifecycle foundation", (
 test("gallery_items FOREIGN KEY section_id rejects invalid section", () => {
   const db = createFullyMigratedDb();
   const mediaId = M0003_PUBLIC_SEED_IDS[0];
-
   assert.throws(() => {
     db.prepare(
       `INSERT INTO gallery_items (id, section_id, media_id, sort_order, lifecycle_status, version, created_by)
@@ -762,7 +817,6 @@ test("gallery_items FOREIGN KEY section_id rejects invalid section", () => {
 test("gallery_items FOREIGN KEY media_id rejects invalid media", () => {
   const db = createFullyMigratedDb();
   const sectionId = M0003_GALLERY_SECTION_ID;
-
   assert.throws(() => {
     db.prepare(
       `INSERT INTO gallery_items (id, section_id, media_id, sort_order, lifecycle_status, version, created_by)
@@ -773,7 +827,6 @@ test("gallery_items FOREIGN KEY media_id rejects invalid media", () => {
 
 test("gallery_sections slug UNIQUE constraint enforced", () => {
   const db = createFullyMigratedDb();
-
   assert.throws(() => {
     db.prepare(
       `INSERT INTO gallery_sections (id, slug, name, description, sort_order, lifecycle_status, version, created_by)
@@ -786,7 +839,6 @@ test("gallery_items slot_key UNIQUE constraint enforced for active rows", () => 
   const db = createFullyMigratedDb();
   const sectionId = M0003_GALLERY_SECTION_ID;
   const mediaId2 = M0003_PUBLIC_SEED_IDS[1];
-
   assert.throws(() => {
     db.prepare(
       `INSERT INTO gallery_items (id, section_id, media_id, slot_key, sort_order, lifecycle_status, version, created_by)
@@ -907,12 +959,10 @@ test("collectSchemaReport reports foreign keys for gallery_items", () => {
 test("collectSchemaReport reports unique/partial index metadata", () => {
   const db = createFullyMigratedDb();
   const report = collectSchemaReport(db);
-
   const publicPathIdx = report.indexes.find((i) => i.indexName === "idx_media_active_public_path");
   assert.ok(publicPathIdx, "idx_media_active_public_path must exist in report");
   assert.equal(publicPathIdx.unique, 1, "idx_media_active_public_path must be unique");
   assert.equal(publicPathIdx.partial, 1, "idx_media_active_public_path must be partial");
-
   const slotIdx = report.indexes.find((i) => i.indexName === "idx_gallery_items_active_slot");
   assert.ok(slotIdx, "idx_gallery_items_active_slot must exist in report");
   assert.equal(slotIdx.unique, 1, "idx_gallery_items_active_slot must be unique");
@@ -1011,17 +1061,13 @@ test("dormant PUBLIC seeds excluded from published+visible media query", () => {
 
 test("dormant gallery section excluded from published gallery query", () => {
   const db = createFullyMigratedDb();
-  const activeSections = db.prepare(
-    `SELECT COUNT(*) AS cnt FROM gallery_sections WHERE lifecycle_status = 'PUBLISHED'`
-  ).get().cnt;
+  const activeSections = db.prepare(`SELECT COUNT(*) AS cnt FROM gallery_sections WHERE lifecycle_status = 'PUBLISHED'`).get().cnt;
   assert.equal(activeSections, 0, "No dormant sections should appear in published query");
 });
 
 test("dormant gallery items excluded from published gallery items query", () => {
   const db = createFullyMigratedDb();
-  const activeItems = db.prepare(
-    `SELECT COUNT(*) AS cnt FROM gallery_items WHERE lifecycle_status = 'PUBLISHED'`
-  ).get().cnt;
+  const activeItems = db.prepare(`SELECT COUNT(*) AS cnt FROM gallery_items WHERE lifecycle_status = 'PUBLISHED'`).get().cnt;
   assert.equal(activeItems, 0, "No dormant items should appear in published query");
 });
 
@@ -1076,19 +1122,21 @@ test("inspectM1FoundationState reports gallery_v2_initialized=0 after fresh inst
   assert.equal(state.gallery_v2_initialized_value, "0");
 });
 
-test("inspectM1FoundationState reports 7 public seeds all found, zero missing", () => {
+test("inspectM1FoundationState reports 7 expected seeds all found, zero missing", () => {
   const db = createFullyMigratedDb();
   const state = inspectM1FoundationState(db);
-  assert.equal(state.public_seed_count, 7);
-  assert.equal(state.public_seed_ids_missing.length, 0);
-  assert.equal(state.dormant_seed_count, 7);
+  assert.equal(state.expected_seed_count, 7);
+  assert.equal(state.expected_seed_ids_missing.length, 0);
+  assert.equal(state.dormant_expected_seed_count, 7);
 });
 
-test("inspectM1FoundationState reports 1 section and 7 items", () => {
+test("inspectM1FoundationState reports expected section and items", () => {
   const db = createFullyMigratedDb();
   const state = inspectM1FoundationState(db);
-  assert.equal(state.section_count, 1);
-  assert.equal(state.item_count, 7);
+  assert.equal(state.expected_section_present, true);
+  assert.equal(state.expected_section_dormant, true);
+  assert.equal(state.expected_item_count, 7);
+  assert.equal(state.expected_item_ids_missing.length, 0);
 });
 
 test("inspectM1FoundationState reports missing seed when DB has fewer seeds", () => {
@@ -1096,9 +1144,9 @@ test("inspectM1FoundationState reports missing seed when DB has fewer seeds", ()
   db.prepare("DELETE FROM gallery_items WHERE media_id = ?").run("media-public-gallery-front-exterior-hero");
   db.prepare("DELETE FROM media_assets WHERE id = ?").run("media-public-gallery-front-exterior-hero");
   const state = inspectM1FoundationState(db);
-  assert.equal(state.public_seed_count, 6);
-  assert.ok(state.public_seed_ids_missing.includes("media-public-gallery-front-exterior-hero"));
-  assert.equal(state.dormant_seed_count, 6);
+  assert.equal(state.expected_seed_count, 6);
+  assert.ok(state.expected_seed_ids_missing.includes("media-public-gallery-front-exterior-hero"));
+  assert.equal(state.dormant_expected_seed_count, 6);
 });
 
 test("inspectM1FoundationState reports marker absent when not in DB", () => {
@@ -1128,5 +1176,234 @@ test("no runtime route file imports media-schema", async () => {
   for (const route of routeFiles) {
     const content = await readFile(new URL(`../${route}`, import.meta.url), "utf8");
     assert.ok(!content.includes("media-schema"), `${route} must not import media-schema`);
+  }
+});
+
+// ============================================================
+// PART 21: FK DELETE POLICY (4 new tests)
+// ============================================================
+
+test("section_id ON DELETE CASCADE causes capability failure", () => {
+  const db = createDbWithFkOnDelete("section_id", "CASCADE");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("section_id") && e.includes("RESTRICT")));
+  }
+});
+
+test("media_id ON DELETE CASCADE causes capability failure", () => {
+  const db = createDbWithFkOnDelete("media_id", "CASCADE");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("media_id") && e.includes("RESTRICT")));
+  }
+});
+
+test("section_id ON DELETE SET NULL causes capability failure", () => {
+  const db = createDbWithFkOnDelete("section_id", "SET NULL");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("section_id") && e.includes("RESTRICT")));
+  }
+});
+
+test("media_id ON DELETE NO ACTION causes capability failure", () => {
+  const db = createDbWithFkOnDelete("media_id", "NO ACTION");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("media_id") && e.includes("RESTRICT")));
+  }
+});
+
+// ============================================================
+// PART 22: INDEX COLUMN SEMANTICS (7 tests)
+// ============================================================
+
+test("idx_media_lifecycle_category_created wrong columns causes failure", () => {
+  const db = createDbWithWrongIndexColumns("idx_media_lifecycle_category_created", ["category", "lifecycle_status", "created_at"]);
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("idx_media_lifecycle_category_created") && e.includes("columns")));
+  }
+});
+
+test("idx_media_active_public_path wrong columns causes failure", () => {
+  const db = createDbWithWrongIndexColumns("idx_media_active_public_path", ["storage_type", "public_path"]);
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("idx_media_active_public_path") && e.includes("columns")));
+  }
+});
+
+test("idx_media_active_checksum wrong columns causes failure", () => {
+  const db = createDbWithWrongIndexColumns("idx_media_active_checksum", ["checksum_sha256", "storage_type"]);
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("idx_media_active_checksum") && e.includes("columns")));
+  }
+});
+
+test("idx_gallery_sections_lifecycle_order wrong columns causes failure", () => {
+  const db = createDbWithWrongIndexColumns("idx_gallery_sections_lifecycle_order", ["sort_order", "lifecycle_status", "id"]);
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("idx_gallery_sections_lifecycle_order") && e.includes("columns")));
+  }
+});
+
+test("idx_gallery_items_section_lifecycle_order wrong columns causes failure", () => {
+  const db = createDbWithWrongIndexColumns("idx_gallery_items_section_lifecycle_order", ["section_id", "sort_order", "lifecycle_status", "id"]);
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("idx_gallery_items_section_lifecycle_order") && e.includes("columns")));
+  }
+});
+
+test("idx_gallery_items_media_deleted wrong columns causes failure", () => {
+  const db = createDbWithWrongIndexColumns("idx_gallery_items_media_deleted", ["deleted_at", "media_id"]);
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("idx_gallery_items_media_deleted") && e.includes("columns")));
+  }
+});
+
+test("idx_gallery_items_active_slot wrong columns causes failure", () => {
+  const db = createDbWithWrongIndexColumns("idx_gallery_items_active_slot", ["slot_key", "section_id"]);
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("idx_gallery_items_active_slot") && e.includes("columns")));
+  }
+});
+
+// ============================================================
+// PART 23: PARTIAL PREDICATE SEMANTICS (4 tests)
+// ============================================================
+
+test("idx_media_active_public_path missing storage_type=PUBLIC predicate causes failure", () => {
+  const db = createDbWithWrongPredicate("idx_media_active_public_path", "WHERE public_path IS NOT NULL AND deleted_at IS NULL");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("idx_media_active_public_path") && e.includes("predicate")));
+  }
+});
+
+test("idx_media_active_public_path missing deleted_at IS NULL predicate causes failure", () => {
+  const db = createDbWithWrongPredicate("idx_media_active_public_path", "WHERE storage_type = 'PUBLIC' AND public_path IS NOT NULL");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("idx_media_active_public_path") && e.includes("predicate")));
+  }
+});
+
+test("idx_media_active_checksum missing purge_status predicate causes failure", () => {
+  const db = createDbWithWrongPredicate("idx_media_active_checksum", "WHERE checksum_sha256 IS NOT NULL AND deleted_at IS NULL");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("idx_media_active_checksum") && e.includes("predicate")));
+  }
+});
+
+test("idx_gallery_items_active_slot wrong predicate causes failure", () => {
+  const db = createDbWithWrongPredicate("idx_gallery_items_active_slot", "WHERE deleted_at IS NULL");
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("idx_gallery_items_active_slot") && e.includes("predicate")));
+  }
+});
+
+// ============================================================
+// PART 24: GALLERY TABLE CHECK SEMANTICS (4 tests)
+// ============================================================
+
+test("gallery_sections without lifecycle_status CHECK causes capability failure", () => {
+  const brokenSql = `CREATE TABLE gallery_sections (
+    id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
+    lifecycle_status TEXT NOT NULL DEFAULT 'DRAFT',
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+    created_by TEXT NOT NULL, updated_by TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    published_at TEXT, deleted_at TEXT
+  )`;
+  const db = createDbWithModifiedGalleryTable("gallery_sections", brokenSql);
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("gallery_sections") && e.includes("lifecycle_status CHECK")));
+  }
+});
+
+test("gallery_items without version CHECK causes capability failure", () => {
+  const brokenSql = `CREATE TABLE gallery_items (
+    id TEXT PRIMARY KEY, section_id TEXT NOT NULL, media_id TEXT NOT NULL, slot_key TEXT,
+    title_override TEXT NOT NULL DEFAULT '', alt_text_override TEXT NOT NULL DEFAULT '', caption_override TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
+    lifecycle_status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (lifecycle_status IN ('DRAFT','IN_REVIEW','PUBLISHED','HIDDEN','ARCHIVED')),
+    version INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT NOT NULL, updated_by TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    published_at TEXT, deleted_at TEXT,
+    FOREIGN KEY (section_id) REFERENCES gallery_sections(id) ON DELETE RESTRICT,
+    FOREIGN KEY (media_id) REFERENCES media_assets(id) ON DELETE RESTRICT
+  )`;
+  const db = createDbWithModifiedGalleryTable("gallery_items", brokenSql);
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("gallery_items") && e.includes("version >= 1")));
+  }
+});
+
+test("gallery_sections without sort_order CHECK causes capability failure", () => {
+  const brokenSql = `CREATE TABLE gallery_sections (
+    id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    lifecycle_status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (lifecycle_status IN ('DRAFT','IN_REVIEW','PUBLISHED','HIDDEN','ARCHIVED')),
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+    created_by TEXT NOT NULL, updated_by TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    published_at TEXT, deleted_at TEXT
+  )`;
+  const db = createDbWithModifiedGalleryTable("gallery_sections", brokenSql);
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("gallery_sections") && e.includes("sort_order >= 0")));
+  }
+});
+
+test("gallery_items without lifecycle_status CHECK causes capability failure", () => {
+  const brokenSql = `CREATE TABLE gallery_items (
+    id TEXT PRIMARY KEY, section_id TEXT NOT NULL, media_id TEXT NOT NULL, slot_key TEXT,
+    title_override TEXT NOT NULL DEFAULT '', alt_text_override TEXT NOT NULL DEFAULT '', caption_override TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
+    lifecycle_status TEXT NOT NULL DEFAULT 'DRAFT',
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+    created_by TEXT NOT NULL, updated_by TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    published_at TEXT, deleted_at TEXT,
+    FOREIGN KEY (section_id) REFERENCES gallery_sections(id) ON DELETE RESTRICT,
+    FOREIGN KEY (media_id) REFERENCES media_assets(id) ON DELETE RESTRICT
+  )`;
+  const db = createDbWithModifiedGalleryTable("gallery_items", brokenSql);
+  const result = assertMediaGallerySchemaCapabilities(db);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.errors.some((e) => e.includes("gallery_items") && e.includes("lifecycle_status CHECK")));
   }
 });
