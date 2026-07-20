@@ -39,30 +39,31 @@ export async function GET(_request: Request, { params }: { params: Promise<{ key
   } else if (meta.purpose === "doctor-photo") {
     const doctorRef = await query<{ slug: string }>(
       `SELECT slug FROM doctor_profiles
-       WHERE photo_url LIKE ?
+       WHERE photo_url = ?
          AND lifecycle_status = 'PUBLISHED'
          AND status = 'APPROVED'
          AND is_visible = 1
          AND is_deleted = 0
          AND deleted_at IS NULL
        LIMIT 1`,
-      `%${objectKey}%`,
+      `/api/media/${objectKey}`,
     );
     if (!doctorRef.results || doctorRef.results.length === 0) {
       return new Response("Not found", { status: 404 });
     }
   } else if (meta.purpose === "admin-upload") {
-    const pubRef = await query<{ id: string }>(
-      `SELECT id FROM media_assets
-       WHERE r2_key = ?
+    const doctorRef = await query<{ slug: string }>(
+      `SELECT slug FROM doctor_profiles
+       WHERE photo_url = ?
          AND lifecycle_status = 'PUBLISHED'
          AND status = 'APPROVED'
          AND is_visible = 1
+         AND is_deleted = 0
          AND deleted_at IS NULL
        LIMIT 1`,
-      objectKey,
+      `/api/media/${objectKey}`,
     );
-    if (!pubRef.results || pubRef.results.length === 0) {
+    if (!doctorRef.results || doctorRef.results.length === 0) {
       return new Response("Not found", { status: 404 });
     }
   } else {

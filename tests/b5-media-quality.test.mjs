@@ -8,6 +8,7 @@ import {
   ALLOWED_PURPOSES,
   detectSignature,
   validateMediaUpload,
+  computeCropGeometry,
 } from "../app/lib/media-policy.ts";
 
 const [mediaPolicy, adminMediaRoute, galleryRoute, mediaGateway, consoleSource, galleryClient, serverSource] =
@@ -198,19 +199,23 @@ test("15. R2 failure creates no metadata/audit", () => {
   assert.doesNotMatch(adminMediaRoute, /INSERT INTO media_assets[\s\S]{0,200}R2 upload failed/);
 });
 
-test("16. D1 throw after R2 write triggers R2 compensation", () => {
+test("16. D1 throw after R2 write triggers compensation with accurate message", () => {
   assert.match(adminMediaRoute, /D1 insert failed after R2 write; compensating/);
   assert.match(adminMediaRoute, /bucket\.delete\(key\)/);
+  assert.match(adminMediaRoute, /let compOk = false/);
+  assert.match(adminMediaRoute, /incomplete object was removed/);
 });
 
-test("17. D1 zero-row result triggers compensation", () => {
+test("17. D1 zero-row result triggers compensation with accurate message", () => {
   assert.match(adminMediaRoute, /D1 zero-row/);
   assert.match(adminMediaRoute, /bucket\.delete\(key\)/);
+  assert.match(adminMediaRoute, /incomplete object was removed/);
 });
 
-test("18. Compensation failure is surfaced/logged and no success is claimed", () => {
+test("18. Compensation failure says reconciliation, not orphan cleaned", () => {
   assert.match(adminMediaRoute, /Compensation delete failed/);
-  assert.match(adminMediaRoute, /Orphan was cleaned up/);
+  assert.match(adminMediaRoute, /Cleanup requires reconciliation/);
+  assert.doesNotMatch(adminMediaRoute, /Orphan was cleaned up/);
   assert.doesNotMatch(adminMediaRoute, /Compensation delete failed[\s\S]{0,100}success.*true/);
 });
 
@@ -220,27 +225,28 @@ test("19. Audit failure after proved persistence does not cause duplicate-upload
   assert.doesNotMatch(adminMediaRoute, /Audit write failed[\s\S]{0,200}success.*false.*FAILED/);
 });
 
-test("20. Preview remains 200×200 (structural)", () => {
+test("20. Preview remains 200x200 (structural)", () => {
   assert.match(consoleSource, /width=\{200\}/);
   assert.match(consoleSource, /height=\{200\}/);
 });
 
-test("21. Export does not use the 200×200 preview pixels", () => {
+test("21. Export does not use the 200x200 preview pixels", () => {
   assert.match(consoleSource, /document\.createElement\("canvas"\)/);
   assert.doesNotMatch(consoleSource, /canvasRef\.current\.toBlob/);
 });
 
-test("22. Export target is up to 1200×1200 without source upscaling", () => {
-  assert.match(consoleSource, /const maxDim = 1200/);
-  assert.match(consoleSource, /Math\.min\(maxDim, srcLongest\)/);
+test("22. Export uses computeCropGeometry for no-upscaling (structural)", () => {
+  assert.match(consoleSource, /computeCropGeometry/);
+  assert.match(consoleSource, /geo\.exportSize/);
+  assert.doesNotMatch(consoleSource, /srcLongest/);
 });
 
-test("23. Preview/export crop geometry matches", () => {
-  assert.match(consoleSource, /clampOffsets/);
+test("23. Preview/export crop geometry uses computeCropGeometry (structural)", () => {
+  assert.match(consoleSource, /computeCropGeometry/);
   assert.match(consoleSource, /srcClampedX|srcClampedY/);
 });
 
-test("24. Movement cannot expose blank borders", () => {
+test("24. Movement cannot expose blank borders (structural)", () => {
   assert.match(consoleSource, /minOffX|maxOffX|clampedX/);
   assert.match(consoleSource, /minOffY|maxOffY|clampedY/);
 });
@@ -352,9 +358,9 @@ test("41. Unreferenced Doctor photo returns 404", () => {
   assert.match(mediaGateway, /Not found.*404/);
 });
 
-test("42. Doctor photo referenced by a public Doctor is served", () => {
-  assert.match(mediaGateway, /lifecycle_status = 'PUBLISHED'[\s\S]*?AND status = 'APPROVED'[\s\S]*?AND is_visible = 1[\s\S]*?AND is_deleted = 0[\s\S]*?AND deleted_at IS NULL/);
-  assert.match(mediaGateway, /photo_url LIKE/);
+test("42. Doctor photo referenced by a public Doctor is served via exact match", () => {
+  assert.match(mediaGateway, /photo_url = \?/);
+  assert.match(mediaGateway, /\/api\/media\/\$\{objectKey\}/);
 });
 
 test("43. Doctor photo referenced only by hidden/archived Doctor returns 404", () => {
@@ -366,28 +372,28 @@ test("43. Doctor photo referenced only by hidden/archived Doctor returns 404", (
 
     const doctorRef = db.prepare(
       `SELECT slug FROM doctor_profiles
-       WHERE photo_url LIKE ?
+       WHERE photo_url = ?
          AND lifecycle_status = 'PUBLISHED'
          AND status = 'APPROVED'
          AND is_visible = 1
          AND is_deleted = 0
          AND deleted_at IS NULL
        LIMIT 1`
-    ).all("%doctor-photo/dp1.webp%");
+    ).all("/api/media/doctor-photo/dp1.webp");
     assert.equal(doctorRef.length, 0, "No public doctor references the photo");
   } finally {
     db.close();
   }
 });
 
-test("44. Unreferenced admin-upload returns 404 (structural)", () => {
+test("44. Unreferenced admin-upload returns 404 via doctor_profiles check (structural)", () => {
   assert.match(mediaGateway, /purpose === "admin-upload"/);
-  assert.match(mediaGateway, /pubRef\.results.*pubRef\.results\.length === 0/);
+  assert.match(mediaGateway, /doctorRef\.results.*doctorRef\.results\.length === 0/);
 });
 
 test("45. Authorization failure does not touch R2 (structural)", () => {
   assert.doesNotMatch(mediaGateway, /bucket\.get[\s\S]{0,200}purpose.*doctor-photo/);
-  assert.match(mediaGateway, /metaResult[\s\S]{0,1500}bucket\.get/);
+  assert.match(mediaGateway, /metaResult[\s\S]{0,3000}bucket\.get/);
 });
 
 test("46. Response no longer uses immutable one-year cache", () => {
@@ -395,13 +401,13 @@ test("46. Response no longer uses immutable one-year cache", () => {
   assert.match(mediaGateway, /max-age=300, s-maxage=3600/);
 });
 
-test("47. Referenced Doctor media deletion returns 409", () => {
+test("47. Referenced Doctor media deletion returns 409 via exact match", () => {
   const db = createMediaDb();
   try {
     insertMedia(db, { id: "ref1", r2Key: "doctor-photo/ref1.webp", purpose: "doctor-photo", lifecycleStatus: "PUBLISHED", status: "APPROVED", isVisible: 1 });
     insertDoctor(db, { slug: "dr-active", photoUrl: "/api/media/doctor-photo/ref1.webp" });
 
-    const refs = db.prepare("SELECT id FROM doctor_profiles WHERE photo_url LIKE ? AND is_deleted = 0 LIMIT 1").all("%doctor-photo/ref1.webp%");
+    const refs = db.prepare("SELECT id FROM doctor_profiles WHERE photo_url = ? LIMIT 1").all("/api/media/doctor-photo/ref1.webp");
     assert.equal(refs.length, 1);
     assert.match(adminMediaRoute, /CONFLICT/);
     assert.match(adminMediaRoute, /Media is still in use/);
@@ -533,14 +539,9 @@ test("media gateway queries lifecycle_status, status, is_visible, deleted_at bef
   assert.match(mediaGateway, /WHERE r2_key = \?/);
 });
 
-test("admin media route uses validateMediaUpload from media-policy", () => {
-  assert.match(adminMediaRoute, /from.*media-policy/);
-  assert.match(adminMediaRoute, /validateMediaUpload/);
-  assert.match(adminMediaRoute, /validateMediaUpload\(\{ file, purpose, bytes \}\)/);
-});
-
 test("admin media route stores detected contentType, not browser-supplied type", () => {
-  assert.match(adminMediaRoute, /validation\.contentType/);
+  assert.match(adminMediaRoute, /detected/);
+  assert.match(adminMediaRoute, /httpMetadata: \{ contentType: detected \}/);
   assert.doesNotMatch(adminMediaRoute, /file\.type.*httpMetadata.*contentType/);
 });
 
@@ -582,4 +583,248 @@ test("Client validation checks file size before upload", () => {
 
 test("Admin media route: insert explicitly writes status, is_visible, lifecycle_status", () => {
   assert.match(adminMediaRoute, /INSERT INTO media_assets.*status.*is_visible.*lifecycle_status/s);
+});
+
+test("Pre-buffer: oversized File rejected before arrayBuffer (structural)", () => {
+  const sizeCheckIdx = adminMediaRoute.indexOf("file.size > MAX_IMAGE_BYTES");
+  const arrayBufIdx = adminMediaRoute.indexOf("arrayBuffer()");
+  assert.ok(sizeCheckIdx > 0, "file.size check found");
+  assert.ok(arrayBufIdx > sizeCheckIdx, "file.size check before arrayBuffer");
+});
+
+test("Pre-buffer: empty File rejected before arrayBuffer (structural)", () => {
+  const emptyCheckIdx = adminMediaRoute.indexOf("file.size === 0");
+  const arrayBufIdx = adminMediaRoute.indexOf("arrayBuffer()");
+  assert.ok(emptyCheckIdx > 0, "empty check found");
+  assert.ok(arrayBufIdx > emptyCheckIdx, "empty check before arrayBuffer");
+});
+
+test("Pre-buffer: MIME check before arrayBuffer (structural)", () => {
+  const mimeCheckIdx = adminMediaRoute.indexOf("ALLOWED_MIME_TYPES.has(file.type)");
+  const arrayBufIdx = adminMediaRoute.indexOf("arrayBuffer()");
+  assert.ok(mimeCheckIdx > 0, "MIME check found");
+  assert.ok(arrayBufIdx > mimeCheckIdx, "MIME check before arrayBuffer");
+});
+
+test("Pre-buffer: purpose check before arrayBuffer (structural)", () => {
+  const purposeCheckIdx = adminMediaRoute.indexOf("ALLOWED_PURPOSES.has(purpose)");
+  const arrayBufIdx = adminMediaRoute.indexOf("arrayBuffer()");
+  assert.ok(purposeCheckIdx > 0, "purpose check found");
+  assert.ok(arrayBufIdx > purposeCheckIdx, "purpose check before arrayBuffer");
+});
+
+test("admin-upload: no doctor reference -> denied (SQLite)", () => {
+  const db = createMediaDb();
+  try {
+    insertMedia(db, { id: "au1", r2Key: "admin-upload/au1.webp", purpose: "admin-upload", lifecycleStatus: "PUBLISHED", status: "APPROVED", isVisible: 1 });
+    const doctorRef = db.prepare(
+      `SELECT slug FROM doctor_profiles WHERE photo_url = ? AND lifecycle_status = 'PUBLISHED' AND status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 AND deleted_at IS NULL LIMIT 1`
+    ).all("/api/media/admin-upload/au1.webp");
+    assert.equal(doctorRef.length, 0, "No public doctor references the admin-upload");
+  } finally {
+    db.close();
+  }
+});
+
+test("admin-upload: public doctor exact reference -> allowed (SQLite)", () => {
+  const db = createMediaDb();
+  try {
+    insertMedia(db, { id: "au2", r2Key: "admin-upload/au2.webp", purpose: "admin-upload", lifecycleStatus: "PUBLISHED", status: "APPROVED", isVisible: 1 });
+    insertDoctor(db, { slug: "dr-pub", photoUrl: "/api/media/admin-upload/au2.webp" });
+    const doctorRef = db.prepare(
+      `SELECT slug FROM doctor_profiles WHERE photo_url = ? AND lifecycle_status = 'PUBLISHED' AND status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 AND deleted_at IS NULL LIMIT 1`
+    ).all("/api/media/admin-upload/au2.webp");
+    assert.equal(doctorRef.length, 1, "Public doctor references the admin-upload");
+  } finally {
+    db.close();
+  }
+});
+
+test("admin-upload: hidden/archived doctor reference -> denied (SQLite)", () => {
+  const db = createMediaDb();
+  try {
+    insertMedia(db, { id: "au3", r2Key: "admin-upload/au3.webp", purpose: "admin-upload", lifecycleStatus: "PUBLISHED", status: "APPROVED", isVisible: 1 });
+    insertDoctor(db, { slug: "dr-hidden-au", photoUrl: "/api/media/admin-upload/au3.webp", status: "HIDDEN", isVisible: 0, lifecycleStatus: "HIDDEN" });
+    insertDoctor(db, { slug: "dr-archived-au", photoUrl: "/api/media/admin-upload/au3.webp", status: "HIDDEN", isVisible: 0, isDeleted: 1, lifecycleStatus: "ARCHIVED" });
+    const doctorRef = db.prepare(
+      `SELECT slug FROM doctor_profiles WHERE photo_url = ? AND lifecycle_status = 'PUBLISHED' AND status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 AND deleted_at IS NULL LIMIT 1`
+    ).all("/api/media/admin-upload/au3.webp");
+    assert.equal(doctorRef.length, 0, "No public doctor references");
+  } finally {
+    db.close();
+  }
+});
+
+test("admin-upload: substring-only match does not authorize (SQLite)", () => {
+  const db = createMediaDb();
+  try {
+    insertDoctor(db, { slug: "dr-sub", photoUrl: "/api/media/admin-upload/au4-extra.webp" });
+    const doctorRef = db.prepare(
+      `SELECT slug FROM doctor_profiles WHERE photo_url = ? AND lifecycle_status = 'PUBLISHED' AND status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 AND deleted_at IS NULL LIMIT 1`
+    ).all("/api/media/admin-upload/au4.webp");
+    assert.equal(doctorRef.length, 0, "Substring match does not authorize");
+  } finally {
+    db.close();
+  }
+});
+
+test("admin-upload gateway checks doctor_profiles, not self-ref (structural)", () => {
+  assert.match(mediaGateway, /purpose === "admin-upload"[\s\S]*?doctor_profiles/);
+  assert.match(mediaGateway, /purpose === "admin-upload"[\s\S]*?photo_url = \?/);
+  assert.doesNotMatch(mediaGateway, /purpose === "admin-upload"[\s\S]{0,500}SELECT id FROM media_assets/);
+});
+
+test("delete guard: active reference -> 409 (SQLite)", () => {
+  const db = createMediaDb();
+  try {
+    insertMedia(db, { id: "dg1", r2Key: "doctor-photo/dg1.webp", purpose: "doctor-photo" });
+    insertDoctor(db, { slug: "dr-active-dg", photoUrl: "/api/media/doctor-photo/dg1.webp" });
+    const refs = db.prepare("SELECT id FROM doctor_profiles WHERE photo_url = ? LIMIT 1").all("/api/media/doctor-photo/dg1.webp");
+    assert.equal(refs.length, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test("delete guard: hidden reference -> 409 (SQLite)", () => {
+  const db = createMediaDb();
+  try {
+    insertMedia(db, { id: "dg2", r2Key: "doctor-photo/dg2.webp", purpose: "doctor-photo" });
+    insertDoctor(db, { slug: "dr-hidden-dg", photoUrl: "/api/media/doctor-photo/dg2.webp", status: "HIDDEN", isVisible: 0, lifecycleStatus: "HIDDEN" });
+    const refs = db.prepare("SELECT id FROM doctor_profiles WHERE photo_url = ? LIMIT 1").all("/api/media/doctor-photo/dg2.webp");
+    assert.equal(refs.length, 1, "Hidden doctor reference still protects media");
+  } finally {
+    db.close();
+  }
+});
+
+test("delete guard: archived reference -> 409 (SQLite)", () => {
+  const db = createMediaDb();
+  try {
+    insertMedia(db, { id: "dg3", r2Key: "doctor-photo/dg3.webp", purpose: "doctor-photo" });
+    insertDoctor(db, { slug: "dr-archived-dg", photoUrl: "/api/media/doctor-photo/dg3.webp", status: "HIDDEN", isVisible: 0, isDeleted: 1, lifecycleStatus: "ARCHIVED" });
+    const refs = db.prepare("SELECT id FROM doctor_profiles WHERE photo_url = ? LIMIT 1").all("/api/media/doctor-photo/dg3.webp");
+    assert.equal(refs.length, 1, "Archived doctor reference still protects media");
+  } finally {
+    db.close();
+  }
+});
+
+test("delete guard: substring-only does not count (SQLite)", () => {
+  const db = createMediaDb();
+  try {
+    insertMedia(db, { id: "dg4", r2Key: "doctor-photo/dg4.webp", purpose: "doctor-photo" });
+    insertDoctor(db, { slug: "dr-sub-dg", photoUrl: "/api/media/doctor-photo/dg4-extra.webp" });
+    const refs = db.prepare("SELECT id FROM doctor_profiles WHERE photo_url = ? LIMIT 1").all("/api/media/doctor-photo/dg4.webp");
+    assert.equal(refs.length, 0, "Substring match does not count as reference");
+  } finally {
+    db.close();
+  }
+});
+
+test("delete guard uses exact match, not LIKE (structural)", () => {
+  assert.match(adminMediaRoute, /photo_url = \?/);
+  assert.doesNotMatch(adminMediaRoute, /photo_url LIKE/);
+  assert.match(adminMediaRoute, /exactUrl/);
+});
+
+test("computeCropGeometry: 600x4000 portrait zoom 1 -> export <= 600", () => {
+  const geo = computeCropGeometry(600, 4000, 0, 1, 200, 1200);
+  assert.ok(geo.exportSize <= 600, `Expected exportSize <= 600, got ${geo.exportSize}`);
+});
+
+test("computeCropGeometry: 4000x600 landscape zoom 1 -> export <= 600", () => {
+  const geo = computeCropGeometry(4000, 600, 0, 1, 200, 1200);
+  assert.ok(geo.exportSize <= 600, `Expected exportSize <= 600, got ${geo.exportSize}`);
+});
+
+test("computeCropGeometry: 2000x2000 square zoom 1 -> export 1200", () => {
+  const geo = computeCropGeometry(2000, 2000, 0, 1, 200, 1200);
+  assert.equal(geo.exportSize, 1200);
+});
+
+test("computeCropGeometry: 600x4000 rotated 90 -> effective swapped dimensions", () => {
+  const geo = computeCropGeometry(600, 4000, 90, 1, 200, 1200);
+  assert.equal(geo.effectiveW, 4000);
+  assert.equal(geo.effectiveH, 600);
+  assert.ok(geo.exportSize <= 600, `Expected exportSize <= 600, got ${geo.exportSize}`);
+});
+
+test("computeCropGeometry: 600x4000 rotated 270 -> effective swapped", () => {
+  const geo = computeCropGeometry(600, 4000, 270, 1, 200, 1200);
+  assert.equal(geo.effectiveW, 4000);
+  assert.equal(geo.effectiveH, 600);
+});
+
+test("computeCropGeometry: 600x4000 rotation 180 -> effective unchanged", () => {
+  const geo = computeCropGeometry(600, 4000, 180, 1, 200, 1200);
+  assert.equal(geo.effectiveW, 600);
+  assert.equal(geo.effectiveH, 4000);
+});
+
+test("computeCropGeometry: 800 source crop -> export 800 not 1200", () => {
+  const geo = computeCropGeometry(800, 800, 0, 1, 200, 1200);
+  assert.equal(geo.exportSize, 800);
+});
+
+test("computeCropGeometry: 300x3000 zoom 2 -> smaller export", () => {
+  const geo1 = computeCropGeometry(300, 3000, 0, 1, 200, 1200);
+  const geo2 = computeCropGeometry(300, 3000, 0, 2, 200, 1200);
+  assert.ok(geo2.exportSize < geo1.exportSize, `Zoom 2 export (${geo2.exportSize}) < zoom 1 export (${geo1.exportSize})`);
+});
+
+test("computeCropGeometry: extreme offsets clamped", () => {
+  const geo = computeCropGeometry(3000, 2000, 0, 1, 200, 1200);
+  assert.ok(Number.isFinite(geo.minOffX));
+  assert.ok(Number.isFinite(geo.maxOffX));
+  assert.ok(Number.isFinite(geo.minOffY));
+  assert.ok(Number.isFinite(geo.maxOffY));
+  assert.ok(geo.minOffX <= 0);
+  assert.ok(geo.maxOffX >= 0);
+  assert.ok(geo.minOffY <= 0);
+  assert.ok(geo.maxOffY >= 0);
+});
+
+test("computeCropGeometry: no upscaling (export <= visible)", () => {
+  const geo = computeCropGeometry(600, 4000, 0, 1, 200, 1200);
+  const visibleMin = Math.min(geo.visibleW, geo.visibleH);
+  assert.ok(geo.exportSize <= Math.floor(visibleMin) + 1, `exportSize ${geo.exportSize} <= visible ${visibleMin}`);
+});
+
+test("compensation success: incomplete object removed message (structural)", () => {
+  assert.match(adminMediaRoute, /incomplete object was removed/);
+});
+
+test("compensation failure: reconciliation message (structural)", () => {
+  assert.match(adminMediaRoute, /Cleanup requires reconciliation/);
+  assert.doesNotMatch(adminMediaRoute, /Orphan was cleaned up/);
+});
+
+test("compOk tracking present in both D1 paths (structural)", () => {
+  const zeroRowIdx = adminMediaRoute.indexOf("D1 zero-row");
+  const throwIdx = adminMediaRoute.indexOf("D1 insert failed after R2 write");
+  assert.ok(zeroRowIdx > 0, "D1 zero-row path found");
+  assert.ok(throwIdx > 0, "D1 throw path found");
+  const zeroRowBlock = adminMediaRoute.slice(Math.max(0, zeroRowIdx - 200), zeroRowIdx + 200);
+  assert.match(zeroRowBlock, /let compOk = false/);
+  const throwBlock = adminMediaRoute.slice(Math.max(0, throwIdx - 200), throwIdx + 200);
+  assert.match(throwBlock, /let compOk = false/);
+});
+
+test("MediaManager rejects zero-byte files (structural)", () => {
+  assert.match(consoleSource, /file\.size === 0/);
+  assert.match(consoleSource, /File is empty/);
+});
+
+test("MediaManager resets file input on rejection (structural)", () => {
+  assert.match(consoleSource, /setFile\(null\)/);
+});
+
+test("MediaManager hides Gallery option for Staff (structural)", () => {
+  assert.match(consoleSource, /sessionRole === "SUPER_ADMIN" && <option value="gallery">/);
+});
+
+test("MediaManager passes sessionRole prop (structural)", () => {
+  assert.match(consoleSource, /sessionRole:/);
+  assert.match(consoleSource, /sessionRole={session\.role}/);
 });

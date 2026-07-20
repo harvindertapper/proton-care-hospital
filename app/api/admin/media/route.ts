@@ -1,6 +1,6 @@
 import { audit, checkRateLimit, getClientIp, getR2, json, query, requireAdmin, run, verifyCsrf } from "@/app/lib/server";
 import { executeMediaDeletion } from "@/app/lib/mutation-result";
-import { validateMediaUpload } from "@/app/lib/media-policy";
+import { ALLOWED_MIME_TYPES, ALLOWED_PURPOSES, MAX_IMAGE_BYTES, detectSignature } from "@/app/lib/media-policy";
 
 function safeName(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-|-$/g, "").slice(0, 120) || "upload";
@@ -29,6 +29,22 @@ export async function POST(request: Request) {
     return json({ error: "Image file is required." }, { status: 400 });
   }
 
+  if (file.size === 0) {
+    return json({ error: "File is empty.", status: 400 }, { status: 400 });
+  }
+
+  if (file.size > MAX_IMAGE_BYTES) {
+    return json({ error: "Image must be 5 MB or smaller." }, { status: 400 });
+  }
+
+  if (!ALLOWED_MIME_TYPES.has(file.type)) {
+    return json({ error: "Only JPEG, PNG, and WebP images are allowed." }, { status: 400 });
+  }
+
+  if (!ALLOWED_PURPOSES.has(purpose)) {
+    return json({ error: "Unknown upload purpose." }, { status: 400 });
+  }
+
   if (purpose === "gallery" && admin.session.role !== "SUPER_ADMIN") {
     return json({ error: "Only super admin may upload gallery assets directly." }, { status: 403 });
   }
@@ -36,17 +52,29 @@ export async function POST(request: Request) {
   const arrayBuffer = await file.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
 
-  const validation = validateMediaUpload({ file, purpose, bytes });
-  if (!validation.ok) {
-    return json({ error: validation.error }, { status: validation.status });
+  if (bytes.length === 0) {
+    return json({ error: "File is empty." }, { status: 400 });
   }
 
-  const key = `${validation.purpose}/${crypto.randomUUID()}-${safeName(file.name)}`;
+  if (bytes.length > MAX_IMAGE_BYTES) {
+    return json({ error: "Image must be 5 MB or smaller." }, { status: 400 });
+  }
+
+  const detected = detectSignature(bytes);
+  if (!detected) {
+    return json({ error: "Unsupported file format." }, { status: 400 });
+  }
+
+  if (detected !== file.type) {
+    return json({ error: "Declared type does not match file content." }, { status: 400 });
+  }
+
+  const key = `${purpose}/${crypto.randomUUID()}-${safeName(file.name)}`;
   const id = crypto.randomUUID();
 
   try {
     await bucket.put(key, bytes, {
-      httpMetadata: { contentType: validation.contentType },
+      httpMetadata: { contentType: detected },
       customMetadata: { uploadedBy: admin.session.email, consentNote },
     });
   } catch (r2Error) {
@@ -58,11 +86,11 @@ export async function POST(request: Request) {
   let isVisible: number;
   let lifecycleStatus: string;
 
-  if (validation.purpose === "gallery") {
+  if (purpose === "gallery") {
     status = "APPROVED";
     isVisible = 1;
     lifecycleStatus = "PUBLISHED";
-  } else if (validation.purpose === "doctor-photo") {
+  } else if (purpose === "doctor-photo") {
     status = "APPROVED";
     isVisible = 1;
     lifecycleStatus = "PUBLISHED";
@@ -78,9 +106,9 @@ export async function POST(request: Request) {
       id,
       key,
       file.name,
-      validation.contentType,
+      detected,
       bytes.length,
-      validation.purpose,
+      purpose,
       admin.session.email,
       consentNote,
       status,
@@ -89,13 +117,15 @@ export async function POST(request: Request) {
     );
     const changes = Number(result.meta?.changes || 0);
     if (changes < 1) {
-      try { await bucket.delete(key); } catch (compErr) { console.error("Compensation delete failed after D1 zero-row", { key, compErr }); }
-      return json({ success: false, outcome: "FAILED", error: "Media metadata creation failed." }, { status: 500 });
+      let compOk = false;
+      try { await bucket.delete(key); compOk = true; } catch (compErr) { console.error("Compensation delete failed after D1 zero-row", { key, compErr }); }
+      return json({ success: false, outcome: "FAILED", error: compOk ? "Media metadata creation failed. The incomplete object was removed." : "Media metadata creation failed. Cleanup requires reconciliation." }, { status: 500 });
     }
   } catch (d1Error) {
     console.error("D1 insert failed after R2 write; compensating", { key, d1Error });
-    try { await bucket.delete(key); } catch (compErr) { console.error("Compensation delete failed", { key, compErr }); }
-    return json({ success: false, outcome: "FAILED", error: "Media metadata creation failed. Orphan was cleaned up." }, { status: 500 });
+    let compOk = false;
+    try { await bucket.delete(key); compOk = true; } catch (compErr) { console.error("Compensation delete failed", { key, compErr }); }
+    return json({ success: false, outcome: "FAILED", error: compOk ? "Media metadata creation failed. The incomplete object was removed." : "Media metadata creation failed. Cleanup requires reconciliation." }, { status: 500 });
   }
 
   try {
@@ -126,9 +156,10 @@ export async function DELETE(request: Request) {
   const asset = refCheck.results?.[0];
   if (!asset) return json({ success: false, outcome: "NOT_FOUND", error: "Media asset not found." }, { status: 404 });
 
+  const exactUrl = `/api/media/${asset.r2_key}`;
   const photoRefs = await query<{ id: string }>(
-    "SELECT id FROM doctor_profiles WHERE photo_url LIKE ? AND is_deleted = 0 LIMIT 1",
-    `%${asset.r2_key}%`,
+    "SELECT id FROM doctor_profiles WHERE photo_url = ? LIMIT 1",
+    exactUrl,
   );
   if (photoRefs.results && photoRefs.results.length > 0) {
     return json(

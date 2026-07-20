@@ -79,3 +79,54 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+export function computeCropGeometry(
+  srcW: number,
+  srcH: number,
+  rot: number,
+  zm: number,
+  canvasSize: number,
+  maxExport: number,
+) {
+  const isSwapped = rot === 90 || rot === 270;
+  const effectiveW = isSwapped ? srcH : srcW;
+  const effectiveH = isSwapped ? srcW : srcH;
+
+  const baseScale = Math.max(canvasSize / effectiveW, canvasSize / effectiveH);
+  const effectiveScale = baseScale * zm;
+
+  const drawnW = effectiveW * baseScale;
+  const drawnH = effectiveH * baseScale;
+
+  const halfW = drawnW / 2;
+  const halfH = drawnH / 2;
+
+  const visibleW = canvasSize / effectiveScale;
+  const visibleH = canvasSize / effectiveScale;
+
+  const minOffX = Math.min(0, -(halfW - visibleW / 2));
+  const maxOffX = Math.max(0, halfW - visibleW / 2);
+  const minOffY = Math.min(0, -(halfH - visibleH / 2));
+  const maxOffY = Math.max(0, halfH - visibleH / 2);
+
+  const visibleSize = Math.min(visibleW, visibleH);
+  const exportSize = Math.min(maxExport, Math.floor(visibleSize));
+
+  return {
+    effectiveW,
+    effectiveH,
+    baseScale,
+    effectiveScale,
+    drawnW,
+    drawnH,
+    halfW,
+    halfH,
+    visibleW,
+    visibleH,
+    minOffX,
+    maxOffX,
+    minOffY,
+    maxOffY,
+    exportSize,
+  };
+}

@@ -17,6 +17,7 @@ import {
 import type { Department, Doctor } from "@/app/lib/data";
 import { slugify } from "@/app/lib/utils";
 import { resolveDoctorManagerRows } from "@/app/lib/doctor-admin.ts";
+import { computeCropGeometry } from "@/app/lib/media-policy.ts";
 
 type AdminSession = {
   email: string;
@@ -231,7 +232,7 @@ export function AdminLoginForm() {
         <form className="admin-login-card" onSubmit={submitForgotRequest}>
           <div>
             <button type="button" className="admin-back-btn" onClick={() => setForgotMode(false)}>
-              ← Back to Login
+              ΓåÉ Back to Login
             </button>
             <h1>Reset Password</h1>
             <p>Enter your email to receive a reset verification code</p>
@@ -252,7 +253,7 @@ export function AdminLoginForm() {
       <form className="admin-login-card" onSubmit={submitForgotVerify}>
         <div>
           <button type="button" className="admin-back-btn" onClick={() => setForgotStep("request")}>
-            ← Change Email
+            ΓåÉ Change Email
           </button>
           <h1>Reset Password</h1>
           <p>Verify code and set your new password</p>
@@ -540,7 +541,7 @@ export function AdminEmailChangeForm({
           setInfoMessage("");
           setMessage("");
         }}>
-          ← Change Email Address
+          ΓåÉ Change Email Address
         </button>
       ) : null}
       <button type="submit" className="button primary" disabled={busy || !otpSent}>Update Email Address</button>
@@ -1097,7 +1098,7 @@ export function AdminConsole({
           />
         ) : null}
 
-        {active === "Media" ? <MediaManager busy={busy} rows={adminData.media} onUpload={uploadMedia} onDelete={deleteMedia} /> : null}
+        {active === "Media" ? <MediaManager busy={busy} rows={adminData.media} sessionRole={session.role} onUpload={uploadMedia} onDelete={deleteMedia} /> : null}
 
         {active === "Approvals" ? (
           <div style={{ display: "flex", gap: 24, alignItems: "flex-start" }}>
@@ -1919,24 +1920,6 @@ function ImageCropUploader({
     });
   }
 
-  function clampOffsets(imgW: number, imgH: number, offX: number, offY: number, _rot: number, zm: number, canW: number, canH: number) {
-    const baseScale = Math.max(canW / imgW, canH / imgH);
-    const effectiveScale = baseScale * zm;
-    const visibleW = canW / effectiveScale;
-    const visibleH = canH / effectiveScale;
-    const drawnW = imgW * baseScale;
-    const drawnH = imgH * baseScale;
-    const halfDrawW = drawnW / 2;
-    const halfDrawH = drawnH / 2;
-    const minOffX = -(halfDrawW - visibleW / 2);
-    const maxOffX = halfDrawW - visibleW / 2;
-    const minOffY = -(halfDrawH - visibleH / 2);
-    const maxOffY = halfDrawH - visibleH / 2;
-    const clampedX = Math.max(minOffX, Math.min(maxOffX, offX));
-    const clampedY = Math.max(minOffY, Math.min(maxOffY, offY));
-    return { clampedX, clampedY, effectiveScale, drawnW };
-  }
-
   async function generateExport(srcImageSrc: string, offX: number, offY: number, rot: number, zm: number): Promise<{ blob: Blob; width: number }> {
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
       const image = new Image();
@@ -1949,27 +1932,28 @@ function ImageCropUploader({
     const previewSize = 200;
     const srcW = img.naturalWidth;
     const srcH = img.naturalHeight;
-    const srcLongest = Math.max(srcW, srcH);
-    const exportSize = Math.min(maxDim, srcLongest);
 
-    const { clampedX, clampedY, effectiveScale, drawnW } = clampOffsets(srcW, srcH, offX, offY, rot, zm, previewSize, previewSize);
+    const geo = computeCropGeometry(srcW, srcH, rot, zm, previewSize, maxDim);
+    const exportSize = geo.exportSize;
 
-    const scaleToSrc = srcW / (drawnW / effectiveScale);
+    const clampedX = Math.max(geo.minOffX, Math.min(geo.maxOffX, offX));
+    const clampedY = Math.max(geo.minOffY, Math.min(geo.maxOffY, offY));
+
+    const scaleToSrc = srcW / (geo.drawnW / geo.effectiveScale);
     const srcClampedX = clampedX * scaleToSrc;
     const srcClampedY = clampedY * scaleToSrc;
 
     const exportCanvas = document.createElement("canvas");
-    const exportDrawSize = exportSize;
-    exportCanvas.width = exportDrawSize;
-    exportCanvas.height = exportDrawSize;
+    exportCanvas.width = exportSize;
+    exportCanvas.height = exportSize;
     const ctx = exportCanvas.getContext("2d")!;
 
     ctx.fillStyle = "white";
-    ctx.fillRect(0, 0, exportDrawSize, exportDrawSize);
+    ctx.fillRect(0, 0, exportSize, exportSize);
     ctx.save();
-    ctx.translate(exportDrawSize / 2, exportDrawSize / 2);
+    ctx.translate(exportSize / 2, exportSize / 2);
     ctx.rotate((rot * Math.PI) / 180);
-    const baseScale = Math.max(exportDrawSize / srcW, exportDrawSize / srcH);
+    const baseScale = Math.max(exportSize / srcW, exportSize / srcH);
     ctx.scale(zm, zm);
     const dw = srcW * baseScale;
     const dh = srcH * baseScale;
@@ -1977,13 +1961,13 @@ function ImageCropUploader({
     ctx.restore();
 
     const blob = await promisifyToBlob(exportCanvas, "image/webp", 0.95);
-    return { blob, width: exportDrawSize };
+    return { blob, width: exportSize };
   }
 
   async function handleUploadOriginal() {
     if (!originalFile) return;
     setUploading(true);
-    setMessage("Uploading original image…");
+    setMessage("Uploading original imageΓÇª");
     try {
       const formData = new FormData();
       formData.append("file", originalFile);
@@ -2004,7 +1988,7 @@ function ImageCropUploader({
   async function handleCropAndUpload() {
     if (!imageSrc) return;
     setUploading(true);
-    setMessage("Generating crop…");
+    setMessage("Generating cropΓÇª");
     try {
       const { blob, width: cropW } = await generateExport(imageSrc, offsetX, offsetY, rotation, zoom);
       if (blob.size > MAX_CLIENT_BYTES) {
@@ -2012,8 +1996,8 @@ function ImageCropUploader({
         setUploading(false);
         return;
       }
-      setCropInfo(`${cropW}×${cropW} px · ${(blob.size / 1024).toFixed(0)} KB`);
-      setMessage("Uploading cropped image…");
+      setCropInfo(`${cropW}├ù${cropW} px ┬╖ ${(blob.size / 1024).toFixed(0)} KB`);
+      setMessage("Uploading cropped imageΓÇª");
       const file = new File([blob], "doctor-photo.webp", { type: "image/webp" });
       const formData = new FormData();
       formData.append("file", file);
@@ -2189,7 +2173,7 @@ function DoctorManager({
       <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave(form); }}>
         {(source || []).some(d => d && d.slug === form.slug && form.slug) && (
           <div style={{ background: "#e0f2fe", color: "#0369a1", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <span>✏️ Editing doctor profile: <strong>{form.name}</strong></span>
+            <span>Γ£Å∩╕Å Editing doctor profile: <strong>{form.name}</strong></span>
             <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({
               slug: "",
               name: "",
@@ -2274,7 +2258,7 @@ function DoctorManager({
                 <div>
                   <strong>{String(row.name || "")}</strong>
                   <div style={{ fontSize: 12, color: "#64748b" }}>
-                    {String(row.speciality || "")} · {String(row.department_slug || "")} · slug: {String(row.slug || "")}
+                    {String(row.speciality || "")} ┬╖ {String(row.department_slug || "")} ┬╖ slug: {String(row.slug || "")}
                   </div>
                 </div>
                 <button
@@ -2319,7 +2303,7 @@ function BlogForm({
       <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave({ ...form, slug: form.slug || slugify(form.title) }); }}>
         {rows.some(b => b.slug === form.slug && form.slug) && (
           <div style={{ background: "#e0f2fe", color: "#0369a1", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <span>✏️ Editing blog post: <strong>{form.title}</strong></span>
+            <span>Γ£Å∩╕Å Editing blog post: <strong>{form.title}</strong></span>
             <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({ title: "", slug: "", excerpt: "", body: "" })}>
               Create New
             </button>
@@ -2391,7 +2375,7 @@ function CareerForm({
       <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave({ ...form, slug: form.slug || slugify(form.title) }); }}>
         {rows.some(j => j.slug === form.slug && form.slug) && (
           <div style={{ background: "#e0f2fe", color: "#0369a1", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <span>✏️ Editing job listing: <strong>{form.title}</strong></span>
+            <span>Γ£Å∩╕Å Editing job listing: <strong>{form.title}</strong></span>
             <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({ title: "", slug: "", department: "", employmentType: "Full-time", description: "" })}>
               Create New
             </button>
@@ -2464,7 +2448,7 @@ function VideoForm({
       <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave(form); }}>
         {form.id && (
           <div style={{ background: "#e0f2fe", color: "#0369a1", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <span>✏️ Editing video entry: <strong>{form.title}</strong></span>
+            <span>Γ£Å∩╕Å Editing video entry: <strong>{form.title}</strong></span>
             <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({ id: "", title: "", youtubeUrl: "", consentNote: "" })}>
               Create New
             </button>
@@ -2519,11 +2503,13 @@ function VideoForm({
 function MediaManager({
   busy,
   rows,
+  sessionRole,
   onUpload,
   onDelete,
 }: {
   busy: boolean;
   rows: Record<string, string | number | null>[];
+  sessionRole: "SUPER_ADMIN" | "STAFF";
   onUpload: (formData: FormData) => Promise<string>;
   onDelete: (id: string) => Promise<void>;
 }) {
@@ -2541,12 +2527,19 @@ function MediaManager({
       setMessage("Please select a file to upload.");
       return;
     }
+    if (file.size === 0) {
+      setMessage("File is empty. Please select a valid image.");
+      setFile(null);
+      return;
+    }
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
       setMessage("Only JPEG, PNG, and WebP images are supported.");
+      setFile(null);
       return;
     }
     if (file.size > MAX_CLIENT_BYTES) {
       setMessage("Image must be 5 MB or smaller.");
+      setFile(null);
       return;
     }
     setUploading(true);
@@ -2578,7 +2571,7 @@ function MediaManager({
         <label>
           Purpose
           <select value={purpose} onChange={(e) => setPurpose(e.target.value)} style={{ marginTop: 4, width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }}>
-            <option value="gallery">Gallery (Public Photos Grid)</option>
+            {sessionRole === "SUPER_ADMIN" && <option value="gallery">Gallery (Public Photos Grid)</option>}
             <option value="doctor-photo">Doctor Photo</option>
             <option value="admin-upload">General Admin Upload</option>
           </select>
@@ -2588,7 +2581,7 @@ function MediaManager({
           <textarea rows={3} value={consentNote} onChange={(e) => setConsentNote(e.target.value)} placeholder="Explain consent status or asset details" style={{ marginTop: 4, width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }} />
         </label>
         <button className="button primary full" type="submit" disabled={busy || uploading} style={{ marginTop: 8 }}>
-          <Upload size={17} aria-hidden="true" /> {uploading ? "Uploading…" : "Upload Asset"}
+          <Upload size={17} aria-hidden="true" /> {uploading ? "UploadingΓÇª" : "Upload Asset"}
         </button>
         {message ? (
           <p style={{ fontSize: "13px", fontWeight: "600", marginTop: 8, color: message.includes("successfully") ? "green" : "red" }}>
