@@ -14,6 +14,11 @@ import {
   nextRequestId,
 } from "@/app/lib/server";
 import { executeRoleMutation } from "@/app/lib/mutation-result";
+import {
+  archiveDoctor,
+  restoreDoctor,
+  type DoctorRepo,
+} from "@/app/lib/doctor-admin";
 import { departmentBySlug } from "@/app/lib/data";
 import { validateStaffAccountInput } from "@/app/lib/adminAuth";
 import { sendEmail, getStaffOnboardingTemplate } from "@/app/lib/resend";
@@ -26,6 +31,7 @@ async function dashboardData(session: AdminSession) {
     appointments,
     timings,
     doctors,
+    archivedDoctors,
     revisions,
     feedback,
     contacts,
@@ -40,6 +46,7 @@ async function dashboardData(session: AdminSession) {
     query<Record<string, unknown>>("SELECT * FROM appointments ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM department_timings ORDER BY department_name"),
     query("SELECT * FROM doctor_profiles WHERE is_deleted = 0 ORDER BY name"),
+    query("SELECT id, slug, name, speciality, department_slug, is_deleted FROM doctor_profiles WHERE is_deleted = 1 ORDER BY name"),
     query("SELECT * FROM content_revisions ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM feedback ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM contact_messages ORDER BY created_at DESC LIMIT 100"),
@@ -84,6 +91,7 @@ async function dashboardData(session: AdminSession) {
     appointments: rawAppointments,
     timings: timings.results || [],
     doctors: doctors.results || [],
+    archivedDoctors: archivedDoctors.results || [],
     revisions: revisions.results || [],
     feedback: feedback.results || [],
     contacts: contacts.results || [],
@@ -168,7 +176,10 @@ async function applyDoctor(payload: Record<string, unknown>, actorEmail: string)
 
   if (!name || !slug || !speciality || !department) throw new Error("Invalid doctor profile payload.");
 
-  const existing = await query("SELECT id FROM doctor_profiles WHERE slug = ? LIMIT 1", slug);
+  const existing = await query("SELECT id, is_deleted FROM doctor_profiles WHERE slug = ? LIMIT 1", slug);
+  if (existing.results?.length && Number(existing.results[0].is_deleted) === 1) {
+    throw new Error("Doctor profile is archived. Restore it before editing.");
+  }
   const result = await run(
     `INSERT INTO doctor_profiles
       (id, slug, name, speciality, qualification, department_slug, photo_url, profile_note, consent_status, status, is_visible, approved_by, blocked_dates, updated_at)
@@ -432,6 +443,7 @@ async function applyAction(action: string, payload: Record<string, unknown>, act
   if (action === "closure.add") return applyAddClosure(payload, actorEmail);
   if (action === "closure.delete") return applyDeleteClosure(payload, actorEmail);
   if (action === "doctor.delete") return applyDeleteDoctor(payload, actorEmail);
+  if (action === "doctor.restore") return applyRestoreDoctor(payload, actorEmail);
   if (action === "blog.delete") return applyDeleteBlog(payload, actorEmail);
   if (action === "career.delete") return applyDeleteCareer(payload, actorEmail);
   if (action === "video.delete") return applyDeleteVideo(payload, actorEmail);
@@ -759,6 +771,8 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
   } else if (action === "video.save") {
     if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Video title is required." };
     if (typeof obj.youtubeUrl !== "string" || !obj.youtubeUrl.trim()) return { ok: false, error: "YouTube URL is required." };
+  } else if (action === "doctor.restore") {
+    if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Doctor slug is required." };
   }
   return { ok: true };
 }
@@ -837,11 +851,15 @@ async function applyDeleteClosure(payload: Record<string, unknown>, actorEmail: 
 async function applyDeleteDoctor(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 120);
   if (!slug) throw new Error("Doctor slug is required.");
-  const existing = await query("SELECT id FROM doctor_profiles WHERE slug = ? AND is_deleted = 0 LIMIT 1", slug);
-  const result = await run("UPDATE doctor_profiles SET is_deleted = 1 WHERE slug = ? AND is_deleted = 0", slug);
-  requireAppliedMutation(result, Boolean(existing.results?.length), "Doctor profile");
-  await audit(actorEmail, "DOCTOR_DELETED", "DoctorProfile", slug, `Soft deleted doctor profile with slug: ${slug}`);
-  return { outcome: "APPLIED" as const };
+  const repo: DoctorRepo = { query, run, audit };
+  return archiveDoctor(repo, slug, actorEmail);
+}
+
+async function applyRestoreDoctor(payload: Record<string, unknown>, actorEmail: string) {
+  const slug = clean(payload.slug, 120);
+  if (!slug) throw new Error("Doctor slug is required.");
+  const repo: DoctorRepo = { query, run, audit };
+  return restoreDoctor(repo, slug, actorEmail);
 }
 
 async function applyDeleteBlog(payload: Record<string, unknown>, actorEmail: string) {

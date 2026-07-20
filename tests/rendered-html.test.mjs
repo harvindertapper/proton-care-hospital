@@ -27,7 +27,8 @@ const mockedDataRouteContent = dataRouteContent
   .replace('from "@/app/lib/data";', 'from "../app/lib/data.ts";')
   .replace('from "@/app/lib/adminAuth";', 'from "../app/lib/adminAuth.ts";')
   .replace('from "@/app/lib/resend";', 'from "../app/lib/resend.ts";')
-  .replace('from "@/app/lib/utils";', 'from "../app/lib/utils.ts";');
+  .replace('from "@/app/lib/utils";', 'from "../app/lib/utils.ts";')
+  .replace('from "@/app/lib/doctor-admin";', 'from "../app/lib/doctor-admin.ts";');
 await writeFile(new URL("./data-route-real-mocked.ts", import.meta.url), mockedDataRouteContent, "utf8");
 
 // Import the dynamically generated production-logic routes

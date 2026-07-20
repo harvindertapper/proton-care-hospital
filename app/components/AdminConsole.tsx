@@ -30,6 +30,7 @@ type AdminData = {
   appointments: Record<string, string | number | null>[];
   timings: Record<string, string | number | null>[];
   doctors: Record<string, string | number | null>[];
+  archivedDoctors: Record<string, string | number | null>[];
   revisions: Record<string, string | number | null>[];
   feedback: Record<string, string | number | null>[];
   contacts: Record<string, string | number | null>[];
@@ -1084,11 +1085,13 @@ export function AdminConsole({
         {active === "Doctors" ? (
           <DoctorManager
             rows={adminData.doctors}
+            archivedRows={adminData.archivedDoctors}
             departments={departments}
             staticDoctors={staticDoctors}
             busy={busy}
-            onSave={(payload) => mutate({ action: "doctor.save", payload }, "Doctor profile saved or sent for approval.")}
-            onDelete={(slug) => mutate({ action: "doctor.delete", slug }, "Doctor deleted successfully.")}
+            onSave={(payload) => mutate({ action: "doctor.save", payload }, "Doctor profile saved.")}
+            onArchive={(slug) => mutate({ action: "doctor.delete", slug }, "Doctor archived.")}
+            onRestore={(slug) => mutate({ action: "doctor.restore", payload: { slug } }, "Doctor restored as hidden. Review and publish it explicitly.")}
             onUpload={uploadMedia}
           />
         ) : null}
@@ -2065,19 +2068,23 @@ function ImageCropUploader({
 
 function DoctorManager({
   rows,
+  archivedRows,
   departments,
   staticDoctors: _staticDoctors,
   busy,
   onSave,
-  onDelete,
+  onArchive,
+  onRestore,
   onUpload,
 }: {
   rows: Record<string, string | number | null>[];
+  archivedRows: Record<string, string | number | null>[];
   departments: Department[];
   staticDoctors: Doctor[];
   busy: boolean;
   onSave: (payload: Record<string, unknown>) => void;
-  onDelete?: (slug: string) => void;
+  onArchive?: (slug: string) => void;
+  onRestore?: (slug: string) => void;
   onUpload?: (formData: FormData) => Promise<string>;
 }) {
   const source = resolveDoctorManagerRows(rows);
@@ -2173,21 +2180,55 @@ function DoctorManager({
               style={{ background: "#e11d48", color: "white" }}
               disabled={busy}
               onClick={() => {
-                if (window.confirm(`Are you sure you want to delete ${form.name}?`)) {
-                  onDelete?.(form.slug);
+                if (window.confirm(`Are you sure you want to archive ${form.name}? Archived doctors are hidden from the public site and can be restored later.`)) {
+                  onArchive?.(form.slug);
                 }
               }}
             >
-              Delete Doctor
+              Archive Doctor
             </button>
           )}
         </div>
       </form>
-      <DataTable 
-        rows={rows || []} 
-        columns={["name", "speciality", "qualification", "department_slug", "status", "is_visible", "blocked_dates"]} 
+      <DataTable
+        rows={rows || []}
+        columns={["name", "speciality", "qualification", "department_slug", "status", "is_visible", "blocked_dates"]}
         onRowClick={(row) => choose(row ? String(row.slug || "") : "")}
       />
+      <section style={{ marginTop: 28 }}>
+        <h3 style={{ fontSize: 18, marginBottom: 12 }}>Archived Doctors</h3>
+        {archivedRows && archivedRows.length ? (
+          <div className="directory-stack">
+            {archivedRows.map((row) => (
+              <div
+                key={String(row.slug || "")}
+                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 14px", border: "1px solid #e2e8f0", borderRadius: 8, background: "#fff7f7" }}
+              >
+                <div>
+                  <strong>{String(row.name || "")}</strong>
+                  <div style={{ fontSize: 12, color: "#64748b" }}>
+                    {String(row.speciality || "")} · {String(row.department_slug || "")} · slug: {String(row.slug || "")}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="button secondary small"
+                  disabled={busy}
+                  onClick={() => {
+                    if (window.confirm(`Restore ${String(row.name || "")}? It will return as hidden for review, not published.`)) {
+                      onRestore?.(String(row.slug || ""));
+                    }
+                  }}
+                >
+                  Restore
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="empty-state">No archived doctors.</p>
+        )}
+      </section>
     </div>
   );
 }

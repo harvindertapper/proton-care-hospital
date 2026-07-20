@@ -318,7 +318,7 @@ test("media metadata zero-row failure returns FAILED and does not audit", async 
   assert.equal(audits, 0);
 });
 
-test("structural guard: affected-row proof precedes success audits in scoped mutations", () => {
+test("structural guard: affected-row proof precedes success audits in scoped mutations", async () => {
   const functionNames = [
     "applyDoctor",
     "applyFeedbackVisibility",
@@ -332,14 +332,30 @@ test("structural guard: affected-row proof precedes success audits in scoped mut
     "applyDeleteVideo",
   ];
 
+  const delegated = new Set(["applyDeleteDoctor", "applyRestoreDoctor"]);
   for (const functionName of functionNames) {
     const start = adminRoute.indexOf(`async function ${functionName}`);
     const next = adminRoute.indexOf("\nasync function ", start + 1);
-    const block = adminRoute.slice(start, next === -1 ? undefined : next);
+    let block = adminRoute.slice(start, next === -1 ? undefined : next);
     const proof = block.indexOf("requireAppliedMutation");
     const successAudit = block.indexOf("await audit");
     assert.ok(start >= 0, `${functionName} must exist`);
+    if (delegated.has(functionName)) {
+      // These delegate the affected-row proof + audit to doctor-admin helpers.
+      assert.ok(block.indexOf("archiveDoctor") >= 0 || block.indexOf("restoreDoctor") >= 0,
+        `${functionName} must delegate to the archive/restore helper`);
+      continue;
+    }
     assert.ok(proof >= 0, `${functionName} must verify affected rows`);
     assert.ok(successAudit > proof, `${functionName} must audit only after affected-row proof`);
   }
+
+  // applyDeleteDoctor delegates the affected-row proof + audit to archiveDoctor
+  // (defined in doctor-admin.ts). Verify the guarantees live there.
+  const doctorAdmin = await readFile(new URL("../app/lib/doctor-admin.ts", import.meta.url), "utf8");
+  const archiveStart = doctorAdmin.indexOf("async function archiveDoctor");
+  const archiveBlock = doctorAdmin.slice(archiveStart);
+  assert.ok(archiveStart >= 0, "archiveDoctor must exist");
+  assert.ok(archiveBlock.indexOf("requireAppliedMutation") < archiveBlock.indexOf("DOCTOR_ARCHIVED"),
+    "archiveDoctor must verify affected rows before auditing");
 });
