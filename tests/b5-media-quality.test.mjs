@@ -8,7 +8,7 @@ import {
   ALLOWED_PURPOSES,
   detectSignature,
   validateMediaUpload,
-  computeCropGeometry,
+  computeCropPlan,
 } from "../app/lib/media-policy.ts";
 
 const [mediaPolicy, adminMediaRoute, galleryRoute, mediaGateway, consoleSource, galleryClient, serverSource] =
@@ -235,20 +235,20 @@ test("21. Export does not use the 200x200 preview pixels", () => {
   assert.doesNotMatch(consoleSource, /canvasRef\.current\.toBlob/);
 });
 
-test("22. Export uses computeCropGeometry for no-upscaling (structural)", () => {
-  assert.match(consoleSource, /computeCropGeometry/);
-  assert.match(consoleSource, /geo\.exportSize/);
+test("22. Export uses computeCropPlan for no-upscaling (structural)", () => {
+  assert.match(consoleSource, /computeCropPlan/);
+  assert.match(consoleSource, /sizePlan\.exportSize|exportPlan\.exportSize/);
   assert.doesNotMatch(consoleSource, /srcLongest/);
 });
 
-test("23. Preview/export crop geometry uses computeCropGeometry (structural)", () => {
-  assert.match(consoleSource, /computeCropGeometry/);
-  assert.match(consoleSource, /srcClampedX|srcClampedY/);
+test("23. Preview/export crop geometry uses computeCropPlan (structural)", () => {
+  assert.match(consoleSource, /computeCropPlan/);
+  assert.match(consoleSource, /screenPanX|screenPanY/);
 });
 
 test("24. Movement cannot expose blank borders (structural)", () => {
-  assert.match(consoleSource, /minOffX|maxOffX|clampedX/);
-  assert.match(consoleSource, /minOffY|maxOffY|clampedY/);
+  assert.match(consoleSource, /screenPanX|maxPanX/);
+  assert.match(consoleSource, /screenPanY|maxPanY/);
 });
 
 test("25. Upload Original sends the original File", () => {
@@ -728,67 +728,62 @@ test("delete guard uses exact match, not LIKE (structural)", () => {
   assert.match(adminMediaRoute, /exactUrl/);
 });
 
-test("computeCropGeometry: 600x4000 portrait zoom 1 -> export <= 600", () => {
-  const geo = computeCropGeometry(600, 4000, 0, 1, 200, 1200);
+test("computeCropPlan: 600x4000 portrait zoom 1 -> export <= 600", () => {
+  const geo = computeCropPlan({ sourceWidth: 600, sourceHeight: 4000, rotation: 0, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
   assert.ok(geo.exportSize <= 600, `Expected exportSize <= 600, got ${geo.exportSize}`);
 });
 
-test("computeCropGeometry: 4000x600 landscape zoom 1 -> export <= 600", () => {
-  const geo = computeCropGeometry(4000, 600, 0, 1, 200, 1200);
+test("computeCropPlan: 4000x600 landscape zoom 1 -> export <= 600", () => {
+  const geo = computeCropPlan({ sourceWidth: 4000, sourceHeight: 600, rotation: 0, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
   assert.ok(geo.exportSize <= 600, `Expected exportSize <= 600, got ${geo.exportSize}`);
 });
 
-test("computeCropGeometry: 2000x2000 square zoom 1 -> export 1200", () => {
-  const geo = computeCropGeometry(2000, 2000, 0, 1, 200, 1200);
+test("computeCropPlan: 2000x2000 square zoom 1 -> export 1200", () => {
+  const geo = computeCropPlan({ sourceWidth: 2000, sourceHeight: 2000, rotation: 0, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
   assert.equal(geo.exportSize, 1200);
 });
 
-test("computeCropGeometry: 600x4000 rotated 90 -> effective swapped dimensions", () => {
-  const geo = computeCropGeometry(600, 4000, 90, 1, 200, 1200);
-  assert.equal(geo.effectiveW, 4000);
-  assert.equal(geo.effectiveH, 600);
+test("computeCropPlan: 600x4000 rotated 90 -> effective swapped dimensions", () => {
+  const geo = computeCropPlan({ sourceWidth: 600, sourceHeight: 4000, rotation: 90, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
+  assert.equal(geo.rotatedW, 4000);
+  assert.equal(geo.rotatedH, 600);
   assert.ok(geo.exportSize <= 600, `Expected exportSize <= 600, got ${geo.exportSize}`);
 });
 
-test("computeCropGeometry: 600x4000 rotated 270 -> effective swapped", () => {
-  const geo = computeCropGeometry(600, 4000, 270, 1, 200, 1200);
-  assert.equal(geo.effectiveW, 4000);
-  assert.equal(geo.effectiveH, 600);
+test("computeCropPlan: 600x4000 rotated 270 -> effective swapped", () => {
+  const geo = computeCropPlan({ sourceWidth: 600, sourceHeight: 4000, rotation: 270, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
+  assert.equal(geo.rotatedW, 4000);
+  assert.equal(geo.rotatedH, 600);
 });
 
-test("computeCropGeometry: 600x4000 rotation 180 -> effective unchanged", () => {
-  const geo = computeCropGeometry(600, 4000, 180, 1, 200, 1200);
-  assert.equal(geo.effectiveW, 600);
-  assert.equal(geo.effectiveH, 4000);
+test("computeCropPlan: 600x4000 rotation 180 -> effective unchanged", () => {
+  const geo = computeCropPlan({ sourceWidth: 600, sourceHeight: 4000, rotation: 180, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
+  assert.equal(geo.rotatedW, 600);
+  assert.equal(geo.rotatedH, 4000);
 });
 
-test("computeCropGeometry: 800 source crop -> export 800 not 1200", () => {
-  const geo = computeCropGeometry(800, 800, 0, 1, 200, 1200);
+test("computeCropPlan: 800 source crop -> export 800 not 1200", () => {
+  const geo = computeCropPlan({ sourceWidth: 800, sourceHeight: 800, rotation: 0, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
   assert.equal(geo.exportSize, 800);
 });
 
-test("computeCropGeometry: 300x3000 zoom 2 -> smaller export", () => {
-  const geo1 = computeCropGeometry(300, 3000, 0, 1, 200, 1200);
-  const geo2 = computeCropGeometry(300, 3000, 0, 2, 200, 1200);
+test("computeCropPlan: 300x3000 zoom 2 -> smaller export", () => {
+  const geo1 = computeCropPlan({ sourceWidth: 300, sourceHeight: 3000, rotation: 0, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
+  const geo2 = computeCropPlan({ sourceWidth: 300, sourceHeight: 3000, rotation: 0, zoom: 2, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
   assert.ok(geo2.exportSize < geo1.exportSize, `Zoom 2 export (${geo2.exportSize}) < zoom 1 export (${geo1.exportSize})`);
 });
 
-test("computeCropGeometry: extreme offsets clamped", () => {
-  const geo = computeCropGeometry(3000, 2000, 0, 1, 200, 1200);
-  assert.ok(Number.isFinite(geo.minOffX));
-  assert.ok(Number.isFinite(geo.maxOffX));
-  assert.ok(Number.isFinite(geo.minOffY));
-  assert.ok(Number.isFinite(geo.maxOffY));
-  assert.ok(geo.minOffX <= 0);
-  assert.ok(geo.maxOffX >= 0);
-  assert.ok(geo.minOffY <= 0);
-  assert.ok(geo.maxOffY >= 0);
+test("computeCropPlan: extreme pan clamped", () => {
+  const geo = computeCropPlan({ sourceWidth: 3000, sourceHeight: 2000, rotation: 0, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
+  assert.ok(Number.isFinite(geo.maxPanX));
+  assert.ok(Number.isFinite(geo.maxPanY));
+  assert.ok(geo.maxPanX >= 0);
+  assert.ok(geo.maxPanY >= 0);
 });
 
-test("computeCropGeometry: no upscaling (export <= visible)", () => {
-  const geo = computeCropGeometry(600, 4000, 0, 1, 200, 1200);
-  const visibleMin = Math.min(geo.visibleW, geo.visibleH);
-  assert.ok(geo.exportSize <= Math.floor(visibleMin) + 1, `exportSize ${geo.exportSize} <= visible ${visibleMin}`);
+test("computeCropPlan: no upscaling (export <= visible)", () => {
+  const geo = computeCropPlan({ sourceWidth: 600, sourceHeight: 4000, rotation: 0, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
+  assert.ok(geo.exportSize <= Math.floor(Math.min(geo.rotatedW, geo.rotatedH)) + 1, `exportSize ${geo.exportSize} <= min(rotated) ${Math.min(geo.rotatedW, geo.rotatedH)}`);
 });
 
 test("compensation success: incomplete object removed message (structural)", () => {
@@ -827,4 +822,115 @@ test("MediaManager hides Gallery option for Staff (structural)", () => {
 test("MediaManager passes sessionRole prop (structural)", () => {
   assert.match(consoleSource, /sessionRole:/);
   assert.match(consoleSource, /sessionRole={session\.role}/);
+});
+
+test("computeCropPlan: rotation 0 horizontal pan stays horizontal", () => {
+  const geo = computeCropPlan({ sourceWidth: 2000, sourceHeight: 2000, rotation: 0, zoom: 2, panX: 0.5, panY: 0, outputSize: 200, maxExportSize: 1200 });
+  assert.ok(geo.screenPanX > 0, "screenPanX should be positive for panX=0.5");
+  assert.equal(geo.screenPanY, 0, "screenPanY should be zero when panY=0");
+});
+
+test("computeCropPlan: rotation 90 horizontal pan stays horizontal", () => {
+  const geo = computeCropPlan({ sourceWidth: 2000, sourceHeight: 2000, rotation: 90, zoom: 2, panX: 0.5, panY: 0, outputSize: 200, maxExportSize: 1200 });
+  assert.ok(geo.screenPanX > 0, "screenPanX should be positive for panX=0.5 at rot 90");
+  assert.equal(geo.screenPanY, 0, "screenPanY should be zero when panY=0");
+});
+
+test("computeCropPlan: rotation 270 vertical pan stays vertical", () => {
+  const geo = computeCropPlan({ sourceWidth: 2000, sourceHeight: 2000, rotation: 270, zoom: 2, panX: 0, panY: 0.5, outputSize: 200, maxExportSize: 1200 });
+  assert.equal(geo.screenPanX, 0, "screenPanX should be zero when panX=0");
+  assert.ok(geo.screenPanY > 0, "screenPanY should be positive for panY=0.5 at rot 270");
+});
+
+test("computeCropPlan: extreme normalized pan is clamped to maxPan", () => {
+  const geo = computeCropPlan({ sourceWidth: 3000, sourceHeight: 2000, rotation: 0, zoom: 1, panX: 5, panY: -5, outputSize: 200, maxExportSize: 1200 });
+  assert.ok(geo.screenPanX <= geo.maxPanX + 0.001, `screenPanX ${geo.screenPanX} <= maxPanX ${geo.maxPanX}`);
+  assert.ok(geo.screenPanX >= -geo.maxPanX - 0.001);
+  assert.ok(Math.abs(geo.screenPanX) > 0, "clamped pan should be nonzero for large input");
+});
+
+test("computeCropPlan: no blank edge (drawn >= output)", () => {
+  for (const rot of [0, 90, 180, 270]) {
+    const geo = computeCropPlan({ sourceWidth: 2000, sourceHeight: 1000, rotation: rot, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
+    assert.ok(geo.drawnScreenW >= 200, `rot=${rot}: drawnScreenW ${geo.drawnScreenW} >= 200`);
+    assert.ok(geo.drawnScreenH >= 200, `rot=${rot}: drawnScreenH ${geo.drawnScreenH} >= 200`);
+  }
+});
+
+test("computeCropPlan: same normalized pan yields proportional screenPan across outputSizes", () => {
+  const panX = 0.7;
+  const panY = -0.3;
+  const small = computeCropPlan({ sourceWidth: 2000, sourceHeight: 2000, rotation: 0, zoom: 2, panX, panY, outputSize: 200, maxExportSize: 1200 });
+  const large = computeCropPlan({ sourceWidth: 2000, sourceHeight: 2000, rotation: 0, zoom: 2, panX, panY, outputSize: 1200, maxExportSize: 1200 });
+  assert.ok(small.screenPanX > 0, "small screenPanX > 0");
+  assert.ok(small.screenPanY !== 0, "small screenPanY != 0");
+  const ratioX = large.screenPanX / small.screenPanX;
+  const ratioY = large.screenPanY / small.screenPanY;
+  assert.ok(Math.abs(ratioX - 6) < 0.01, `X pan ratio ${ratioX} ~ 6`);
+  assert.ok(Math.abs(ratioY - 6) < 0.01, `Y pan ratio ${ratioY} ~ 6`);
+});
+
+test("computeCropPlan: all rotations produce same visibleSourceSide for square crop", () => {
+  const srcW = 600;
+  const srcH = 4000;
+  const zoom = 1;
+  const sizes = [];
+  for (const rot of [0, 90, 180, 270]) {
+    const geo = computeCropPlan({ sourceWidth: srcW, sourceHeight: srcH, rotation: rot, zoom, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
+    sizes.push(geo.exportSize);
+  }
+  assert.ok(sizes.every((s) => s === sizes[0]), `All rotations produce same exportSize: ${JSON.stringify(sizes)}`);
+});
+
+test("computeCropPlan: no-upscaling 600x4000 rot 0 zoom 1 -> export <= 600", () => {
+  const geo = computeCropPlan({ sourceWidth: 600, sourceHeight: 4000, rotation: 0, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
+  assert.ok(geo.exportSize <= 600);
+});
+
+test("computeCropPlan: no-upscaling 600x4000 rot 90 zoom 1 -> export <= 600", () => {
+  const geo = computeCropPlan({ sourceWidth: 600, sourceHeight: 4000, rotation: 90, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
+  assert.ok(geo.exportSize <= 600);
+});
+
+test("computeCropPlan: no-upscaling 4000x600 rot 270 zoom 1 -> export <= 600", () => {
+  const geo = computeCropPlan({ sourceWidth: 4000, sourceHeight: 600, rotation: 270, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
+  assert.ok(geo.exportSize <= 600);
+});
+
+test("computeCropPlan: no-upscaling 800x800 zoom 1 -> export <= 800", () => {
+  const geo = computeCropPlan({ sourceWidth: 800, sourceHeight: 800, rotation: 0, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
+  assert.ok(geo.exportSize <= 800);
+});
+
+test("computeCropPlan: no-upscaling 2400x2400 zoom 1 -> export <= 1200", () => {
+  const geo = computeCropPlan({ sourceWidth: 2400, sourceHeight: 2400, rotation: 0, zoom: 1, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
+  assert.ok(geo.exportSize <= 1200);
+});
+
+test("computeCropPlan: no-upscaling 2400x2400 zoom 2 -> export <= 1200", () => {
+  const geo = computeCropPlan({ sourceWidth: 2400, sourceHeight: 2400, rotation: 0, zoom: 2, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
+  assert.ok(geo.exportSize <= 1200);
+});
+
+test("computeCropPlan: no-upscaling 800x800 zoom 2 -> export <= 400", () => {
+  const geo = computeCropPlan({ sourceWidth: 800, sourceHeight: 800, rotation: 0, zoom: 2, panX: 0, panY: 0, outputSize: 200, maxExportSize: 1200 });
+  assert.ok(geo.exportSize <= 400, `Expected <= 400, got ${geo.exportSize}`);
+});
+
+test("MediaManager: Staff purpose defaults to admin-upload, not gallery (structural)", () => {
+  assert.match(consoleSource, /sessionRole === "STAFF" \? "admin-upload" : "gallery"/);
+});
+
+test("MediaManager: effectivePurpose normalizes gallery to admin-upload for Staff (structural)", () => {
+  const mmIdx = consoleSource.indexOf("function MediaManager");
+  const mmBlock = consoleSource.slice(mmIdx, mmIdx + 1500);
+  assert.match(mmBlock, /sessionRole === "STAFF" && purpose === "gallery" \? "admin-upload" : purpose/);
+  assert.match(mmBlock, /effectivePurpose/);
+});
+
+test("Doctor uploader: zero-byte file rejected before FileReader (structural)", () => {
+  const cropIdx = consoleSource.indexOf("function onFileChange");
+  const cropBlock = consoleSource.slice(cropIdx, cropIdx + 600);
+  assert.match(cropBlock, /file\.size === 0/);
+  assert.match(cropBlock, /File is empty/);
 });

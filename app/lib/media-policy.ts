@@ -80,53 +80,50 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function computeCropGeometry(
-  srcW: number,
-  srcH: number,
-  rot: number,
-  zm: number,
-  canvasSize: number,
-  maxExport: number,
-) {
-  const isSwapped = rot === 90 || rot === 270;
-  const effectiveW = isSwapped ? srcH : srcW;
-  const effectiveH = isSwapped ? srcW : srcH;
+export function computeCropPlan(input: {
+  sourceWidth: number;
+  sourceHeight: number;
+  rotation: number;
+  zoom: number;
+  panX: number;
+  panY: number;
+  outputSize: number;
+  maxExportSize: number;
+}) {
+  const normRot = ((input.rotation % 360) + 360) % 360;
+  const isSwapped = normRot === 90 || normRot === 270;
+  const rotatedW = isSwapped ? input.sourceHeight : input.sourceWidth;
+  const rotatedH = isSwapped ? input.sourceWidth : input.sourceHeight;
 
-  const baseScale = Math.max(canvasSize / effectiveW, canvasSize / effectiveH);
-  const effectiveScale = baseScale * zm;
+  const coverScale = Math.max(input.outputSize / input.sourceWidth, input.outputSize / input.sourceHeight) * input.zoom;
 
-  const drawnW = effectiveW * baseScale;
-  const drawnH = effectiveH * baseScale;
+  const dw = input.sourceWidth * coverScale;
+  const dh = input.sourceHeight * coverScale;
 
-  const halfW = drawnW / 2;
-  const halfH = drawnH / 2;
+  const drawnScreenW = isSwapped ? dh : dw;
+  const drawnScreenH = isSwapped ? dw : dh;
 
-  const visibleW = canvasSize / effectiveScale;
-  const visibleH = canvasSize / effectiveScale;
+  const maxPanX = Math.max(0, (drawnScreenW - input.outputSize) / 2);
+  const maxPanY = Math.max(0, (drawnScreenH - input.outputSize) / 2);
 
-  const minOffX = Math.min(0, -(halfW - visibleW / 2));
-  const maxOffX = Math.max(0, halfW - visibleW / 2);
-  const minOffY = Math.min(0, -(halfH - visibleH / 2));
-  const maxOffY = Math.max(0, halfH - visibleH / 2);
+  const clampedPanX = Math.max(-1, Math.min(1, input.panX));
+  const clampedPanY = Math.max(-1, Math.min(1, input.panY));
+  const screenPanX = clampedPanX * maxPanX;
+  const screenPanY = clampedPanY * maxPanY;
 
-  const visibleSize = Math.min(visibleW, visibleH);
-  const exportSize = Math.min(maxExport, Math.floor(visibleSize));
+  const visibleSourceSide = Math.min(rotatedW, rotatedH) / input.zoom;
+  const exportSize = Math.min(input.maxExportSize, Math.floor(visibleSourceSide));
 
   return {
-    effectiveW,
-    effectiveH,
-    baseScale,
-    effectiveScale,
-    drawnW,
-    drawnH,
-    halfW,
-    halfH,
-    visibleW,
-    visibleH,
-    minOffX,
-    maxOffX,
-    minOffY,
-    maxOffY,
+    screenPanX,
+    screenPanY,
+    maxPanX,
+    maxPanY,
+    drawnScreenW,
+    drawnScreenH,
+    coverScale,
     exportSize,
+    rotatedW,
+    rotatedH,
   };
 }

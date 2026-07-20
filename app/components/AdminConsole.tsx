@@ -17,7 +17,7 @@ import {
 import type { Department, Doctor } from "@/app/lib/data";
 import { slugify } from "@/app/lib/utils";
 import { resolveDoctorManagerRows } from "@/app/lib/doctor-admin.ts";
-import { computeCropGeometry } from "@/app/lib/media-policy.ts";
+import { computeCropPlan } from "@/app/lib/media-policy.ts";
 
 type AdminSession = {
   email: string;
@@ -1869,6 +1869,10 @@ function ImageCropUploader({
         setMessage("Only JPEG, PNG, and WebP images are supported.");
         return;
       }
+      if (file.size === 0) {
+        setMessage("File is empty.");
+        return;
+      }
       if (file.size > MAX_CLIENT_BYTES) {
         setMessage("Image must be 5 MB or smaller.");
         return;
@@ -1898,15 +1902,27 @@ function ImageCropUploader({
     const img = new Image();
     img.src = imageSrc;
     img.onload = () => {
+      const panX = offsetX / 100;
+      const panY = offsetY / 100;
+      const plan = computeCropPlan({
+        sourceWidth: img.width,
+        sourceHeight: img.height,
+        rotation,
+        zoom,
+        panX,
+        panY,
+        outputSize: canvas.width,
+        maxExportSize: 1200,
+      });
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.save();
-      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.translate(canvas.width / 2 + plan.screenPanX, canvas.height / 2 + plan.screenPanY);
       ctx.rotate((rotation * Math.PI) / 180);
       ctx.scale(zoom, zoom);
-      const scale = Math.max(canvas.width / img.width, canvas.height / img.height);
-      const iw = img.width * scale;
-      const ih = img.height * scale;
-      ctx.drawImage(img, -iw / 2 + offsetX, -ih / 2 + offsetY, iw, ih);
+      const baseScale = Math.max(canvas.width / img.width, canvas.height / img.height);
+      const iw = img.width * baseScale;
+      const ih = img.height * baseScale;
+      ctx.drawImage(img, -iw / 2, -ih / 2, iw, ih);
       ctx.restore();
     };
   }, [imageSrc, zoom, offsetX, offsetY, rotation]);
@@ -1932,16 +1948,12 @@ function ImageCropUploader({
     const previewSize = 200;
     const srcW = img.naturalWidth;
     const srcH = img.naturalHeight;
+    const panX = offX / 100;
+    const panY = offY / 100;
 
-    const geo = computeCropGeometry(srcW, srcH, rot, zm, previewSize, maxDim);
-    const exportSize = geo.exportSize;
-
-    const clampedX = Math.max(geo.minOffX, Math.min(geo.maxOffX, offX));
-    const clampedY = Math.max(geo.minOffY, Math.min(geo.maxOffY, offY));
-
-    const scaleToSrc = srcW / (geo.drawnW / geo.effectiveScale);
-    const srcClampedX = clampedX * scaleToSrc;
-    const srcClampedY = clampedY * scaleToSrc;
+    const sizePlan = computeCropPlan({ sourceWidth: srcW, sourceHeight: srcH, rotation: rot, zoom: zm, panX, panY, outputSize: previewSize, maxExportSize: maxDim });
+    const exportSize = sizePlan.exportSize;
+    const exportPlan = computeCropPlan({ sourceWidth: srcW, sourceHeight: srcH, rotation: rot, zoom: zm, panX, panY, outputSize: exportSize, maxExportSize: maxDim });
 
     const exportCanvas = document.createElement("canvas");
     exportCanvas.width = exportSize;
@@ -1951,13 +1963,13 @@ function ImageCropUploader({
     ctx.fillStyle = "white";
     ctx.fillRect(0, 0, exportSize, exportSize);
     ctx.save();
-    ctx.translate(exportSize / 2, exportSize / 2);
+    ctx.translate(exportSize / 2 + exportPlan.screenPanX, exportSize / 2 + exportPlan.screenPanY);
     ctx.rotate((rot * Math.PI) / 180);
     const baseScale = Math.max(exportSize / srcW, exportSize / srcH);
     ctx.scale(zm, zm);
     const dw = srcW * baseScale;
     const dh = srcH * baseScale;
-    ctx.drawImage(img, -dw / 2 + srcClampedX, -dh / 2 + srcClampedY, dw, dh);
+    ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
     ctx.restore();
 
     const blob = await promisifyToBlob(exportCanvas, "image/webp", 0.95);
@@ -1967,7 +1979,7 @@ function ImageCropUploader({
   async function handleUploadOriginal() {
     if (!originalFile) return;
     setUploading(true);
-    setMessage("Uploading original imageΓÇª");
+    setMessage("Uploading original image...");
     try {
       const formData = new FormData();
       formData.append("file", originalFile);
@@ -1988,7 +2000,7 @@ function ImageCropUploader({
   async function handleCropAndUpload() {
     if (!imageSrc) return;
     setUploading(true);
-    setMessage("Generating cropΓÇª");
+    setMessage("Generating crop...");
     try {
       const { blob, width: cropW } = await generateExport(imageSrc, offsetX, offsetY, rotation, zoom);
       if (blob.size > MAX_CLIENT_BYTES) {
@@ -1996,8 +2008,8 @@ function ImageCropUploader({
         setUploading(false);
         return;
       }
-      setCropInfo(`${cropW}├ù${cropW} px ┬╖ ${(blob.size / 1024).toFixed(0)} KB`);
-      setMessage("Uploading cropped imageΓÇª");
+      setCropInfo(`${cropW}x${cropW} px - ${(blob.size / 1024).toFixed(0)} KB`);
+      setMessage("Uploading cropped image...");
       const file = new File([blob], "doctor-photo.webp", { type: "image/webp" });
       const formData = new FormData();
       formData.append("file", file);
@@ -2514,12 +2526,14 @@ function MediaManager({
   onDelete: (id: string) => Promise<void>;
 }) {
   const [file, setFile] = useState<File | null>(null);
-  const [purpose, setPurpose] = useState("gallery");
+  const [purpose, setPurpose] = useState(sessionRole === "STAFF" ? "admin-upload" : "gallery");
   const [consentNote, setConsentNote] = useState("");
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState("");
 
   const [selectedPurposeFilter, setSelectedPurposeFilter] = useState("ALL");
+
+  const effectivePurpose = sessionRole === "STAFF" && purpose === "gallery" ? "admin-upload" : purpose;
 
   async function handleUpload(e: React.FormEvent) {
     e.preventDefault();
@@ -2547,7 +2561,7 @@ function MediaManager({
     try {
       const formData = new FormData();
       formData.append("file", file);
-      formData.append("purpose", purpose);
+      formData.append("purpose", effectivePurpose);
       formData.append("consentNote", consentNote);
       await onUpload(formData);
       setMessage("Media uploaded successfully!");
@@ -2581,7 +2595,7 @@ function MediaManager({
           <textarea rows={3} value={consentNote} onChange={(e) => setConsentNote(e.target.value)} placeholder="Explain consent status or asset details" style={{ marginTop: 4, width: "100%", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6 }} />
         </label>
         <button className="button primary full" type="submit" disabled={busy || uploading} style={{ marginTop: 8 }}>
-          <Upload size={17} aria-hidden="true" /> {uploading ? "UploadingΓÇª" : "Upload Asset"}
+          <Upload size={17} aria-hidden="true" /> {uploading ? "Uploading..." : "Upload Asset"}
         </button>
         {message ? (
           <p style={{ fontSize: "13px", fontWeight: "600", marginTop: 8, color: message.includes("successfully") ? "green" : "red" }}>
