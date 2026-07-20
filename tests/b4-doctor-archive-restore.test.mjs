@@ -20,6 +20,7 @@ import {
   deriveLifecycleFromVisibility,
   ARCHIVED_SAVE_ERROR,
   parseExpectedVersion,
+  throwInvalidExpectedVersion,
 } from "../app/lib/doctor-admin.ts";
 import { MutationConflictError, MutationNotFoundError, executeRoleMutation } from "../app/lib/mutation-result.ts";
 
@@ -709,4 +710,63 @@ test("43. parseExpectedVersion: strict raw-value validation", () => {
   assert.equal(parseExpectedVersion(undefined, { minimum: 1 }), NaN);
   assert.equal(parseExpectedVersion(null, { minimum: 1 }), NaN);
   assert.equal(parseExpectedVersion(1, { minimum: 1 }), 1);
+});
+
+test("44. parseExpectedVersion rejects all invalid doctor.save versions", () => {
+  assert.ok(Number.isNaN(parseExpectedVersion("1")));
+  assert.ok(Number.isNaN(parseExpectedVersion(1.5)));
+  assert.ok(Number.isNaN(parseExpectedVersion(NaN)));
+  assert.ok(Number.isNaN(parseExpectedVersion(Infinity)));
+  assert.ok(Number.isNaN(parseExpectedVersion(-1)));
+  assert.ok(Number.isNaN(parseExpectedVersion(true)));
+  assert.ok(Number.isNaN(parseExpectedVersion({})));
+  assert.ok(Number.isNaN(parseExpectedVersion([])));
+});
+
+test("45. parseExpectedVersion accepts all valid doctor.save versions", () => {
+  assert.equal(parseExpectedVersion(undefined), 0);
+  assert.equal(parseExpectedVersion(null), 0);
+  assert.equal(parseExpectedVersion(0), 0);
+  assert.equal(parseExpectedVersion(1), 1);
+  assert.equal(parseExpectedVersion(999), 999);
+});
+
+test("46. parseExpectedVersion rejects invalid archive/restore versions (minimum: 1)", () => {
+  assert.ok(Number.isNaN(parseExpectedVersion(undefined, { minimum: 1 })));
+  assert.ok(Number.isNaN(parseExpectedVersion(null, { minimum: 1 })));
+  assert.ok(Number.isNaN(parseExpectedVersion(0, { minimum: 1 })));
+  assert.ok(Number.isNaN(parseExpectedVersion("1", { minimum: 1 })));
+  assert.ok(Number.isNaN(parseExpectedVersion(1.5, { minimum: 1 })));
+  assert.ok(Number.isNaN(parseExpectedVersion(-1, { minimum: 1 })));
+});
+
+test("47. parseExpectedVersion accepts valid archive/restore versions (minimum: 1)", () => {
+  assert.equal(parseExpectedVersion(1, { minimum: 1 }), 1);
+  assert.equal(parseExpectedVersion(5, { minimum: 1 }), 5);
+});
+
+test("48. throwInvalidExpectedVersion accepts custom message", () => {
+  assert.throws(
+    () => throwInvalidExpectedVersion("expectedVersion must be a positive integer."),
+    (e) => e.message === "expectedVersion must be a positive integer.",
+  );
+  assert.throws(
+    () => throwInvalidExpectedVersion(),
+    (e) => e.message === "expectedVersion must be a non-negative integer.",
+  );
+});
+
+test("49. route.ts wiring: validatePayload uses shared parseExpectedVersion for doctor.save", async () => {
+  const routeSrc = await readFile(new URL("../app/api/admin/data/route.ts", import.meta.url), "utf8");
+  assert.ok(routeSrc.includes("parseExpectedVersion"), "route.ts must import parseExpectedVersion from doctor-admin");
+  assert.ok(routeSrc.includes('parseExpectedVersion(obj.expectedVersion)'), "validatePayload doctor.save must use parseExpectedVersion");
+  assert.ok(routeSrc.includes('parseExpectedVersion(obj.expectedVersion, { minimum: 1 })'), "validatePayload doctor.delete/restore must use parseExpectedVersion with minimum: 1");
+});
+
+test("50. route.ts wiring: validatePayload runs before executeRoleMutation in generic POST path", async () => {
+  const routeSrc = await readFile(new URL("../app/api/admin/data/route.ts", import.meta.url), "utf8");
+  const preCheckIndex = routeSrc.indexOf("const preCheck = validatePayload(action, payload)");
+  const executeIndex = routeSrc.indexOf("const result = await executeRoleMutation({");
+  assert.ok(preCheckIndex > 0, "route.ts must call validatePayload before executeRoleMutation");
+  assert.ok(executeIndex > preCheckIndex, "validatePayload must execute before executeRoleMutation");
 });

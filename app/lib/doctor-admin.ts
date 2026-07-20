@@ -15,8 +15,10 @@ export function parseExpectedVersion(
   return raw;
 }
 
-export function throwInvalidExpectedVersion(): never {
-  throw new Error("expectedVersion must be a non-negative integer.");
+export function throwInvalidExpectedVersion(
+  message = "expectedVersion must be a non-negative integer.",
+): never {
+  throw new Error(message);
 }
 
 export async function throwDoctorGuardFailure(

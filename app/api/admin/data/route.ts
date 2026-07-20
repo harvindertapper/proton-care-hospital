@@ -23,6 +23,7 @@ import {
   ARCHIVED_SAVE_ERROR,
   ACTIVE_DOCTORS_ADMIN_SQL,
   ARCHIVED_DOCTORS_ADMIN_SQL,
+  parseExpectedVersion,
   throwInvalidExpectedVersion,
   type DoctorRepo,
 } from "@/app/lib/doctor-admin";
@@ -181,23 +182,8 @@ async function applyDoctor(payload: Record<string, unknown>, actorEmail: string)
   const isVisible = Number(payload.isVisible) === 0 ? 0 : 1;
   const blockedDates = clean(payload.blockedDates, 2000);
 
-  const rawExpectedVersion = payload.expectedVersion;
-  if (
-    rawExpectedVersion !== undefined &&
-    rawExpectedVersion !== null &&
-    (
-      typeof rawExpectedVersion !== "number" ||
-      !Number.isFinite(rawExpectedVersion) ||
-      !Number.isInteger(rawExpectedVersion) ||
-      rawExpectedVersion < 0
-    )
-  ) {
-    throwInvalidExpectedVersion();
-  }
-  const expectedVersion =
-    rawExpectedVersion === undefined || rawExpectedVersion === null
-      ? 0
-      : (rawExpectedVersion as number);
+  const expectedVersion = parseExpectedVersion(payload.expectedVersion);
+  if (Number.isNaN(expectedVersion)) throwInvalidExpectedVersion();
 
   if (!name || !slug || !speciality || !department) throw new Error("Invalid doctor profile payload.");
 
@@ -735,6 +721,12 @@ export async function POST(request: Request) {
       action;
     const entityType = action.split(".")[0] || "content";
     const entityId = clean(payload.slug, 120) || clean(payload.departmentSlug, 120) || clean(payload.id, 120) || crypto.randomUUID();
+
+    const preCheck = validatePayload(action, payload);
+    if (!preCheck.ok) {
+      return json({ error: preCheck.error || "Invalid payload." }, { status: 400 });
+    }
+
     const result = await executeRoleMutation({
       isStaff: admin.session.role === "STAFF",
       createRevision: () => createRevision(admin.session, action, entityType, entityId, title, payload),
@@ -773,6 +765,9 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (typeof obj.speciality !== "string" || !obj.speciality.trim()) return { ok: false, error: "Speciality is required." };
     if (typeof obj.departmentSlug !== "string" || !obj.departmentSlug.trim()) return { ok: false, error: "Department slug is required." };
     if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Doctor slug is required." };
+    if (obj.expectedVersion !== undefined && obj.expectedVersion !== null && Number.isNaN(parseExpectedVersion(obj.expectedVersion))) {
+      return { ok: false, error: "expectedVersion must be a non-negative integer." };
+    }
   } else if (action === "timing.upsert") {
     if (typeof obj.departmentSlug !== "string" || !obj.departmentSlug.trim()) return { ok: false, error: "Department slug is required." };
     if (typeof obj.startTime !== "string" || !obj.startTime.trim()) return { ok: false, error: "Start time is required." };
@@ -791,10 +786,10 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (typeof obj.youtubeUrl !== "string" || !obj.youtubeUrl.trim()) return { ok: false, error: "YouTube URL is required." };
   } else if (action === "doctor.restore") {
     if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Doctor slug is required." };
-    if (typeof obj.expectedVersion !== "number" || !Number.isFinite(obj.expectedVersion) || !Number.isInteger(obj.expectedVersion) || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion must be a positive integer." };
+    if (Number.isNaN(parseExpectedVersion(obj.expectedVersion, { minimum: 1 }))) return { ok: false, error: "expectedVersion must be a positive integer." };
   } else if (action === "doctor.delete") {
     if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Doctor slug is required." };
-    if (typeof obj.expectedVersion !== "number" || !Number.isFinite(obj.expectedVersion) || !Number.isInteger(obj.expectedVersion) || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion must be a positive integer." };
+    if (Number.isNaN(parseExpectedVersion(obj.expectedVersion, { minimum: 1 }))) return { ok: false, error: "expectedVersion must be a positive integer." };
   }
   return { ok: true };
 }
@@ -873,33 +868,19 @@ async function applyDeleteClosure(payload: Record<string, unknown>, actorEmail: 
 async function applyDeleteDoctor(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 120);
   if (!slug) throw new Error("Doctor slug is required.");
-  const rawExpectedVersion = payload.expectedVersion;
-  if (
-    typeof rawExpectedVersion !== "number" ||
-    !Number.isFinite(rawExpectedVersion) ||
-    !Number.isInteger(rawExpectedVersion) ||
-    rawExpectedVersion < 1
-  ) {
-    throwInvalidExpectedVersion();
-  }
+  const expectedVersion = parseExpectedVersion(payload.expectedVersion, { minimum: 1 });
+  if (Number.isNaN(expectedVersion)) throwInvalidExpectedVersion("expectedVersion must be a positive integer.");
   const repo: DoctorRepo = { query, run, audit };
-  return archiveDoctor(repo, slug, rawExpectedVersion as number, actorEmail);
+  return archiveDoctor(repo, slug, expectedVersion, actorEmail);
 }
 
 async function applyRestoreDoctor(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 120);
   if (!slug) throw new Error("Doctor slug is required.");
-  const rawExpectedVersion = payload.expectedVersion;
-  if (
-    typeof rawExpectedVersion !== "number" ||
-    !Number.isFinite(rawExpectedVersion) ||
-    !Number.isInteger(rawExpectedVersion) ||
-    rawExpectedVersion < 1
-  ) {
-    throwInvalidExpectedVersion();
-  }
+  const expectedVersion = parseExpectedVersion(payload.expectedVersion, { minimum: 1 });
+  if (Number.isNaN(expectedVersion)) throwInvalidExpectedVersion("expectedVersion must be a positive integer.");
   const repo: DoctorRepo = { query, run, audit };
-  return restoreDoctor(repo, slug, rawExpectedVersion as number, actorEmail);
+  return restoreDoctor(repo, slug, expectedVersion, actorEmail);
 }
 
 async function applyDeleteBlog(payload: Record<string, unknown>, actorEmail: string) {
