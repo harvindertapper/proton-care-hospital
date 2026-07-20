@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { doctors } from "../app/lib/data.ts";
 import {
   resolvePublicDoctors,
   resolveDoctorBySlug,
 } from "../app/lib/doctor-public.ts";
-import { resolveDoctorManagerRows } from "../app/lib/doctor-admin.ts";
+import {
+  resolveDoctorManagerRows,
+  ACTIVE_DOCTORS_ADMIN_SQL,
+  ARCHIVED_DOCTORS_ADMIN_SQL,
+} from "../app/lib/doctor-admin.ts";
 import {
   archiveDoctor,
   restoreDoctor,
@@ -149,8 +154,35 @@ test("Super Admin doctor archive/restore applies mutation", async () => {
 });
 
 test("Admin active list excludes archived rows", async () => {
-  const active = resolveDoctorManagerRows([ACTIVE, ARCHIVED]);
-  assert.equal(active.length, 2);
+  const input = [ACTIVE, ARCHIVED];
+  const active = resolveDoctorManagerRows(input);
+  assert.equal(active.length, 1);
+  assert.ok(active.some((r) => r.slug === "dr-a"));
+  assert.ok(!active.some((r) => r.slug === "dr-b"));
+  assert.equal(input.length, 2);
+});
+
+test("ACTIVE_DOCTORS_ADMIN_SQL selects active, orders by name, no is_deleted=1", () => {
+  assert.ok(ACTIVE_DOCTORS_ADMIN_SQL.includes("doctor_profiles"));
+  assert.ok(ACTIVE_DOCTORS_ADMIN_SQL.includes("is_deleted = 0"));
+  assert.ok(ACTIVE_DOCTORS_ADMIN_SQL.includes("ORDER BY name"));
+  assert.ok(!ACTIVE_DOCTORS_ADMIN_SQL.includes("is_deleted = 1"));
+});
+
+test("ARCHIVED_DOCTORS_ADMIN_SQL selects archived, orders by name, no is_deleted=0", () => {
+  assert.ok(ARCHIVED_DOCTORS_ADMIN_SQL.includes("doctor_profiles"));
+  assert.ok(ARCHIVED_DOCTORS_ADMIN_SQL.includes("is_deleted = 1"));
+  assert.ok(ARCHIVED_DOCTORS_ADMIN_SQL.includes("ORDER BY name"));
+  assert.ok(!ARCHIVED_DOCTORS_ADMIN_SQL.includes("is_deleted = 0"));
+});
+
+test("partition: active=0 kept, archived=1 excluded, missing is_deleted kept for compat", () => {
+  const legacy = { id: "d3", slug: "dr-c", name: "Dr C" };
+  const result = resolveDoctorManagerRows([ACTIVE, ARCHIVED, legacy]);
+  assert.equal(result.length, 2);
+  assert.ok(result.some((r) => r.slug === "dr-a"));
+  assert.ok(result.some((r) => r.slug === "dr-c"));
+  assert.ok(!result.some((r) => r.slug === "dr-b"));
 });
 
 test("Admin archived list contains only is_deleted=1 rows", async () => {
@@ -187,5 +219,16 @@ test("B4.1 regression: public empty/error returns []/null, no static fallback", 
 test("department-wise appointment CTA contract preserved", async () => {
   for (const d of doctors) {
     assert.ok(d.departmentSlug && d.departmentSlug.length > 0);
+  }
+});
+
+test("source wiring guard: page.tsx and route.ts reference the SQL constants", async () => {
+  const [pageSrc, routeSrc] = await Promise.all([
+    readFile(new URL("../app/admin/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/admin/data/route.ts", import.meta.url), "utf8"),
+  ]);
+  for (const src of [pageSrc, routeSrc]) {
+    assert.ok(src.includes("ACTIVE_DOCTORS_ADMIN_SQL"), "source must reference ACTIVE_DOCTORS_ADMIN_SQL");
+    assert.ok(src.includes("ARCHIVED_DOCTORS_ADMIN_SQL"), "source must reference ARCHIVED_DOCTORS_ADMIN_SQL");
   }
 });

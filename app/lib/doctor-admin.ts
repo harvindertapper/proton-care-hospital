@@ -1,10 +1,18 @@
 import { requireAppliedMutation } from "./mutation-result.ts";
 import type { DoctorManagerRow } from "./doctor-admin-types.ts";
 
+export const ACTIVE_DOCTORS_ADMIN_SQL =
+  "SELECT * FROM doctor_profiles WHERE is_deleted = 0 ORDER BY name";
+
+export const ARCHIVED_DOCTORS_ADMIN_SQL =
+  "SELECT id, slug, name, speciality, department_slug, is_deleted FROM doctor_profiles WHERE is_deleted = 1 ORDER BY name";
+
 export function resolveDoctorManagerRows(
   rows: DoctorManagerRow[] | null | undefined,
 ): DoctorManagerRow[] {
-  return rows && rows.length ? rows : [];
+  return (rows || []).filter(
+    (row) => Number(row.is_deleted ?? 0) !== 1,
+  );
 }
 
 export type DoctorQueryFn = (

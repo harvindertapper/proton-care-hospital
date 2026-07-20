@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { AdminConsole } from "@/app/components/AdminConsole";
 import { departments, doctors } from "@/app/lib/data";
 import { query, verifyAdminSession } from "@/app/lib/server";
+import { ACTIVE_DOCTORS_ADMIN_SQL, ARCHIVED_DOCTORS_ADMIN_SQL } from "@/app/lib/doctor-admin";
 
 export const dynamic = "force-dynamic";
 
@@ -34,8 +35,8 @@ async function loadData(session: { email: string; role: string }) {
   ] = await Promise.all([
     rows("SELECT * FROM appointments ORDER BY created_at DESC LIMIT 100"),
     rows("SELECT * FROM department_timings ORDER BY department_name"),
-    rows("SELECT * FROM doctor_profiles ORDER BY name"),
-    rows("SELECT id, slug, name, speciality, department_slug, is_deleted FROM doctor_profiles WHERE is_deleted = 1 ORDER BY name"),
+    rows(ACTIVE_DOCTORS_ADMIN_SQL),
+    rows(ARCHIVED_DOCTORS_ADMIN_SQL),
     rows("SELECT * FROM content_revisions ORDER BY created_at DESC LIMIT 100"),
     rows("SELECT * FROM feedback ORDER BY created_at DESC LIMIT 100"),
     rows("SELECT * FROM contact_messages ORDER BY created_at DESC LIMIT 100"),

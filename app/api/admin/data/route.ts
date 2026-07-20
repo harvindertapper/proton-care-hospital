@@ -17,6 +17,8 @@ import { executeRoleMutation } from "@/app/lib/mutation-result";
 import {
   archiveDoctor,
   restoreDoctor,
+  ACTIVE_DOCTORS_ADMIN_SQL,
+  ARCHIVED_DOCTORS_ADMIN_SQL,
   type DoctorRepo,
 } from "@/app/lib/doctor-admin";
 import { departmentBySlug } from "@/app/lib/data";
@@ -45,8 +47,8 @@ async function dashboardData(session: AdminSession) {
   ] = await Promise.all([
     query<Record<string, unknown>>("SELECT * FROM appointments ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM department_timings ORDER BY department_name"),
-    query("SELECT * FROM doctor_profiles WHERE is_deleted = 0 ORDER BY name"),
-    query("SELECT id, slug, name, speciality, department_slug, is_deleted FROM doctor_profiles WHERE is_deleted = 1 ORDER BY name"),
+    query(ACTIVE_DOCTORS_ADMIN_SQL),
+    query(ARCHIVED_DOCTORS_ADMIN_SQL),
     query("SELECT * FROM content_revisions ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM feedback ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM contact_messages ORDER BY created_at DESC LIMIT 100"),
