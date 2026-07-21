@@ -215,7 +215,12 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
       }
       clearForm();
     } catch (e: unknown) {
-      if (e instanceof AdminApiError && e.status === 404) {
+      if (e instanceof AdminApiError && e.status === 409) {
+        setError("Stale version conflict. " + e.message);
+        await loadSections();
+        setEditingSection(null);
+        setCreatingSection(false);
+      } else if (e instanceof AdminApiError && e.status === 404) {
         await loadSections();
         setError(e.message);
       } else {
@@ -227,20 +232,29 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
   }
 
   async function handleDeleteSection(sec: GallerySectionDto) {
-    if (!confirm(`Delete section "${sec.name}"? This cannot be undone.`)) return;
+    if (!confirm(`Archive this Gallery section? This is a logical archive and does not delete media files. The section must have no active items. Staff requests require Super Admin approval.`)) return;
     setBusy(true);
     setError("");
     try {
-      await deleteGallerySection(csrf, sec.id, sec.version);
-      showNotice("Section deleted");
-      if (selectedSection?.id === sec.id) setSelectedSection(null);
+      const result = await deleteGallerySection(csrf, sec.id, sec.version);
+      if (result.outcome === "APPLIED") {
+        showNotice("Section archived.");
+        if (selectedSection?.id === sec.id) setSelectedSection(null);
+      } else if (result.outcome === "PENDING_APPROVAL") {
+        showNotice("Section archive submitted for approval.");
+      } else {
+        showNotice("Section archive submitted for approval.");
+      }
       await loadSections();
     } catch (e: unknown) {
-      if (e instanceof AdminApiError && e.status === 404) {
+      if (e instanceof AdminApiError && e.status === 409) {
+        setError(e.message);
+        await loadSections();
+      } else if (e instanceof AdminApiError && e.status === 404) {
         await loadSections();
         setError(e.message);
       } else {
-        setError(e instanceof Error ? e.message : "Failed to delete section");
+        setError(e instanceof Error ? e.message : "Failed to archive section");
       }
     } finally {
       setBusy(false);
@@ -367,8 +381,14 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
       await loadSections();
       clearForm();
     } catch (e: unknown) {
-      if (e instanceof AdminApiError && e.status === 404) {
-        await loadItems(selectedSection.id);
+      if (e instanceof AdminApiError && e.status === 409) {
+        setError("Stale version conflict. " + e.message);
+        if (selectedSection) await loadItems(selectedSection.id);
+        await loadSections();
+        setEditingItem(null);
+        setCreatingItem(false);
+      } else if (e instanceof AdminApiError && e.status === 404) {
+        if (selectedSection) await loadItems(selectedSection.id);
         await loadSections();
         setError(e.message);
       } else {
@@ -380,21 +400,31 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
   }
 
   async function handleDeleteItem(item: GalleryItemDto) {
-    if (!confirm(`Delete item "${item.titleOverride ?? "Untitled"}"? This cannot be undone.`)) return;
+    if (!confirm(`Archive this Gallery item? This is a logical archive and does not delete the linked media asset. Staff requests require Super Admin approval.`)) return;
     setBusy(true);
     setError("");
     try {
-      await deleteGalleryItem(csrf, item.id, item.version);
-      showNotice("Item deleted");
+      const result = await deleteGalleryItem(csrf, item.id, item.version);
+      if (result.outcome === "APPLIED") {
+        showNotice("Item archived.");
+      } else if (result.outcome === "PENDING_APPROVAL") {
+        showNotice("Item archive submitted for approval.");
+      } else {
+        showNotice("Item archive submitted for approval.");
+      }
       if (selectedSection) await loadItems(selectedSection.id);
       await loadSections();
     } catch (e: unknown) {
-      if (e instanceof AdminApiError && e.status === 404) {
+      if (e instanceof AdminApiError && e.status === 409) {
+        setError(e.message);
+        if (selectedSection) await loadItems(selectedSection.id);
+        await loadSections();
+      } else if (e instanceof AdminApiError && e.status === 404) {
         if (selectedSection) await loadItems(selectedSection.id);
         await loadSections();
         setError(e.message);
       } else {
-        setError(e instanceof Error ? e.message : "Failed to delete item");
+        setError(e instanceof Error ? e.message : "Failed to archive item");
       }
     } finally {
       setBusy(false);
@@ -469,17 +499,25 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
       const result = await reorderGalleryItems(csrf, selectedSection.id, order);
       if (result.outcome === "PENDING_APPROVAL") {
         showNotice("Reorder submitted for review.");
-      } else {
+      } else if (result.outcome === "APPLIED") {
         showNotice("Order saved.");
+      } else {
+        showNotice("Reorder submitted for review.");
       }
       await loadItems(selectedSection.id);
       setReorderMode(false);
     } catch (e: unknown) {
-      if (e instanceof AdminApiError && e.status === 404) {
+      if (e instanceof AdminApiError && e.status === 409) {
+        setError("Order changed elsewhere. Reloaded the latest Gallery order. " + e.message);
         await loadItems(selectedSection.id);
+        setReorderMode(false);
+      } else if (e instanceof AdminApiError && e.status === 404) {
+        await loadItems(selectedSection.id);
+        setReorderMode(false);
         setError(e.message);
       } else {
         setError(e instanceof Error ? e.message : "Failed to save order");
+        setReorderMode(false);
       }
     } finally {
       setBusy(false);
@@ -874,7 +912,7 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
                       handleDeleteSection(sec);
                     }}
                   >
-                    Delete
+                    Archive
                   </button>
                 </div>
               </div>
@@ -999,7 +1037,7 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
                       Edit
                     </button>
                     <button type="button" className="button secondary small" onClick={() => handleDeleteItem(item)}>
-                      Delete
+                      Archive
                     </button>
                   </div>
                 </div>

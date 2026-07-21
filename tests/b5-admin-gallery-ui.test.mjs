@@ -475,8 +475,8 @@ test("64. GalleryManagerPanel handles section lifecycle transitions via patchGal
    ═══════════════════════════════════════════════════════════════════════════ */
 
 test("65. GalleryManagerPanel catches AdminApiError with status 409 for stale version on items", () => {
-  assert.ok(galleryManagerPanel.includes("err instanceof AdminApiError && err.status === 409"), "Must catch 409 AdminApiError for items");
-  assert.ok(galleryManagerPanel.includes("Stale version. Please reload"), "Must show stale version message");
+  assert.ok(galleryManagerPanel.includes("err instanceof AdminApiError && err.status === 409") || galleryManagerPanel.includes("e instanceof AdminApiError && e.status === 409"), "Must catch 409 AdminApiError for items");
+  assert.ok(galleryManagerPanel.includes("Stale version conflict"), "Must show stale version conflict message");
 });
 
 test("66. MediaLibraryPanel catches AdminApiError with status 409 for archive conflict", () => {
@@ -538,10 +538,10 @@ test("74. GalleryManagerPanel has immutability note style for editing items", ()
   assert.ok(galleryManagerPanel.includes("fontStyle"), "Immutability note must use italic font style");
 });
 
-test("75. GalleryManagerPanel shows confirm dialog for section and item deletion", () => {
+test("75. GalleryManagerPanel shows confirm dialog for section and item archival", () => {
   assert.ok(galleryManagerPanel.includes("confirm("), "Must use confirm() for destructive actions");
-  assert.ok(galleryManagerPanel.includes('Delete section'), "Must confirm section deletion");
-  assert.ok(galleryManagerPanel.includes('Delete item'), "Must confirm item deletion");
+  assert.ok(galleryManagerPanel.includes("Archive this Gallery section?"), "Must confirm section archival");
+  assert.ok(galleryManagerPanel.includes("Archive this Gallery item?"), "Must confirm item archival");
 });
 
 test("76. GalleryManagerPanel has showPicker state for MediaPickerDialog integration", () => {
@@ -577,4 +577,173 @@ test("80. GalleryClient uses buildFlatIndexMap for lightbox index mapping", () =
   assert.ok(galleryClient.includes("flatIndexMap"), "Must use flatIndexMap for item indices");
   assert.ok(galleryClient.includes("flatIndexMap.get(item)"), "Must look up item index from map");
   assert.ok(galleryClient.includes("activeIndex + 1} / {assets.length}"), "Must show lightbox position counter");
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   21. Pending actions and conflict refresh alignment (tests 81-98)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+test("81. Section archive APPLIED clears selectedSection", () => {
+  assert.ok(galleryManagerPanel.includes("Section archived."), "Must show 'Section archived.' on APPLIED");
+  assert.ok(galleryManagerPanel.includes('setSelectedSection(null)'), "Must clear selected section on APPLIED");
+});
+
+test("82. Section archive PENDING_APPROVAL does NOT clear selectedSection", () => {
+  const deleteSectionIdx = galleryManagerPanel.indexOf("handleDeleteSection");
+  assert.ok(deleteSectionIdx !== -1, "Must have handleDeleteSection function");
+  const block = galleryManagerPanel.slice(deleteSectionIdx, deleteSectionIdx + 1500);
+  const pendingIdx = block.indexOf('result.outcome === "PENDING_APPROVAL"');
+  assert.ok(pendingIdx !== -1, "Must handle PENDING_APPROVAL outcome in handleDeleteSection");
+  const pendBlock = block.slice(pendingIdx, pendingIdx + 500);
+  assert.ok(pendBlock.includes("Section archive submitted for approval."), "Pending message required");
+  assert.ok(!pendBlock.includes("setSelectedSection(null)"), "PENDING_APPROVAL must NOT clear selected section optimistically");
+});
+
+test("83. Item archive APPLIED does not optimistically remove from local list", () => {
+  assert.ok(galleryManagerPanel.includes("Item archived."), "Must show 'Item archived.' on APPLIED");
+  const appliedIdx = galleryManagerPanel.indexOf('result.outcome === "APPLIED"');
+  assert.ok(appliedIdx !== -1, "Must handle APPLIED outcome");
+  assert.ok(galleryManagerPanel.includes("loadItems"), "Must refetch items after archive");
+});
+
+test("84. Item archive PENDING_APPROVAL does NOT optimistically remove item", () => {
+  const itemPendingIdx = galleryManagerPanel.indexOf("Item archive submitted for approval.");
+  assert.ok(itemPendingIdx !== -1, "Must show item pending message");
+  assert.ok(galleryManagerPanel.includes("loadSections()"), "Must refetch sections after item archive");
+});
+
+test("85. Section archive confirm text mentions logical archive and Staff approval", () => {
+  assert.ok(galleryManagerPanel.includes("logical archive"), "Section confirm must mention logical archive");
+  assert.ok(galleryManagerPanel.includes("does not delete media files"), "Section confirm must explain media preservation");
+  assert.ok(galleryManagerPanel.includes("Staff requests require Super Admin approval"), "Section confirm must mention Staff approval");
+});
+
+test("86. Item archive confirm text mentions logical archive and no media deletion", () => {
+  const itemConfirmIdx = galleryManagerPanel.indexOf("Archive this Gallery item?");
+  assert.ok(itemConfirmIdx !== -1, "Must have item archive confirm");
+  const block = galleryManagerPanel.slice(itemConfirmIdx, itemConfirmIdx + 300);
+  assert.ok(block.includes("logical archive"), "Item confirm must mention logical archive");
+  assert.ok(block.includes("does not delete the linked media asset"), "Item confirm must mention linked media preservation");
+});
+
+test("87. saveSection catches 409 and refetches sections then closes editing", () => {
+  const sectionSaveIdx = galleryManagerPanel.indexOf("saveSection");
+  assert.ok(sectionSaveIdx !== -1, "Must have saveSection function");
+  const block = galleryManagerPanel.slice(sectionSaveIdx, sectionSaveIdx + 2000);
+  const catch409 = block.indexOf("e instanceof AdminApiError && e.status === 409");
+  assert.ok(catch409 !== -1, "saveSection must catch 409 AdminApiError");
+  const block409 = block.slice(catch409, catch409 + 500);
+  assert.ok(block409.includes("Stale version conflict"), "Must show stale version conflict message");
+  assert.ok(block409.includes("loadSections()"), "Must refetch sections on 409");
+  assert.ok(block409.includes("setEditingSection(null)"), "Must close section editing on 409");
+  assert.ok(block409.includes("setCreatingSection(false)"), "Must close section creation on 409");
+});
+
+test("88. saveItem catches 409 and refetches items and sections then closes editing", () => {
+  const itemSaveIdx = galleryManagerPanel.indexOf("async function saveItem");
+  assert.ok(itemSaveIdx !== -1, "Must have saveItem function");
+  const block = galleryManagerPanel.slice(itemSaveIdx, itemSaveIdx + 4000);
+  const catch409 = block.indexOf("e instanceof AdminApiError && e.status === 409");
+  assert.ok(catch409 !== -1, "saveItem must catch 409 AdminApiError");
+  const block409 = block.slice(catch409, catch409 + 500);
+  assert.ok(block409.includes("Stale version conflict"), "Must show stale version conflict message");
+  assert.ok(block409.includes("loadItems"), "Must refetch items on 409");
+  assert.ok(block409.includes("loadSections()"), "Must refetch sections on 409");
+  assert.ok(block409.includes("setEditingItem(null)"), "Must close item editing on 409");
+  assert.ok(block409.includes("setCreatingItem(false)"), "Must close item creation on 409");
+});
+
+test("89. saveReorder shows APPLIED message 'Order saved.' and refetches", () => {
+  const reorderIdx = galleryManagerPanel.indexOf("saveReorder");
+  assert.ok(reorderIdx !== -1, "Must have saveReorder function");
+  const block = galleryManagerPanel.slice(reorderIdx, reorderIdx + 2000);
+  assert.ok(block.includes("Order saved."), "APPLIED must show 'Order saved.'");
+  assert.ok(block.includes("loadItems"), "Must refetch items after reorder save");
+  assert.ok(block.includes('setReorderMode(false)'), "Must exit reorder mode after save");
+});
+
+test("90. saveReorder shows PENDING_APPROVAL message and refetches", () => {
+  const reorderIdx = galleryManagerPanel.indexOf("saveReorder");
+  const block = galleryManagerPanel.slice(reorderIdx, reorderIdx + 2000);
+  assert.ok(block.includes("Reorder submitted for review."), "PENDING_APPROVAL must show pending message");
+});
+
+test("91. saveReorder catches 409 with 'Order changed elsewhere' and exits reorder mode", () => {
+  const reorderIdx = galleryManagerPanel.indexOf("saveReorder");
+  const block = galleryManagerPanel.slice(reorderIdx, reorderIdx + 2000);
+  const catch409 = block.indexOf("e instanceof AdminApiError && e.status === 409");
+  assert.ok(catch409 !== -1, "saveReorder must catch 409");
+  const block409 = block.slice(catch409, catch409 + 400);
+  assert.ok(block409.includes("Order changed elsewhere"), "409 must show 'Order changed elsewhere'");
+  assert.ok(block409.includes("loadItems"), "409 must refetch items");
+  assert.ok(block409.includes("setReorderMode(false)"), "409 must exit reorder mode");
+});
+
+test("92. handleDeleteSection 409 refetches sections without removing entity", () => {
+  const deleteSectionIdx = galleryManagerPanel.indexOf("handleDeleteSection");
+  assert.ok(deleteSectionIdx !== -1, "Must have handleDeleteSection");
+  const block = galleryManagerPanel.slice(deleteSectionIdx, deleteSectionIdx + 1500);
+  const catch409 = block.indexOf("e instanceof AdminApiError && e.status === 409");
+  assert.ok(catch409 !== -1, "handleDeleteSection must catch 409");
+  const block409 = block.slice(catch409, catch409 + 300);
+  assert.ok(block409.includes("loadSections()"), "Must refetch sections on 409");
+});
+
+test("93. handleDeleteItem 409 refetches items and sections without optimistic removal", () => {
+  const deleteItemIdx = galleryManagerPanel.indexOf("handleDeleteItem");
+  assert.ok(deleteItemIdx !== -1, "Must have handleDeleteItem");
+  const block = galleryManagerPanel.slice(deleteItemIdx, deleteItemIdx + 1500);
+  const catch409 = block.indexOf("e instanceof AdminApiError && e.status === 409");
+  assert.ok(catch409 !== -1, "handleDeleteItem must catch 409");
+  const block409 = block.slice(catch409, catch409 + 400);
+  assert.ok(block409.includes("loadItems"), "Must refetch items on 409");
+  assert.ok(block409.includes("loadSections()"), "Must refetch sections on 409");
+  assert.ok(!block409.includes("filter("), "Must NOT optimistically filter item on 409");
+});
+
+test("94. Section archive button text reads 'Archive' not 'Delete'", () => {
+  const sectionBtnIdx = galleryManagerPanel.indexOf("handleDeleteSection(sec)");
+  assert.ok(sectionBtnIdx !== -1, "Must find handleDeleteSection button");
+  const btnBlock = galleryManagerPanel.slice(sectionBtnIdx, sectionBtnIdx + 200);
+  assert.ok(btnBlock.includes(">"), "Button must have closing angle bracket");
+  const afterClose = btnBlock.indexOf(">");
+  const btnText = btnBlock.slice(afterClose + 1, btnBlock.indexOf("</button>") || btnBlock.length);
+  assert.ok(btnText.includes("Archive"), "Button label must be 'Archive'");
+});
+
+test("95. Item archive button text reads 'Archive' not 'Delete'", () => {
+  const itemBtnIdx = galleryManagerPanel.indexOf("handleDeleteItem(item)");
+  assert.ok(itemBtnIdx !== -1, "Must find handleDeleteItem button");
+  const btnBlock = galleryManagerPanel.slice(itemBtnIdx, itemBtnIdx + 200);
+  assert.ok(btnBlock.includes(">"), "Button must have closing angle bracket");
+  const afterClose = btnBlock.indexOf(">");
+  const btnText = btnBlock.slice(afterClose + 1, btnBlock.indexOf("</button>") || btnBlock.length);
+  assert.ok(btnText.includes("Archive"), "Button label must be 'Archive'");
+});
+
+test("96. handleDeleteSection does not clear selectedSection on PENDING_APPROVAL", () => {
+  const deleteSectionIdx = galleryManagerPanel.indexOf("handleDeleteSection");
+  const block = galleryManagerPanel.slice(deleteSectionIdx, deleteSectionIdx + 1500);
+  const pendingIdx = block.indexOf("PENDING_APPROVAL");
+  assert.ok(pendingIdx !== -1, "Must handle PENDING_APPROVAL in handleDeleteSection");
+  const pendingBlock = block.slice(pendingIdx, pendingIdx + 300);
+  assert.ok(!pendingBlock.includes("setSelectedSection(null)"), "PENDING_APPROVAL must NOT optimistically clear selection");
+});
+
+test("97. Metadata saveSection 409 resets editing state after refetch", () => {
+  const sectionSaveIdx = galleryManagerPanel.indexOf("saveSection");
+  const block = galleryManagerPanel.slice(sectionSaveIdx, sectionSaveIdx + 2000);
+  const catch409 = block.indexOf("e instanceof AdminApiError && e.status === 409");
+  assert.ok(catch409 !== -1, "Must catch 409");
+  const block409 = block.slice(catch409, catch409 + 500);
+  assert.ok(block409.includes("loadSections()") && block409.indexOf("loadSections()") < block409.indexOf("setEditingSection(null)"), "Must refetch before resetting editing state");
+});
+
+test("98. Metadata saveItem 409 resets editing state after refetch", () => {
+  const itemSaveIdx = galleryManagerPanel.indexOf("async function saveItem");
+  const block = galleryManagerPanel.slice(itemSaveIdx, itemSaveIdx + 4000);
+  const catch409 = block.indexOf("e instanceof AdminApiError && e.status === 409");
+  assert.ok(catch409 !== -1, "Must catch 409");
+  const block409 = block.slice(catch409, catch409 + 500);
+  assert.ok(block409.includes("loadItems") && block409.includes("loadSections()"), "Must refetch items and sections before resetting editing state");
 });
