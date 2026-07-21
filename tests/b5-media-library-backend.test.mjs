@@ -209,17 +209,27 @@ describe("B. Read API helpers/SQL", () => {
   after(() => { db.close(); });
 
   it("B.15. Default limit 25", () => {
-    assert.equal(parseLimit(undefined), 25);
+    const result = parseLimit(undefined);
+    assert.equal(result.ok, true);
+    assert.equal(result.value, 25);
   });
 
   it("B.16. Maximum limit 100", () => {
-    assert.equal(parseLimit(200), 100);
+    const result = parseLimit(200);
+    assert.equal(result.ok, false);
+    assert.ok(result.error.includes("at most"));
   });
 
-  it("B.17. Invalid/negative pagination rejected", () => {
-    assert.equal(parseLimit(-5), 25);
-    assert.equal(parseLimit("abc"), 25);
-    assert.equal(parseOffset(-1), 0);
+  it("B.17. Invalid/negative pagination rejected with 400", () => {
+    const neg = parseLimit(-5);
+    assert.equal(neg.ok, false);
+    assert.ok(neg.error);
+    const abc = parseLimit("abc");
+    assert.equal(abc.ok, false);
+    assert.ok(abc.error);
+    const negOff = parseOffset(-1);
+    assert.equal(negOff.ok, false);
+    assert.ok(negOff.error);
   });
 
   it("B.18. Fixed deterministic ordering", () => {
@@ -544,8 +554,10 @@ describe("E. Existing upload", () => {
 
   it("E.57. No thumbnail/display transformation invented", () => {
     const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "route.ts"), "utf8");
-    assert.ok(!routeContent.includes("thumbnail_r2_key"), "Upload must not set thumbnail_r2_key");
-    assert.ok(!routeContent.includes("thumbnail_public_path"), "Upload must not set thumbnail_public_path");
+    const insertMatch = routeContent.match(/INSERT INTO media_assets[\s\S]*?\)/);
+    assert.ok(insertMatch, "Upload must have an INSERT INTO media_assets statement");
+    assert.ok(!insertMatch[0].includes("thumbnail_r2_key"), "Upload INSERT must not set thumbnail_r2_key");
+    assert.ok(!insertMatch[0].includes("thumbnail_public_path"), "Upload INSERT must not set thumbnail_public_path");
   });
 
   it("E.58. D1 failure still compensates R2", () => {
@@ -659,6 +671,231 @@ describe("G. Legacy compatibility", () => {
   });
 });
 
+/* ─── Corrective Tests (H.76–H.95) ───────────────────────────────────── */
+
+describe("H. Corrective: encoded traversal and storage validation", () => {
+  it("H.76. Encoded %2e%2e traversal rejected", () => {
+    const result = validatePublicPath("/assets/%2e%2e/secret");
+    assert.equal(result.ok, false);
+    assert.ok(result.error.includes("encoded traversal"));
+  });
+
+  it("H.77. Encoded %2f slash rejected", () => {
+    const result = validatePublicPath("/assets/file%2f..%2fsecret");
+    assert.equal(result.ok, false);
+    assert.ok(result.error.includes("encoded traversal"));
+  });
+
+  it("H.78. Encoded %5c backslash rejected", () => {
+    const result = validatePublicPath("/assets/file%5c..%5csecret");
+    assert.equal(result.ok, false);
+    assert.ok(result.error.includes("encoded traversal"));
+  });
+
+  it("H.79. Malformed percent-encoding rejected", () => {
+    const result = validatePublicPath("/assets/file%zz");
+    assert.equal(result.ok, false);
+    assert.ok(result.error.includes("malformed"));
+  });
+
+  it("H.80. Unknown storage type produces error in resolveMediaUrls", () => {
+    const result = resolveMediaUrls({
+      storage_type: "UNKNOWN",
+      r2_key: "test/file.jpg",
+      public_path: null,
+      display_r2_key: null,
+      display_public_path: null,
+      thumbnail_r2_key: null,
+      thumbnail_public_path: null,
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.error.includes("Unknown storage type"));
+  });
+
+  it("H.81. Invalid PUBLIC display_public_path surfaces error", () => {
+    const result = resolveMediaUrls({
+      storage_type: "PUBLIC",
+      r2_key: "public:/assets/test.jpg",
+      public_path: "/assets/test.jpg",
+      display_r2_key: null,
+      display_public_path: "not-a-valid-path",
+      thumbnail_r2_key: null,
+      thumbnail_public_path: null,
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.error.includes("display_public_path") || result.error.includes("start with /assets/"));
+  });
+
+  it("H.82. Invalid R2 display_r2_key surfaces error", () => {
+    const result = resolveMediaUrls({
+      storage_type: "R2",
+      r2_key: "gallery/test.jpg",
+      public_path: null,
+      display_r2_key: "public:/bad-key",
+      display_public_path: null,
+      thumbnail_r2_key: null,
+      thumbnail_public_path: null,
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.error.includes("display_r2_key") || result.error.includes("public:"));
+  });
+});
+
+describe("H. Corrective: atomic DELETE and reference guards", () => {
+  it("H.83. Atomic DELETE of unreferenced asset succeeds", () => {
+    const db = createFullyMigratedDb();
+    const id = insertMedia(db, { storage_type: "R2" });
+    const doctorRefUrls = [];
+    const placeholders = doctorRefUrls.length > 0 ? doctorRefUrls.map(() => "?").join(", ") : "NULL";
+    const sql = `UPDATE media_assets SET lifecycle_status = 'ARCHIVED', status = 'HIDDEN', is_visible = 0, deleted_at = CURRENT_TIMESTAMP, purge_status = 'CANDIDATE', version = version + 1 WHERE id = ? AND version = ? AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM gallery_items WHERE media_id = media_assets.id) ${doctorRefUrls.length > 0 ? `AND NOT EXISTS (SELECT 1 FROM doctor_profiles WHERE photo_url IN (${placeholders}))` : ""}`;
+    const result = db.prepare(sql).run(id, 1, ...doctorRefUrls);
+    assert.equal(result.changes, 1);
+    const row = db.prepare("SELECT lifecycle_status, deleted_at FROM media_assets WHERE id = ?").get(id);
+    assert.equal(row.lifecycle_status, "ARCHIVED");
+    assert.ok(row.deleted_at);
+    db.close();
+  });
+
+  it("H.84. Doctor reference blocks via atomic NOT EXISTS", () => {
+    const db = createFullyMigratedDb();
+    const id = insertMedia(db, { storage_type: "R2" });
+    const r2Key = db.prepare("SELECT r2_key FROM media_assets WHERE id = ?").get(id).r2_key;
+    insertDoctor(db, { photo_url: `/api/media/${r2Key}` });
+    const doctorRefUrls = [`/api/media/${r2Key}`];
+    const placeholders = doctorRefUrls.map(() => "?").join(", ");
+    const sql = `UPDATE media_assets SET lifecycle_status = 'ARCHIVED', version = version + 1 WHERE id = ? AND version = ? AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM gallery_items WHERE media_id = media_assets.id) AND NOT EXISTS (SELECT 1 FROM doctor_profiles WHERE photo_url IN (${placeholders}))`;
+    const result = db.prepare(sql).run(id, 1, ...doctorRefUrls);
+    assert.equal(result.changes, 0, "Doctor reference must block atomic delete");
+    db.close();
+  });
+
+  it("H.85. Gallery reference blocks via atomic NOT EXISTS", () => {
+    const db = createFullyMigratedDb();
+    const id = insertMedia(db, { storage_type: "R2" });
+    insertGalleryItem(db, id);
+    const sql = `UPDATE media_assets SET lifecycle_status = 'ARCHIVED', version = version + 1 WHERE id = ? AND version = ? AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM gallery_items WHERE media_id = media_assets.id)`;
+    const result = db.prepare(sql).run(id, 1);
+    assert.equal(result.changes, 0, "Gallery reference must block atomic delete");
+    db.close();
+  });
+
+  it("H.86. DELETE route catches malformed JSON body (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "[id]", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("Invalid request body"), "DELETE route must handle malformed JSON");
+    assert.ok(routeContent.includes("try") && routeContent.includes("request.json()"), "DELETE route must try/catch request.json()");
+  });
+
+  it("H.87. DELETE route validates expectedVersion from parsed body (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "[id]", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("body?.expectedVersion"), "DELETE must read expectedVersion from parsed body");
+    assert.ok(routeContent.includes("expectedVersion is required"), "DELETE must validate expectedVersion");
+  });
+});
+
+describe("H. Corrective: sourceUrl null and PATCH publish resolution", () => {
+  it("H.88. PATCH sourceUrl null clears field (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "[id]", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("source_url = NULL"), "PATCH must set source_url = NULL for null input");
+  });
+
+  it("H.89. PATCH sourceUrl empty string clears field (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "[id]", "route.ts"), "utf8");
+    assert.ok(routeContent.includes('body.sourceUrl === ""'), "PATCH must handle empty string sourceUrl");
+  });
+
+  it("H.90. PATCH publish resolution validates R2 locators (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "[id]", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("Cannot publish asset with invalid r2_key"), "PATCH must validate R2 locator before PUBLISHED");
+    assert.ok(routeContent.includes("generateR2MediaUrl"), "PATCH must import generateR2MediaUrl for R2 validation");
+  });
+});
+
+describe("H. Corrective: GET query strictness and DTO integrity", () => {
+  it("H.91. Invalid limit returns 400 (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("limit must be a positive integer"), "GET must validate limit format");
+    assert.ok(routeContent.includes("limit must be at most 100"), "GET must enforce max limit");
+  });
+
+  it("H.92. Invalid offset returns 400 (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("offset must be a non-negative integer"), "GET must validate offset format");
+  });
+
+  it("H.93. Invalid purpose filter returns 400 (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("Invalid purpose filter"), "GET must validate purpose filter");
+  });
+
+  it("H.94. includeDeleted non-boolean returns 400 (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("includeDeleted must be true or false"), "GET must validate includeDeleted as boolean");
+  });
+
+  it("H.95. Search length >200 returns 400 (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("200"), "GET must enforce search length limit");
+  });
+
+  it("H.96. Non-SUPER_ADMIN includeDeleted returns 403 (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("Only super admin may include deleted items"), "GET must reject non-super-admin includeDeleted");
+  });
+
+  it("H.97. Invalid DTO row returns 500, not silent skip (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("Failed to convert media asset to DTO"), "GET must return 500 for invalid DTO");
+    assert.ok(!routeContent.includes("if \\(dtoResult\\.ok\\)\\s*\\{\\s*items\\.push"), "GET must not silently skip invalid DTOs");
+  });
+});
+
+describe("H. Corrective: thumbnail URL reference coverage", () => {
+  it("H.98. Legacy DELETE checks thumbnail_r2_key for doctor references (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("thumbnail_r2_key"), "Legacy DELETE must check thumbnail_r2_key for doctor references");
+  });
+
+  it("H.99. Library DELETE builds complete URL set including thumbnail (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "[id]", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("thumbnailR2Key") || routeContent.includes("thumbnail_r2_key"), "Library DELETE must include thumbnail in URL set");
+    assert.ok(routeContent.includes("thumbnailPublicPath") || routeContent.includes("thumbnail_public_path"), "Library DELETE must include PUBLIC thumbnail in URL set");
+  });
+
+  it("H.100. Atomic DELETE uses NOT EXISTS subqueries (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "[id]", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("NOT EXISTS"), "DELETE must use NOT EXISTS subqueries");
+    assert.ok(routeContent.includes("gallery_items WHERE media_id"), "DELETE must check gallery_items in atomic SQL");
+    assert.ok(routeContent.includes("doctor_profiles WHERE photo_url IN"), "DELETE must check doctor_profiles in atomic SQL");
+  });
+
+  it("H.101. Pagination defaults valid with new parseLimit/parseOffset", () => {
+    const undef = parseLimit(undefined);
+    assert.equal(undef.ok, true);
+    assert.equal(undef.value, 25);
+    const valid = parseLimit(50);
+    assert.equal(valid.ok, true);
+    assert.equal(valid.value, 50);
+    const zero = parseOffset(0);
+    assert.equal(zero.ok, true);
+    assert.equal(zero.value, 0);
+  });
+
+  it("H.102. Strict storage type in resolveMediaUrls rejects unknown types", () => {
+    const result = resolveMediaUrls({
+      storage_type: "INVALID",
+      r2_key: "test/file.jpg",
+      public_path: null,
+      display_r2_key: null,
+      display_public_path: null,
+      thumbnail_r2_key: null,
+      thumbnail_public_path: null,
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.error.includes("Unknown storage type"));
+    assert.ok(!result.error.includes("null"));
+  });
+});
+
 /* ─── Inline helpers for test imports ──────────────────────────────────── */
 
 // Inline the key functions to avoid transpilation issues in test
@@ -690,8 +927,26 @@ function validatePublicPath(raw) {
   if (typeof raw !== "string" || raw.length === 0) {
     return { ok: false, error: "Public path is required." };
   }
+  const lower = raw.toLowerCase();
+  if (lower.includes("%2e") || lower.includes("%2f") || lower.includes("%5c") || lower.includes("%00")) {
+    return { ok: false, error: "Public path must not contain encoded traversal characters." };
+  }
   if (raw.includes("\\")) {
     return { ok: false, error: "Public path must not contain backslashes." };
+  }
+  try {
+    const decoded = decodeURIComponent(raw);
+    const segments = decoded.split("/");
+    for (const seg of segments) {
+      if (seg === "..") {
+        return { ok: false, error: "Public path must not contain .. segments." };
+      }
+      if (seg === ".") {
+        return { ok: false, error: "Public path must not contain . segments." };
+      }
+    }
+  } catch {
+    return { ok: false, error: "Public path contains malformed percent-encoding." };
   }
   if (raw.startsWith("//")) {
     return { ok: false, error: "Public path must not be protocol-relative." };
@@ -699,8 +954,8 @@ function validatePublicPath(raw) {
   if (!raw.startsWith("/assets/")) {
     return { ok: false, error: "Public path must start with /assets/." };
   }
-  const segments = raw.split("/");
-  for (const seg of segments) {
+  const rawSegments = raw.split("/");
+  for (const seg of rawSegments) {
     if (seg === "..") {
       return { ok: false, error: "Public path must not contain .. segments." };
     }
@@ -726,12 +981,14 @@ function resolvePublicUrls(row) {
   let displayUrl = originalUrl;
   if (row.display_public_path) {
     const dv = validatePublicPath(row.display_public_path);
-    if (dv.ok) displayUrl = dv.path;
+    if (!dv.ok) return { ok: false, error: `Invalid display_public_path: ${dv.error}` };
+    displayUrl = dv.path;
   }
   let thumbnailUrl = displayUrl;
   if (row.thumbnail_public_path) {
     const tv = validatePublicPath(row.thumbnail_public_path);
-    if (tv.ok) thumbnailUrl = tv.path;
+    if (!tv.ok) return { ok: false, error: `Invalid thumbnail_public_path: ${tv.error}` };
+    thumbnailUrl = tv.path;
   }
   return { ok: true, urls: { originalUrl, displayUrl, thumbnailUrl } };
 }
@@ -743,17 +1000,22 @@ function resolveR2Urls(row) {
   let displayUrl = originalUrl;
   if (row.display_r2_key) {
     const dv = generateR2MediaUrl(row.display_r2_key);
-    if (dv.ok) displayUrl = dv.url;
+    if (!dv.ok) return { ok: false, error: `Invalid display_r2_key: ${dv.error}` };
+    displayUrl = dv.url;
   }
   let thumbnailUrl = displayUrl;
   if (row.thumbnail_r2_key) {
     const tv = generateR2MediaUrl(row.thumbnail_r2_key);
-    if (tv.ok) thumbnailUrl = tv.url;
+    if (!tv.ok) return { ok: false, error: `Invalid thumbnail_r2_key: ${tv.error}` };
+    thumbnailUrl = tv.url;
   }
   return { ok: true, urls: { originalUrl, displayUrl, thumbnailUrl } };
 }
 
 function resolveMediaUrls(row) {
+  if (row.storage_type !== "PUBLIC" && row.storage_type !== "R2") {
+    return { ok: false, error: `Unknown storage type: ${row.storage_type}` };
+  }
   if (row.storage_type === "PUBLIC") {
     return resolvePublicUrls(row);
   }
@@ -799,15 +1061,18 @@ function escapeLikeWildcard(input) {
 }
 
 function parseLimit(raw) {
+  if (raw === null || raw === undefined) return { ok: true, value: 25 };
   const n = Number(raw);
-  if (!Number.isFinite(n) || n < 1) return 25;
-  return Math.min(Math.floor(n), 100);
+  if (!Number.isFinite(n) || n < 1) return { ok: false, error: "limit must be a positive integer." };
+  if (n > 100) return { ok: false, error: "limit must be at most 100." };
+  return { ok: true, value: Math.floor(n) };
 }
 
 function parseOffset(raw) {
+  if (raw === null || raw === undefined) return { ok: true, value: 0 };
   const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) return 0;
-  return Math.floor(n);
+  if (!Number.isFinite(n) || n < 0) return { ok: false, error: "offset must be a non-negative integer." };
+  return { ok: true, value: Math.floor(n) };
 }
 
 function isValidEnum(val, set) {

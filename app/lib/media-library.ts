@@ -62,8 +62,33 @@ export function validatePublicPath(raw: unknown): PathValidationResult {
     return { ok: false, error: "Public path is required." };
   }
 
+  const lower = raw.toLowerCase();
+  if (
+    lower.includes("%2e") ||
+    lower.includes("%2f") ||
+    lower.includes("%5c") ||
+    lower.includes("%00")
+  ) {
+    return { ok: false, error: "Public path must not contain encoded traversal characters." };
+  }
+
   if (raw.includes("\\")) {
     return { ok: false, error: "Public path must not contain backslashes." };
+  }
+
+  try {
+    const decoded = decodeURIComponent(raw);
+    const segments = decoded.split("/");
+    for (const seg of segments) {
+      if (seg === "..") {
+        return { ok: false, error: "Public path must not contain .. segments." };
+      }
+      if (seg === ".") {
+        return { ok: false, error: "Public path must not contain . segments." };
+      }
+    }
+  } catch {
+    return { ok: false, error: "Public path contains malformed percent-encoding." };
   }
 
   if (raw.startsWith("//")) {
@@ -74,19 +99,17 @@ export function validatePublicPath(raw: unknown): PathValidationResult {
     return { ok: false, error: "Public path must start with /assets/." };
   }
 
-  const segments = raw.split("/");
-  for (const seg of segments) {
+  const rawSegments = raw.split("/");
+  for (const seg of rawSegments) {
     if (seg === "..") {
       return { ok: false, error: "Public path must not contain .. segments." };
     }
   }
 
-  // Reject URL protocols embedded anywhere
   if (/[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw)) {
     return { ok: false, error: "Public path must not contain a URL protocol." };
   }
 
-  // Reject query strings and fragments
   if (raw.includes("?") || raw.includes("#")) {
     return { ok: false, error: "Public path must not contain query or fragment." };
   }
@@ -166,6 +189,10 @@ export function resolveMediaUrls(row: {
   thumbnail_r2_key: string | null;
   thumbnail_public_path: string | null;
 }): UrlResolutionResult {
+  if (row.storage_type !== "PUBLIC" && row.storage_type !== "R2") {
+    return { ok: false, error: `Unknown storage type: ${row.storage_type}` };
+  }
+
   if (isPublicStorage(row.storage_type)) {
     return resolvePublicUrls(row);
   }
@@ -192,14 +219,20 @@ function resolvePublicUrls(row: {
   let displayUrl = originalUrl;
   if (row.display_public_path) {
     const dv = validatePublicPath(row.display_public_path);
-    if (dv.ok) displayUrl = dv.path;
+    if (!dv.ok) {
+      return { ok: false, error: `Invalid display_public_path: ${dv.error}` };
+    }
+    displayUrl = dv.path;
   }
 
   // Thumbnail fallback: thumbnail_public_path → display → original
   let thumbnailUrl = displayUrl;
   if (row.thumbnail_public_path) {
     const tv = validatePublicPath(row.thumbnail_public_path);
-    if (tv.ok) thumbnailUrl = tv.path;
+    if (!tv.ok) {
+      return { ok: false, error: `Invalid thumbnail_public_path: ${tv.error}` };
+    }
+    thumbnailUrl = tv.path;
   }
 
   return { ok: true, urls: { originalUrl, displayUrl, thumbnailUrl } };
@@ -218,14 +251,20 @@ function resolveR2Urls(row: {
   let displayUrl = originalUrl;
   if (row.display_r2_key) {
     const dv = generateR2MediaUrl(row.display_r2_key);
-    if (dv.ok) displayUrl = dv.url;
+    if (!dv.ok) {
+      return { ok: false, error: `Invalid display_r2_key: ${dv.error}` };
+    }
+    displayUrl = dv.url;
   }
 
   // Thumbnail fallback: thumbnail_r2_key → display → original
   let thumbnailUrl = displayUrl;
   if (row.thumbnail_r2_key) {
     const tv = generateR2MediaUrl(row.thumbnail_r2_key);
-    if (tv.ok) thumbnailUrl = tv.url;
+    if (!tv.ok) {
+      return { ok: false, error: `Invalid thumbnail_r2_key: ${tv.error}` };
+    }
+    thumbnailUrl = tv.url;
   }
 
   return { ok: true, urls: { originalUrl, displayUrl, thumbnailUrl } };

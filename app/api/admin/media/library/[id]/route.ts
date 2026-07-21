@@ -4,6 +4,7 @@ import {
   toAdminDto,
   validatePublicPath,
   validateSourceUrl,
+  generateR2MediaUrl,
   isValidLifecycleStatus,
   isValidMediaCategory,
   isValidRightsStatus,
@@ -117,13 +118,17 @@ export async function PATCH(
     }
 
     if (body.sourceUrl !== undefined) {
-      const urlCheck = validateSourceUrl(body.sourceUrl);
-      if (!urlCheck.ok) return json({ error: urlCheck.error }, { status: 400 });
-      if (typeof body.sourceUrl !== "string" || body.sourceUrl.length > FIELD_LENGTHS.sourceUrl) {
-        return json({ error: `sourceUrl must be a string of at most ${FIELD_LENGTHS.sourceUrl} characters.` }, { status: 400 });
+      if (body.sourceUrl === null || body.sourceUrl === "") {
+        updates.push("source_url = NULL");
+      } else {
+        const urlCheck = validateSourceUrl(body.sourceUrl);
+        if (!urlCheck.ok) return json({ error: urlCheck.error }, { status: 400 });
+        if (typeof body.sourceUrl !== "string" || body.sourceUrl.length > FIELD_LENGTHS.sourceUrl) {
+          return json({ error: `sourceUrl must be a string of at most ${FIELD_LENGTHS.sourceUrl} characters.` }, { status: 400 });
+        }
+        updates.push("source_url = ?");
+        binds.push(body.sourceUrl);
       }
-      updates.push("source_url = ?");
-      binds.push(body.sourceUrl || null);
     }
 
     if (body.status !== undefined) {
@@ -165,6 +170,21 @@ export async function PATCH(
       const pathCheck = validatePublicPath(current.public_path);
       if (!pathCheck.ok) {
         return json({ error: `Asset has invalid public_path: ${pathCheck.error}` }, { status: 400 });
+      }
+    }
+
+    // Coherence: lifecycleStatus=PUBLISHED requires valid storage locator
+    if (effective.lifecycle_status === "PUBLISHED") {
+      if (isPublicStorage(current.storage_type as string)) {
+        const pubCheck = validatePublicPath(current.public_path);
+        if (!pubCheck.ok) {
+          return json({ error: `Cannot publish asset with invalid public_path: ${pubCheck.error}` }, { status: 400 });
+        }
+      } else {
+        const r2Check = generateR2MediaUrl(current.r2_key as string);
+        if (!r2Check.ok) {
+          return json({ error: `Cannot publish asset with invalid r2_key: ${r2Check.error}` }, { status: 400 });
+        }
       }
     }
 
@@ -277,7 +297,12 @@ export async function DELETE(
     const { id } = await params;
     if (!id) return json({ error: "Media ID is required." }, { status: 400 });
 
-    const body = (await request.json()) as Record<string, unknown> | undefined;
+    let body: Record<string, unknown>;
+    try {
+      body = (await request.json()) as Record<string, unknown>;
+    } catch {
+      return json({ error: "Invalid request body." }, { status: 400 });
+    }
     const expectedVersion = body?.expectedVersion;
     if (typeof expectedVersion !== "number" || !Number.isInteger(expectedVersion) || expectedVersion < 1) {
       return json({ error: "expectedVersion is required and must be a positive integer." }, { status: 400 });
@@ -306,97 +331,55 @@ export async function DELETE(
       );
     }
 
-    // ── Reference checks ──────────────────────────────────────────────────
+    // ── Build complete reference URL set (Section 3: original + display + thumbnail) ──
 
-    // Doctor references: check all states (active, hidden, archived, soft-deleted)
     const storageType = row.storage_type as string;
-    const isR2 = !isPublicStorage(storageType);
+    const isR2Asset = storageType === "R2";
 
-    if (isR2) {
-      // Check R2 key variants against doctor_profiles.photo_url
+    const doctorRefUrls: string[] = [];
+    if (isR2Asset) {
       const r2Key = row.r2_key as string;
+      doctorRefUrls.push(`/api/media/${r2Key}`);
       const displayR2Key = row.display_r2_key as string | null;
-
-      const doctorRefKeys = [r2Key];
-      if (displayR2Key && displayR2Key !== r2Key) doctorRefKeys.push(displayR2Key);
-
-      for (const key of doctorRefKeys) {
-        const doctorRef = await query<Row>(
-          "SELECT id FROM doctor_profiles WHERE photo_url = ? LIMIT 1",
-          `/api/media/${key}`,
-        );
-        if (doctorRef.results && doctorRef.results.length > 0) {
-          return json(
-            {
-              success: false,
-              outcome: "CONFLICT",
-              error: "Media is still in use. Replace or remove its references before deleting it.",
-            },
-            { status: 409 },
-          );
-        }
+      if (displayR2Key && displayR2Key !== r2Key) doctorRefUrls.push(`/api/media/${displayR2Key}`);
+      const thumbnailR2Key = row.thumbnail_r2_key as string | null;
+      if (thumbnailR2Key && thumbnailR2Key !== r2Key && thumbnailR2Key !== displayR2Key) {
+        doctorRefUrls.push(`/api/media/${thumbnailR2Key}`);
       }
     } else {
-      // PUBLIC asset: check public_path, display_public_path
       const publicPath = row.public_path as string;
+      if (publicPath) doctorRefUrls.push(publicPath);
       const displayPublicPath = row.display_public_path as string | null;
-
-      const publicPaths = [publicPath];
-      if (displayPublicPath && displayPublicPath !== publicPath) publicPaths.push(displayPublicPath);
-
-      for (const p of publicPaths) {
-        const doctorRef = await query<Row>(
-          "SELECT id FROM doctor_profiles WHERE photo_url = ? LIMIT 1",
-          p,
-        );
-        if (doctorRef.results && doctorRef.results.length > 0) {
-          return json(
-            {
-              success: false,
-              outcome: "CONFLICT",
-              error: "Media is still in use. Replace or remove its references before deleting it.",
-            },
-            { status: 409 },
-          );
-        }
+      if (displayPublicPath && displayPublicPath !== publicPath) doctorRefUrls.push(displayPublicPath);
+      const thumbnailPublicPath = row.thumbnail_public_path as string | null;
+      if (thumbnailPublicPath && thumbnailPublicPath !== publicPath && thumbnailPublicPath !== displayPublicPath) {
+        doctorRefUrls.push(thumbnailPublicPath);
       }
     }
 
-    // Gallery item references: any existing reference blocks deletion
-    const galleryRef = await query<Row>(
-      "SELECT id FROM gallery_items WHERE media_id = ? LIMIT 1",
-      id,
-    );
-    if (galleryRef.results && galleryRef.results.length > 0) {
-      return json(
-        {
-          success: false,
-          outcome: "CONFLICT",
-          error: "Media is still in use. Replace or remove its references before deleting it.",
-        },
-        { status: 409 },
-      );
-    }
+    // ── Atomic reference-guard UPDATE (Section 1) ──────────────────────────
 
-    // ── Logical deletion ──────────────────────────────────────────────────
+    const placeholders = doctorRefUrls.length > 0 ? doctorRefUrls.map(() => "?").join(", ") : "NULL";
+    const atomicSql = `
+      UPDATE media_assets
+      SET lifecycle_status = 'ARCHIVED',
+          status = 'HIDDEN',
+          is_visible = 0,
+          deleted_at = CURRENT_TIMESTAMP,
+          cleanup_candidate_at = CURRENT_TIMESTAMP,
+          purge_status = 'CANDIDATE',
+          purge_error = NULL,
+          version = version + 1,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND version = ? AND deleted_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM gallery_items WHERE media_id = media_assets.id)
+        ${doctorRefUrls.length > 0 ? `AND NOT EXISTS (SELECT 1 FROM doctor_profiles WHERE photo_url IN (${placeholders}))` : ""}
+    `;
 
-    const result = await run(
-      `UPDATE media_assets
-       SET lifecycle_status = 'ARCHIVED',
-           status = 'HIDDEN',
-           is_visible = 0,
-           deleted_at = CURRENT_TIMESTAMP,
-           cleanup_candidate_at = CURRENT_TIMESTAMP,
-           purge_status = 'CANDIDATE',
-           purge_error = NULL,
-           version = version + 1,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND version = ? AND deleted_at IS NULL`,
-      id,
-      expectedVersion,
-    );
+    const result = await run(atomicSql, id, expectedVersion, ...doctorRefUrls);
 
     if (result.meta?.changes === 0) {
+      // Classify zero-row change: 404 vs 409-version vs 409-reference
       const recheck = await query<Row>(
         "SELECT id, version, deleted_at FROM media_assets WHERE id = ? LIMIT 1",
         id,
@@ -405,6 +388,31 @@ export async function DELETE(
       if (!recheckRow || recheckRow.deleted_at) {
         return json({ error: "Media asset not found.", outcome: "NOT_FOUND" }, { status: 404 });
       }
+      if ((recheckRow.version as number) !== expectedVersion) {
+        return json(
+          { error: "Version conflict. The asset has been modified since you loaded it.", outcome: "CONFLICT" },
+          { status: 409 },
+        );
+      }
+
+      // Reference conflict: re-check which reference type blocked the update
+      for (const url of doctorRefUrls) {
+        const ref = await query<Row>("SELECT id FROM doctor_profiles WHERE photo_url = ? LIMIT 1", url);
+        if (ref.results && ref.results.length > 0) {
+          return json(
+            { success: false, outcome: "CONFLICT", error: "Media is still in use. Replace or remove its references before deleting it." },
+            { status: 409 },
+          );
+        }
+      }
+      const galleryRef = await query<Row>("SELECT id FROM gallery_items WHERE media_id = ? LIMIT 1", id);
+      if (galleryRef.results && galleryRef.results.length > 0) {
+        return json(
+          { success: false, outcome: "CONFLICT", error: "Media is still in use. Replace or remove its references before deleting it." },
+          { status: 409 },
+        );
+      }
+
       return json(
         { error: "Version conflict. The asset has been modified since you loaded it.", outcome: "CONFLICT" },
         { status: 409 },

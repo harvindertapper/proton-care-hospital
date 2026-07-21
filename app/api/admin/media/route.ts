@@ -190,12 +190,14 @@ export async function DELETE(request: Request) {
 
   // Doctor reference check: check all URL variants that could be stored in photo_url
   const doctorRefKeys = [asset.r2_key];
-  const displayR2Key = await query<{ display_r2_key: string | null }>(
-    "SELECT display_r2_key FROM media_assets WHERE id = ? LIMIT 1",
+  const displayR2Key = await query<{ display_r2_key: string | null; thumbnail_r2_key: string | null }>(
+    "SELECT display_r2_key, thumbnail_r2_key FROM media_assets WHERE id = ? LIMIT 1",
     id,
   );
   const dKey = displayR2Key.results?.[0]?.display_r2_key;
   if (dKey && dKey !== asset.r2_key) doctorRefKeys.push(dKey);
+  const tKey = displayR2Key.results?.[0]?.thumbnail_r2_key;
+  if (tKey && tKey !== asset.r2_key && tKey !== dKey) doctorRefKeys.push(tKey);
 
   for (const key of doctorRefKeys) {
     const exactUrl = `/api/media/${key}`;
