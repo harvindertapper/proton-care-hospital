@@ -1,15 +1,13 @@
 import { json, query, run, requireAdmin, verifyCsrf, audit, checkRateLimit, getClientIp } from "@/app/lib/server";
 import { executeRoleMutation } from "@/app/lib/mutation-result";
-import { clean, slugify } from "@/app/lib/utils";
+import { clean } from "@/app/lib/utils";
 import {
-  GALLERY_ITEMS_SELECT,
   ITEM_WITH_MEDIA_SELECT,
   parseGalleryLimit,
   parseGalleryOffset,
   parseSortOrder,
   isSlotKeyAvailable,
   toItemAdminDto,
-  countItems,
   GALLERY_FIELD_LENGTHS,
   type ItemRowWithMedia,
 } from "@/app/lib/gallery-v2";
@@ -74,20 +72,14 @@ export async function GET(request: Request) {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    // Count
     const countSql = `SELECT COUNT(*) AS total FROM gallery_items gi ${whereClause}`;
     const countResult = await query<{ total: number }>(countSql, ...binds);
     const total = countResult.results?.[0]?.total ?? 0;
 
-    // List query with media join
     const listSql = `SELECT ${ITEM_WITH_MEDIA_SELECT} FROM gallery_items gi INNER JOIN media_assets m ON gi.media_id = m.id ${whereClause} ORDER BY gi.sort_order ASC, gi.id ASC LIMIT ? OFFSET ?`;
     const listResult = await query<ItemRowWithMedia>(listSql, ...binds, limit, offset);
 
-    const items = [];
-    for (const row of listResult.results ?? []) {
-      const dtoResult = toItemAdminDto(row);
-      items.push(dtoResult);
-    }
+    const items = (listResult.results ?? []).map((row) => toItemAdminDto(row));
 
     return json({
       success: true,
@@ -107,7 +99,8 @@ export async function GET(request: Request) {
 
 /* ───────────────────────────────────────────────────────────────────────────
    POST /api/admin/gallery/items
-   Create a new gallery item.
+   Create a new gallery item. Always starts as DRAFT.
+   Media category must be GALLERY.
    ─────────────────────────────────────────────────────────────────────────── */
 
 export async function POST(request: Request) {
@@ -142,7 +135,6 @@ export async function POST(request: Request) {
     const mediaId = clean(body.mediaId, 140);
     if (!mediaId) return json({ error: "mediaId is required." }, { status: 400 });
 
-    // Validate section exists
     const sectionRows = await query<Row>(
       "SELECT id FROM gallery_sections WHERE id = ? AND deleted_at IS NULL LIMIT 1",
       sectionId,
@@ -151,20 +143,22 @@ export async function POST(request: Request) {
       return json({ error: "Gallery section not found.", outcome: "NOT_FOUND" }, { status: 404 });
     }
 
-    // Validate media asset exists
     const mediaRows = await query<Row>(
-      "SELECT id FROM media_assets WHERE id = ? AND deleted_at IS NULL LIMIT 1",
+      "SELECT id, category FROM media_assets WHERE id = ? AND deleted_at IS NULL LIMIT 1",
       mediaId,
     );
     if (!mediaRows.results || mediaRows.results.length === 0) {
       return json({ error: "Media asset not found or has been deleted.", outcome: "NOT_FOUND" }, { status: 404 });
+    }
+    const mediaCategory = (mediaRows.results[0] as { category?: string }).category;
+    if (mediaCategory && mediaCategory !== "GALLERY") {
+      return json({ error: "Media asset category must be GALLERY for gallery items." }, { status: 400 });
     }
 
     const slotKey = body.slotKey !== undefined && body.slotKey !== null
       ? clean(body.slotKey, GALLERY_FIELD_LENGTHS.slotKey) || null
       : null;
 
-    // Validate slot key uniqueness if provided
     if (slotKey) {
       const slotAvailable = await isSlotKeyAvailable(slotKey);
       if (!slotAvailable) {
@@ -176,12 +170,6 @@ export async function POST(request: Request) {
     const altTextOverride = clean(body.altTextOverride, GALLERY_FIELD_LENGTHS.altTextOverride);
     const captionOverride = clean(body.captionOverride, GALLERY_FIELD_LENGTHS.captionOverride);
     const sortOrder = parseSortOrder(body.sortOrder);
-
-    const lifecycleStatus = clean(body.lifecycleStatus, 40);
-    if (lifecycleStatus && !isValidLifecycleStatus(lifecycleStatus)) {
-      return json({ error: "Invalid lifecycleStatus." }, { status: 400 });
-    }
-    const effectiveStatus = lifecycleStatus || "DRAFT";
 
     const itemId = `gallery-item-${crypto.randomUUID().slice(0, 8)}`;
 
@@ -205,7 +193,6 @@ export async function POST(request: Request) {
               altTextOverride,
               captionOverride,
               sortOrder,
-              lifecycleStatus: effectiveStatus,
             },
           }),
           auth.session.email,
@@ -216,7 +203,7 @@ export async function POST(request: Request) {
       applyMutation: async () => {
         await run(
           `INSERT INTO gallery_items (id, section_id, media_id, slot_key, title_override, alt_text_override, caption_override, sort_order, lifecycle_status, version, created_by, updated_by, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
           itemId,
           sectionId,
           mediaId,
@@ -225,7 +212,6 @@ export async function POST(request: Request) {
           altTextOverride,
           captionOverride,
           sortOrder,
-          effectiveStatus,
           auth.session.email,
           auth.session.email,
         );

@@ -3,30 +3,14 @@
  *
  * Pure runtime-safe TypeScript — no Node-only, React, or test imports.
  * Handles slug normalization, lifecycle validation, pagination parsing,
- * DTO mapping, and publication eligibility checks for gallery sections and items.
+ * DTO mapping, and query helpers for gallery sections and items.
  */
 
-import { query, run } from "./server";
+import { query } from "./server";
 import { slugify, clean } from "./utils";
-import { GALLERY_LIFECYCLE_STATUSES, isPublicStorage } from "./media-schema";
 import {
-  generateR2MediaUrl,
-  validatePublicPath,
   resolveMediaUrls,
-  MEDIA_LIBRARY_SELECT,
-  escapeLikeWildcard,
-  type AdminMediaDto,
 } from "./media-library";
-import {
-  canTransition,
-  assertValidLifecycleTransition,
-  isValidLifecycleStatus,
-  type ContentLifecycleStatus,
-} from "./content/lifecycle";
-import {
-  ContentVersionConflictError,
-  InvalidLifecycleTransitionError,
-} from "./content/errors";
 
 /* ───────────────────────────────────────────────────────────────────────────
    Constants
@@ -70,24 +54,14 @@ export const GALLERY_ITEMS_COLUMNS = [
 export const GALLERY_SECTIONS_SELECT = GALLERY_SECTIONS_COLUMNS.join(", ");
 export const GALLERY_ITEMS_SELECT = GALLERY_ITEMS_COLUMNS.join(", ");
 
-/** Maximum field lengths for gallery entities. */
 export const GALLERY_FIELD_LENGTHS: Record<string, number> = {
-  name: 140,
-  description: 500,
   slug: 100,
-  slotKey: 120,
+  name: 200,
+  description: 1000,
+  slotKey: 150,
   titleOverride: 200,
   altTextOverride: 300,
   captionOverride: 1000,
-};
-
-/** Allowed lifecycle transitions for gallery entities. */
-const GALLERY_TRANSITIONS: Record<ContentLifecycleStatus, ReadonlySet<ContentLifecycleStatus>> = {
-  DRAFT: new Set<ContentLifecycleStatus>(["IN_REVIEW", "PUBLISHED", "ARCHIVED"]),
-  IN_REVIEW: new Set<ContentLifecycleStatus>(["DRAFT", "PUBLISHED", "HIDDEN", "ARCHIVED"]),
-  PUBLISHED: new Set<ContentLifecycleStatus>(["HIDDEN", "ARCHIVED"]),
-  HIDDEN: new Set<ContentLifecycleStatus>(["PUBLISHED", "ARCHIVED"]),
-  ARCHIVED: new Set<ContentLifecycleStatus>(["DRAFT"]),
 };
 
 /* ───────────────────────────────────────────────────────────────────────────
@@ -144,6 +118,7 @@ export type AdminGallerySectionDto = {
   publishedAt: string | null;
   deletedAt: string | null;
   itemCount: number;
+  publishedItemCount: number;
 };
 
 export type AdminGalleryItemDto = {
@@ -191,33 +166,9 @@ export type PublicGalleryItemDto = {
    Slug normalization
    ─────────────────────────────────────────────────────────────────────────── */
 
-/**
- * Normalize a slug for gallery entities. Lowercase, alphanumeric + dashes only.
- * Returns null if the input is empty or produces an empty slug.
- */
 export function normalizeSlug(input: unknown): string | null {
   const slug = slugify(clean(input, GALLERY_FIELD_LENGTHS.slug));
   return slug.length > 0 ? slug : null;
-}
-
-/* ───────────────────────────────────────────────────────────────────────────
-   Lifecycle helpers
-   ─────────────────────────────────────────────────────────────────────────── */
-
-export function isValidGalleryLifecycleStatus(value: unknown): value is ContentLifecycleStatus {
-  return isValidLifecycleStatus(value);
-}
-
-export function canGalleryTransition(from: ContentLifecycleStatus, to: ContentLifecycleStatus): boolean {
-  const allowed = GALLERY_TRANSITIONS[from];
-  if (!allowed) return false;
-  return allowed.has(to);
-}
-
-export function assertValidGalleryTransition(from: ContentLifecycleStatus, to: ContentLifecycleStatus): void {
-  if (!canGalleryTransition(from, to)) {
-    throw new InvalidLifecycleTransitionError(from, to);
-  }
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
@@ -245,127 +196,20 @@ export function parseSortOrder(raw: unknown): number {
 }
 
 export function parseVersion(raw: unknown): number | null {
-  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1) return raw;
-  if (typeof raw === "string") {
-    const n = parseInt(raw, 10);
-    if (!isNaN(n) && n >= 1) return n;
-  }
-  return null;
-}
-
-/* ───────────────────────────────────────────────────────────────────────────
-   Publication eligibility
-   ─────────────────────────────────────────────────────────────────────────── */
-
-export type PublicationEligibility = {
-  eligible: boolean;
-  reasons: string[];
-};
-
-/**
- * Check if a gallery section is eligible for PUBLISHED lifecycle status.
- * A section is eligible when:
- * - Its lifecycle_status transitions from a non-PUBLISHED state to PUBLISHED
- * - All referenced media assets have valid storage locators (public_path or r2_key)
- */
-export async function checkSectionPublicationEligibility(
-  sectionId: string,
-): Promise<PublicationEligibility> {
-  const reasons: string[] = [];
-
-  const items = await query<GalleryItemRow>(
-    `SELECT ${GALLERY_ITEMS_SELECT} FROM gallery_items WHERE section_id = ? AND deleted_at IS NULL AND lifecycle_status = 'PUBLISHED'`,
-    sectionId,
-  );
-
-  if (!items.results || items.results.length === 0) {
-    reasons.push("Section has no published items.");
-    return { eligible: false, reasons };
-  }
-
-  for (const item of items.results) {
-    const mediaRows = await query<Record<string, unknown>>(
-      `SELECT ${MEDIA_LIBRARY_SELECT} FROM media_assets WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
-      item.media_id,
-    );
-    const media = mediaRows.results?.[0];
-    if (!media) {
-      reasons.push(`Item ${item.id} references missing media asset ${item.media_id}.`);
-      continue;
-    }
-
-    const storageType = media.storage_type as string;
-    if (isPublicStorage(storageType)) {
-      const publicPath = media.public_path as string | null;
-      if (!publicPath) {
-        reasons.push(`Item ${item.id} references PUBLIC asset without public_path.`);
-        continue;
-      }
-      const pathCheck = validatePublicPath(publicPath);
-      if (!pathCheck.ok) {
-        reasons.push(`Item ${item.id} references asset with invalid public_path: ${pathCheck.error}`);
-      }
-    } else {
-      const r2Key = media.r2_key as string;
-      const r2Check = generateR2MediaUrl(r2Key);
-      if (!r2Check.ok) {
-        reasons.push(`Item ${item.id} references asset with invalid r2_key: ${r2Check.error}`);
-      }
-    }
-  }
-
-  return { eligible: reasons.length === 0, reasons };
-}
-
-/**
- * Check if a gallery item is eligible for PUBLISHED lifecycle status.
- * An item is eligible when:
- * - Its media asset exists and is not deleted
- * - The media asset has a valid storage locator
- */
-export async function checkItemPublicationEligibility(
-  mediaId: string,
-): Promise<PublicationEligibility> {
-  const reasons: string[] = [];
-
-  const mediaRows = await query<Record<string, unknown>>(
-    `SELECT ${MEDIA_LIBRARY_SELECT} FROM media_assets WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
-    mediaId,
-  );
-  const media = mediaRows.results?.[0];
-
-  if (!media) {
-    reasons.push("Referenced media asset not found or has been deleted.");
-    return { eligible: false, reasons };
-  }
-
-  const storageType = media.storage_type as string;
-  if (isPublicStorage(storageType)) {
-    const publicPath = media.public_path as string | null;
-    if (!publicPath) {
-      reasons.push("PUBLIC asset missing public_path.");
-    } else {
-      const pathCheck = validatePublicPath(publicPath);
-      if (!pathCheck.ok) {
-        reasons.push(`Invalid public_path: ${pathCheck.error}`);
-      }
-    }
-  } else {
-    const r2Key = media.r2_key as string;
-    const r2Check = generateR2MediaUrl(r2Key);
-    if (!r2Check.ok) {
-      reasons.push(`Invalid r2_key: ${r2Check.error}`);
-    }
-  }
-
-  return { eligible: reasons.length === 0, reasons };
+  if (typeof raw !== "number") return null;
+  if (!Number.isInteger(raw) || raw < 1) return null;
+  return raw;
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
    DTO mapping
    ─────────────────────────────────────────────────────────────────────────── */
 
-export function toSectionAdminDto(row: GallerySectionRow, itemCount: number): AdminGallerySectionDto {
+export function toSectionAdminDto(
+  row: GallerySectionRow,
+  itemCount: number,
+  publishedItemCount: number,
+): AdminGallerySectionDto {
   return {
     id: row.id,
     slug: row.slug,
@@ -381,6 +225,7 @@ export function toSectionAdminDto(row: GallerySectionRow, itemCount: number): Ad
     publishedAt: row.published_at,
     deletedAt: row.deleted_at,
     itemCount,
+    publishedItemCount,
   };
 }
 
@@ -485,9 +330,6 @@ const ITEM_WITH_MEDIA_COLUMNS = [
 
 export const ITEM_WITH_MEDIA_SELECT = ITEM_WITH_MEDIA_COLUMNS;
 
-/**
- * Fetch gallery items with joined media asset info.
- */
 export async function fetchItemsWithMedia(
   conditions: string[],
   binds: unknown[],
@@ -498,33 +340,31 @@ export async function fetchItemsWithMedia(
   return result.results ?? [];
 }
 
-/**
- * Count gallery items matching conditions.
- */
 export async function countItems(conditions: string[], binds: unknown[]): Promise<number> {
   const sql = `SELECT COUNT(*) AS total FROM gallery_items ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""}`;
   const result = await query<{ total: number }>(sql, ...binds);
   return result.results?.[0]?.total ?? 0;
 }
 
-/**
- * Count gallery sections matching conditions.
- */
 export async function countSections(conditions: string[], binds: unknown[]): Promise<number> {
   const sql = `SELECT COUNT(*) AS total FROM gallery_sections ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""}`;
   const result = await query<{ total: number }>(sql, ...binds);
   return result.results?.[0]?.total ?? 0;
 }
 
-/**
- * Fetch items count for a specific section.
- */
 export async function countItemsInSection(sectionId: string): Promise<number> {
   return countItems(["section_id = ?"], [sectionId]);
 }
 
+export async function countPublishedItemsInSection(sectionId: string): Promise<number> {
+  return countItems(
+    ["section_id = ?", "lifecycle_status = 'PUBLISHED'", "deleted_at IS NULL"],
+    [sectionId],
+  );
+}
+
 /* ───────────────────────────────────────────────────────────────────────────
-   Slug uniqueness check
+   Slug & slot uniqueness checks
    ─────────────────────────────────────────────────────────────────────────── */
 
 export async function isSectionSlugAvailable(
@@ -542,9 +382,6 @@ export async function isSectionSlugAvailable(
   return !result.results || result.results.length === 0;
 }
 
-/**
- * Check if a slot_key is available for active items.
- */
 export async function isSlotKeyAvailable(
   slotKey: string,
   excludeId?: string,
@@ -564,10 +401,6 @@ export async function isSlotKeyAvailable(
    published_at management
    ─────────────────────────────────────────────────────────────────────────── */
 
-/**
- * Determine the published_at SQL fragment for a lifecycle transition.
- * Returns null if no published_at change is needed.
- */
 export function publishedAtSql(
   currentStatus: string,
   newStatus: string,

@@ -2,7 +2,6 @@ import { json, query, run, requireAdmin, verifyCsrf, audit, checkRateLimit, getC
 import { clean } from "@/app/lib/utils";
 import {
   GALLERY_SECTIONS_SELECT,
-  GALLERY_ITEMS_SELECT,
   normalizeSlug,
   parseVersion,
   isSectionSlugAvailable,
@@ -10,6 +9,7 @@ import {
   publishedAtSql,
   GALLERY_FIELD_LENGTHS,
   countItemsInSection,
+  countPublishedItemsInSection,
   type GallerySectionRow,
 } from "@/app/lib/gallery-v2";
 import { isValidLifecycleStatus } from "@/app/lib/content/lifecycle";
@@ -57,7 +57,6 @@ export async function PATCH(
       return json({ error: "expectedVersion is required and must be a positive integer." }, { status: 400 });
     }
 
-    // Load current row
     const rows = await query<GallerySectionRow>(
       `SELECT ${GALLERY_SECTIONS_SELECT} FROM gallery_sections WHERE id = ? LIMIT 1`,
       id,
@@ -74,7 +73,6 @@ export async function PATCH(
       );
     }
 
-    // Validate and collect updates
     const updates: string[] = [];
     const binds: unknown[] = [];
 
@@ -122,20 +120,17 @@ export async function PATCH(
       return json({ error: "No editable fields provided." }, { status: 400 });
     }
 
-    // published_at handling
     const effectiveStatus = (body.lifecycleStatus as string) || current.lifecycle_status;
     const pubSql = publishedAtSql(current.lifecycle_status, effectiveStatus, current.published_at);
     if (pubSql) {
       updates.push(pubSql);
     }
 
-    // Always increment version and update timestamp
     updates.push("version = version + 1");
     updates.push("updated_by = ?");
     binds.push(auth.session.email);
     updates.push("updated_at = CURRENT_TIMESTAMP");
 
-    // Execute update with optimistic concurrency
     const updateSql = `UPDATE gallery_sections SET ${updates.join(", ")} WHERE id = ? AND version = ? AND deleted_at IS NULL`;
     const result = await run(updateSql, ...binds, id, expectedVersion);
 
@@ -154,7 +149,6 @@ export async function PATCH(
       );
     }
 
-    // Fetch updated row
     const updatedRows = await query<GallerySectionRow>(
       `SELECT ${GALLERY_SECTIONS_SELECT} FROM gallery_sections WHERE id = ? LIMIT 1`,
       id,
@@ -165,8 +159,8 @@ export async function PATCH(
     }
 
     const itemCount = await countItemsInSection(id);
+    const publishedItemCount = await countPublishedItemsInSection(id);
 
-    // Audit after successful mutation
     try {
       await audit(
         auth.session.email,
@@ -179,7 +173,7 @@ export async function PATCH(
       console.error("Audit failure after GALLERY_SECTION_UPDATED:", auditErr);
     }
 
-    return json({ success: true, outcome: "APPLIED", item: toSectionAdminDto(updated, itemCount) });
+    return json({ success: true, outcome: "APPLIED", item: toSectionAdminDto(updated, itemCount, publishedItemCount) });
   } catch (error) {
     console.error("Gallery section PATCH error:", error);
     return json({ error: "Failed to update gallery section." }, { status: 500 });
@@ -188,7 +182,8 @@ export async function PATCH(
 
 /* ───────────────────────────────────────────────────────────────────────────
    DELETE /api/admin/gallery/sections/[id]
-   Logical deletion only (set deleted_at). Fails if section has active items.
+   Logical deletion: sets ARCHIVED + deleted_at in a single guarded UPDATE.
+   The WHERE clause includes NOT EXISTS for active items to prevent race conditions.
    ─────────────────────────────────────────────────────────────────────────── */
 
 export async function DELETE(
@@ -223,7 +218,6 @@ export async function DELETE(
       return json({ error: "expectedVersion is required and must be a positive integer." }, { status: 400 });
     }
 
-    // Load section
     const rows = await query<GallerySectionRow>(
       `SELECT ${GALLERY_SECTIONS_SELECT} FROM gallery_sections WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
       id,
@@ -240,34 +234,41 @@ export async function DELETE(
       );
     }
 
-    // Check for active items (FK RESTRICT would fail, but give a clearer message)
-    const activeItems = await query<Row>(
-      "SELECT id FROM gallery_items WHERE section_id = ? AND deleted_at IS NULL LIMIT 1",
-      id,
-    );
-    if (activeItems.results && activeItems.results.length > 0) {
-      return json(
-        { success: false, outcome: "CONFLICT", error: "Cannot delete a section that still has active gallery items. Remove all items first." },
-        { status: 409 },
-      );
-    }
-
-    // Logical deletion
     const result = await run(
-      `UPDATE gallery_sections SET deleted_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND version = ? AND deleted_at IS NULL`,
+      `UPDATE gallery_sections
+       SET lifecycle_status = 'ARCHIVED', deleted_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND version = ? AND deleted_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM gallery_items WHERE section_id = gallery_sections.id AND deleted_at IS NULL)`,
       auth.session.email,
       id,
       expectedVersion,
     );
 
     if (result.meta?.changes === 0) {
+      const recheck = await query<Row>(
+        "SELECT id, version, deleted_at FROM gallery_sections WHERE id = ? LIMIT 1",
+        id,
+      );
+      const recheckRow = recheck.results?.[0];
+      if (!recheckRow || recheckRow.deleted_at) {
+        return json({ error: "Gallery section not found.", outcome: "NOT_FOUND" }, { status: 404 });
+      }
+      const activeItemsCheck = await query<Row>(
+        "SELECT id FROM gallery_items WHERE section_id = ? AND deleted_at IS NULL LIMIT 1",
+        id,
+      );
+      if (activeItemsCheck.results && activeItemsCheck.results.length > 0) {
+        return json(
+          { success: false, outcome: "CONFLICT", error: "Cannot delete a section that still has active gallery items. Remove all items first." },
+          { status: 409 },
+        );
+      }
       return json(
         { error: "Version conflict. The section has been modified since you loaded it.", outcome: "CONFLICT" },
         { status: 409 },
       );
     }
 
-    // Audit after successful logical deletion
     try {
       await audit(
         auth.session.email,

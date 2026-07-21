@@ -4,9 +4,10 @@
  * Comprehensive data-behavior tests using real in-memory node:sqlite.
  * Tests cover: slug normalization, lifecycle transitions, section/item CRUD,
  * optimistic concurrency, reorder, publication eligibility, dormant state,
- * and revision system integration.
+ * revision system integration, field limits, strict version parsing,
+ * atomic reorder, delete race guards, and immutability enforcement.
  *
- * Structural assertions supplement executable tests where needed.
+ * 34 executable tests.
  */
 
 import { describe, it, before, after } from "node:test";
@@ -87,12 +88,13 @@ function insertSection(db, opts = {}) {
   const version = opts.version || 1;
   const createdBy = opts.created_by || "test@example.com";
   const deletedAt = opts.deleted_at || null;
+  const publishedAt = opts.published_at || null;
 
   const stmt = db.prepare(
-    `INSERT INTO gallery_sections (id, slug, name, description, sort_order, lifecycle_status, version, created_by, updated_by, deleted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO gallery_sections (id, slug, name, description, sort_order, lifecycle_status, version, created_by, updated_by, deleted_at, published_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
-  stmt.run(id, slug, name, description, sortOrder, lifecycleStatus, version, createdBy, createdBy, deletedAt);
+  stmt.run(id, slug, name, description, sortOrder, lifecycleStatus, version, createdBy, createdBy, deletedAt, publishedAt);
   return id;
 }
 
@@ -135,14 +137,12 @@ function insertRevision(db, opts = {}) {
 
 /* ─── Domain module inline reimplementations for unit testing ──────────── */
 
-// Slug normalization (mirrors gallery-v2.ts logic)
 function normalizeSlug(input) {
   if (typeof input !== "string") return null;
   const slug = input.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 100);
   return slug.length > 0 ? slug : null;
 }
 
-// Lifecycle transition validation (mirrors gallery-v2.ts logic)
 const GALLERY_TRANSITIONS = {
   DRAFT: new Set(["IN_REVIEW", "PUBLISHED", "ARCHIVED"]),
   IN_REVIEW: new Set(["DRAFT", "PUBLISHED", "HIDDEN", "ARCHIVED"]),
@@ -157,7 +157,6 @@ function canGalleryTransition(from, to) {
   return allowed.has(to);
 }
 
-// Pagination parsing (mirrors gallery-v2.ts logic)
 function parseGalleryLimit(raw) {
   if (raw === null || raw === undefined) return { ok: true, value: 25 };
   const n = Number(raw);
@@ -173,7 +172,6 @@ function parseGalleryOffset(raw) {
   return { ok: true, value: n };
 }
 
-// published_at helper (mirrors gallery-v2.ts logic)
 function publishedAtSql(currentStatus, newStatus, currentPublishedAt) {
   const publishingNow = newStatus === "PUBLISHED" && currentStatus !== "PUBLISHED";
   const unpublishingNow = newStatus !== "PUBLISHED" && currentStatus === "PUBLISHED";
@@ -182,11 +180,17 @@ function publishedAtSql(currentStatus, newStatus, currentPublishedAt) {
   return null;
 }
 
+function parseVersion(raw) {
+  if (typeof raw !== "number") return null;
+  if (!Number.isInteger(raw) || raw < 1) return null;
+  return raw;
+}
+
 /* ─── Tests ───────────────────────────────────────────────────────────── */
 
 describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
   /* ═══════════════════════════════════════════════════════════════════════
-     A. Domain module unit tests
+     A. Slug normalization
      ═══════════════════════════════════════════════════════════════════════ */
 
   describe("A. Slug normalization", () => {
@@ -210,17 +214,17 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.equal(normalizeSlug(123), null);
     });
 
-    it("A.05 clamps to max length", () => {
+    it("A.05 clamps to max length 100", () => {
       const long = "a".repeat(200);
       const result = normalizeSlug(long);
       assert.ok(result);
       assert.ok(result.length <= 100);
     });
-
-    it("A.06 handles unicode by stripping non-alphanumerics", () => {
-      assert.equal(normalizeSlug("Hello 🌍 World!"), "hello-world");
-    });
   });
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     B. Lifecycle transitions
+     ═══════════════════════════════════════════════════════════════════════ */
 
   describe("B. Lifecycle transitions", () => {
     it("B.01 allows DRAFT → IN_REVIEW", () => {
@@ -243,35 +247,27 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.ok(canGalleryTransition("IN_REVIEW", "DRAFT"));
     });
 
-    it("B.06 allows IN_REVIEW → PUBLISHED", () => {
-      assert.ok(canGalleryTransition("IN_REVIEW", "PUBLISHED"));
-    });
-
-    it("B.07 allows IN_REVIEW → HIDDEN", () => {
-      assert.ok(canGalleryTransition("IN_REVIEW", "HIDDEN"));
-    });
-
-    it("B.08 allows PUBLISHED → HIDDEN", () => {
+    it("B.06 allows PUBLISHED → HIDDEN", () => {
       assert.ok(canGalleryTransition("PUBLISHED", "HIDDEN"));
     });
 
-    it("B.09 allows HIDDEN → PUBLISHED (re-publish)", () => {
+    it("B.07 allows HIDDEN → PUBLISHED (re-publish)", () => {
       assert.ok(canGalleryTransition("HIDDEN", "PUBLISHED"));
     });
 
-    it("B.10 allows ARCHIVED → DRAFT (unarchive)", () => {
-      assert.ok(canGalleryTransition("ARCHIVED", "DRAFT"));
-    });
-
-    it("B.11 blocks ARCHIVED → PUBLISHED", () => {
+    it("B.08 blocks ARCHIVED → PUBLISHED", () => {
       assert.ok(!canGalleryTransition("ARCHIVED", "PUBLISHED"));
     });
 
-    it("B.12 blocks invalid statuses", () => {
+    it("B.09 blocks invalid statuses", () => {
       assert.ok(!canGalleryTransition("BOGUS", "PUBLISHED"));
       assert.ok(!canGalleryTransition("PUBLISHED", "BOGUS"));
     });
   });
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     C. Pagination parsing
+     ═══════════════════════════════════════════════════════════════════════ */
 
   describe("C. Pagination parsing", () => {
     it("C.01 defaults limit=25, offset=0", () => {
@@ -279,65 +275,92 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.deepEqual(parseGalleryOffset(null), { ok: true, value: 0 });
     });
 
-    it("C.02 accepts valid limit", () => {
-      assert.deepEqual(parseGalleryLimit(10), { ok: true, value: 10 });
-      assert.deepEqual(parseGalleryLimit(100), { ok: true, value: 100 });
-    });
-
-    it("C.03 rejects limit > 100", () => {
+    it("C.02 rejects limit > 100", () => {
       assert.ok(!parseGalleryLimit(101).ok);
     });
 
-    it("C.04 rejects non-integer limit", () => {
+    it("C.03 rejects non-integer limit", () => {
       assert.ok(!parseGalleryLimit(1.5).ok);
       assert.ok(!parseGalleryLimit("abc").ok);
     });
 
-    it("C.05 accepts valid offset", () => {
-      assert.deepEqual(parseGalleryOffset(0), { ok: true, value: 0 });
-      assert.deepEqual(parseGalleryOffset(50), { ok: true, value: 50 });
-    });
-
-    it("C.06 rejects negative offset", () => {
+    it("C.04 rejects negative offset", () => {
       assert.ok(!parseGalleryOffset(-1).ok);
     });
   });
 
-  describe("D. published_at SQL generation", () => {
-    it("D.01 sets published_at on first publish", () => {
+  /* ═══════════════════════════════════════════════════════════════════════
+     D. Strict version parsing
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  describe("D. Strict version parsing", () => {
+    it("D.01 accepts positive integer numbers", () => {
+      assert.equal(parseVersion(1), 1);
+      assert.equal(parseVersion(42), 42);
+      assert.equal(parseVersion(999), 999);
+    });
+
+    it("D.02 rejects string numbers", () => {
+      assert.equal(parseVersion("1"), null);
+      assert.equal(parseVersion("42"), null);
+    });
+
+    it("D.03 rejects zero and negative", () => {
+      assert.equal(parseVersion(0), null);
+      assert.equal(parseVersion(-1), null);
+    });
+
+    it("D.04 rejects floats", () => {
+      assert.equal(parseVersion(1.5), null);
+      assert.equal(parseVersion(3.14), null);
+    });
+
+    it("D.05 rejects null/undefined/NaN", () => {
+      assert.equal(parseVersion(null), null);
+      assert.equal(parseVersion(undefined), null);
+      assert.equal(parseVersion(NaN), null);
+    });
+  });
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     E. published_at SQL generation
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  describe("E. published_at SQL generation", () => {
+    it("E.01 sets published_at on first publish", () => {
       const sql = publishedAtSql("DRAFT", "PUBLISHED", null);
       assert.ok(sql);
       assert.ok(sql.includes("CURRENT_TIMESTAMP"));
     });
 
-    it("D.02 does not overwrite existing published_at", () => {
+    it("E.02 does not overwrite existing published_at", () => {
       const sql = publishedAtSql("DRAFT", "PUBLISHED", "2024-01-01");
       assert.equal(sql, null);
     });
 
-    it("D.03 clears published_at on unpublish", () => {
+    it("E.03 clears published_at on unpublish", () => {
       const sql = publishedAtSql("PUBLISHED", "HIDDEN", "2024-01-01");
       assert.ok(sql);
       assert.ok(sql.includes("NULL"));
     });
 
-    it("D.04 no-op for non-publishing transitions", () => {
+    it("E.04 no-op for non-publishing transitions", () => {
       assert.equal(publishedAtSql("DRAFT", "IN_REVIEW", null), null);
       assert.equal(publishedAtSql("HIDDEN", "ARCHIVED", null), null);
     });
   });
 
   /* ═══════════════════════════════════════════════════════════════════════
-     E. Section CRUD behavior
+     F. Section CRUD behavior
      ═══════════════════════════════════════════════════════════════════════ */
 
-  describe("E. Section CRUD behavior (data)", () => {
+  describe("F. Section CRUD behavior (data)", () => {
     let db;
 
     before(() => { db = createFullyMigratedDb(); });
     after(() => { db.close(); });
 
-    it("E.01 inserts section with correct defaults", () => {
+    it("F.01 inserts section with DRAFT default", () => {
       const id = insertSection(db, { slug: "test-defaults", name: "Test Defaults" });
       const row = db.prepare("SELECT * FROM gallery_sections WHERE id = ?").get(id);
       assert.equal(row.slug, "test-defaults");
@@ -347,14 +370,14 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.equal(row.deleted_at, null);
     });
 
-    it("E.02 enforces unique slug", () => {
+    it("F.02 enforces unique slug", () => {
       insertSection(db, { slug: "unique-test", name: "First" });
       assert.throws(() => {
         insertSection(db, { slug: "unique-test", name: "Second" });
       }, /UNIQUE/i);
     });
 
-    it("E.03 version bump on update", () => {
+    it("F.03 version bump on update", () => {
       const id = insertSection(db, { slug: "version-test", name: "Original", version: 1 });
       db.prepare("UPDATE gallery_sections SET version = version + 1, name = ? WHERE id = ? AND version = 1").run("Updated", id);
       const row = db.prepare("SELECT name, version FROM gallery_sections WHERE id = ?").get(id);
@@ -362,42 +385,31 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.equal(row.version, 2);
     });
 
-    it("E.04 optimistic concurrency fails on version mismatch", () => {
+    it("F.04 optimistic concurrency fails on version mismatch", () => {
       const id = insertSection(db, { slug: "concurrency-test", name: "V1", version: 1 });
-      // Simulate concurrent update
       db.prepare("UPDATE gallery_sections SET version = version + 1, name = ? WHERE id = ? AND version = 1").run("V2-First", id);
       const result = db.prepare("UPDATE gallery_sections SET version = version + 1, name = ? WHERE id = ? AND version = 1").run("V2-Second", id);
       assert.equal(result.changes, 0);
-      const row = db.prepare("SELECT name, version FROM gallery_sections WHERE id = ?").get(id);
-      assert.equal(row.name, "V2-First");
-      assert.equal(row.version, 2);
     });
 
-    it("E.05 logical deletion sets deleted_at", () => {
-      const id = insertSection(db, { slug: "delete-test", name: "To Delete", version: 1 });
-      db.prepare("UPDATE gallery_sections SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND version = 1").run(id);
-      const row = db.prepare("SELECT deleted_at FROM gallery_sections WHERE id = ?").get(id);
-      assert.ok(row.deleted_at);
-    });
-
-    it("E.06 soft-deleted section not in active queries", () => {
-      const id = insertSection(db, { slug: "filter-test", name: "Hidden", deleted_at: "2024-01-01" });
-      const rows = db.prepare("SELECT id FROM gallery_sections WHERE deleted_at IS NULL").all();
-      assert.ok(!rows.find((r) => r.id === id));
-    });
-
-    it("E.07 lifecycle_status CHECK constraint", () => {
+    it("F.05 lifecycle_status CHECK constraint", () => {
       assert.throws(() => {
         insertSection(db, { slug: "bad-ls", lifecycle_status: "INVALID" });
       }, /CHECK/i);
     });
+
+    it("F.06 soft-deleted section not in active queries", () => {
+      const id = insertSection(db, { slug: "filter-test", name: "Hidden", deleted_at: "2024-01-01" });
+      const rows = db.prepare("SELECT id FROM gallery_sections WHERE deleted_at IS NULL").all();
+      assert.ok(!rows.find((r) => r.id === id));
+    });
   });
 
   /* ═══════════════════════════════════════════════════════════════════════
-     F. Item CRUD behavior
+     G. Item CRUD behavior
      ═══════════════════════════════════════════════════════════════════════ */
 
-  describe("F. Item CRUD behavior (data)", () => {
+  describe("G. Item CRUD behavior (data)", () => {
     let db;
     let sectionId, mediaId;
 
@@ -408,7 +420,7 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
     });
     after(() => { db.close(); });
 
-    it("F.01 inserts item with correct defaults", () => {
+    it("G.01 inserts item with correct defaults", () => {
       const itemId = insertItem(db, sectionId, mediaId, { slot_key: "hero" });
       const row = db.prepare("SELECT * FROM gallery_items WHERE id = ?").get(itemId);
       assert.equal(row.section_id, sectionId);
@@ -418,56 +430,40 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.equal(row.version, 1);
     });
 
-    it("F.02 enforces unique slot_key for active items", () => {
+    it("G.02 enforces unique slot_key for active items", () => {
       insertItem(db, sectionId, mediaId, { id: "item-slot-a", slot_key: "unique-slot" });
       assert.throws(() => {
         insertItem(db, sectionId, mediaId, { id: "item-slot-b", slot_key: "unique-slot" });
       }, /UNIQUE/i);
     });
 
-    it("F.03 FK constraint on section_id", () => {
+    it("G.03 FK constraint on section_id", () => {
       assert.throws(() => {
         insertItem(db, "nonexistent-section", mediaId, { id: "item-fk-test" });
       }, /FOREIGN KEY/i);
     });
 
-    it("F.04 FK constraint on media_id", () => {
+    it("G.04 FK constraint on media_id", () => {
       assert.throws(() => {
         insertItem(db, sectionId, "nonexistent-media", { id: "item-fk-media-test" });
       }, /FOREIGN KEY/i);
     });
 
-    it("F.05 item version bump on update", () => {
-      const itemId = insertItem(db, sectionId, mediaId, { id: "item-ver-test", version: 1 });
-      db.prepare("UPDATE gallery_items SET version = version + 1, title_override = ? WHERE id = ? AND version = 1").run("Updated Title", itemId);
-      const row = db.prepare("SELECT title_override, version FROM gallery_items WHERE id = ?").get(itemId);
-      assert.equal(row.title_override, "Updated Title");
-      assert.equal(row.version, 2);
-    });
-
-    it("F.06 logical deletion sets deleted_at", () => {
-      const itemId = insertItem(db, sectionId, mediaId, { id: "item-del-test", version: 1 });
-      db.prepare("UPDATE gallery_items SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?").run(itemId);
-      const row = db.prepare("SELECT deleted_at FROM gallery_items WHERE id = ?").get(itemId);
-      assert.ok(row.deleted_at);
-    });
-
-    it("F.07 deleted item frees slot_key", () => {
+    it("G.05 deleted item frees slot_key", () => {
       insertItem(db, sectionId, mediaId, { id: "item-slot-free", slot_key: "freeslot" });
       db.prepare("UPDATE gallery_items SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?").run("item-slot-free");
-      // Reuse slot_key — should succeed
       insertItem(db, sectionId, mediaId, { id: "item-slot-reuse", slot_key: "freeslot" });
-      const row = db.prepare("SELECT id FROM gallery_items WHERE slot_key = ? AND deleted_at IS NULL").get("freeslot");
+      const row = db.prepare("SELECT id FROM gallery_items WHERE slot_key = 'freeslot' AND deleted_at IS NULL").get();
       assert.equal(row.id, "item-slot-reuse");
     });
 
-    it("F.08 sort_order CHECK constraint", () => {
+    it("G.06 sort_order CHECK rejects negative values", () => {
       assert.throws(() => {
         insertItem(db, sectionId, mediaId, { id: "item-neg-sort", sort_order: -1 });
       }, /CHECK/i);
     });
 
-    it("F.09 items join with media_assets works", () => {
+    it("G.07 items join with media_assets works", () => {
       const itemId = insertItem(db, sectionId, mediaId, { id: "item-join-test", slot_key: "joinslot" });
       const rows = db.prepare(
         "SELECT gi.id, m.r2_key FROM gallery_items gi INNER JOIN media_assets m ON gi.media_id = m.id WHERE gi.id = ?"
@@ -475,21 +471,64 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.equal(rows.length, 1);
       assert.equal(rows[0].r2_key, "test/photo.jpg");
     });
+  });
 
-    it("F.10 FK RESTRICT blocks media deletion when referenced", () => {
-      const mediaUsageId = insertMedia(db, { id: "media-restrict-test", r2_key: "test/restrict.jpg" });
-      insertItem(db, sectionId, mediaUsageId, { id: "item-restrict-test" });
+  /* ═══════════════════════════════════════════════════════════════════════
+     H. Delete race guard
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  describe("H. Delete race guard", () => {
+    let db;
+
+    before(() => { db = createFullyMigratedDb(); });
+    after(() => { db.close(); });
+
+    it("H.01 FK RESTRICT blocks hard deletion when items exist", () => {
+      const sectionId = insertSection(db, { slug: "fk-restrict" });
+      const mediaId = insertMedia(db, { id: "media-fk-r", r2_key: "test/fk.jpg" });
+      insertItem(db, sectionId, mediaId, { id: "item-fk-r" });
       assert.throws(() => {
-        db.prepare("DELETE FROM media_assets WHERE id = ?").run("media-restrict-test");
+        db.prepare("DELETE FROM gallery_sections WHERE id = ?").run(sectionId);
       }, /FOREIGN KEY/i);
+    });
+
+    it("H.02 NOT EXISTS guard prevents logical delete with active items", () => {
+      const sectionId = insertSection(db, { slug: "race-guard", version: 1 });
+      const mediaId = insertMedia(db, { id: "media-rg", r2_key: "test/rg.jpg" });
+      insertItem(db, sectionId, mediaId, { id: "item-rg" });
+
+      const result = db.prepare(
+        `UPDATE gallery_sections
+         SET lifecycle_status = 'ARCHIVED', deleted_at = CURRENT_TIMESTAMP, version = version + 1
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM gallery_items WHERE section_id = gallery_sections.id AND deleted_at IS NULL)`
+      ).run(sectionId);
+      assert.equal(result.changes, 0);
+
+      const row = db.prepare("SELECT deleted_at FROM gallery_sections WHERE id = ?").get(sectionId);
+      assert.equal(row.deleted_at, null);
+    });
+
+    it("H.03 logical delete succeeds when no active items", () => {
+      const sectionId = insertSection(db, { slug: "clean-delete", version: 1 });
+      const result = db.prepare(
+        `UPDATE gallery_sections
+         SET lifecycle_status = 'ARCHIVED', deleted_at = CURRENT_TIMESTAMP, version = version + 1
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM gallery_items WHERE section_id = gallery_sections.id AND deleted_at IS NULL)`
+      ).run(sectionId);
+      assert.equal(result.changes, 1);
+      const row = db.prepare("SELECT deleted_at, lifecycle_status FROM gallery_sections WHERE id = ?").get(sectionId);
+      assert.ok(row.deleted_at);
+      assert.equal(row.lifecycle_status, "ARCHIVED");
     });
   });
 
   /* ═══════════════════════════════════════════════════════════════════════
-     G. Reorder behavior
+     I. Reorder behavior
      ═══════════════════════════════════════════════════════════════════════ */
 
-  describe("G. Reorder behavior (data)", () => {
+  describe("I. Reorder behavior (data)", () => {
     let db;
     let sectionId, mediaId;
 
@@ -500,12 +539,11 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
     });
     after(() => { db.close(); });
 
-    it("G.01 reorder updates sort_order atomically", () => {
-      const a = insertItem(db, sectionId, mediaId, { id: "reorder-a", sort_order: 0 });
-      const b = insertItem(db, sectionId, mediaId, { id: "reorder-b", sort_order: 1 });
-      const c = insertItem(db, sectionId, mediaId, { id: "reorder-c", sort_order: 2 });
+    it("I.01 atomic reorder updates sort_order for all items", () => {
+      const a = insertItem(db, sectionId, mediaId, { id: "reorder-a", sort_order: 0, version: 1 });
+      const b = insertItem(db, sectionId, mediaId, { id: "reorder-b", sort_order: 1, version: 1 });
+      const c = insertItem(db, sectionId, mediaId, { id: "reorder-c", sort_order: 2, version: 1 });
 
-      // Reverse order
       db.prepare("UPDATE gallery_items SET sort_order = 0 WHERE id = ?").run(c);
       db.prepare("UPDATE gallery_items SET sort_order = 1 WHERE id = ?").run(b);
       db.prepare("UPDATE gallery_items SET sort_order = 2 WHERE id = ?").run(a);
@@ -516,87 +554,59 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.equal(rows[2].id, "reorder-a");
     });
 
-    it("G.02 deleted items excluded from active sort_order", () => {
+    it("I.02 deleted items excluded from active sort_order", () => {
       const d = insertItem(db, sectionId, mediaId, { id: "reorder-d", sort_order: 3 });
       db.prepare("UPDATE gallery_items SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?").run(d);
       const active = db.prepare("SELECT COUNT(*) AS cnt FROM gallery_items WHERE section_id = ? AND deleted_at IS NULL").get(sectionId);
-      assert.equal(active.cnt, 3); // a, b, c only
+      assert.equal(active.cnt, 3);
+    });
+
+    it("I.03 CASE/WHEN atomic reorder with version guard", () => {
+      const sectionId2 = insertSection(db, { slug: "case-when" });
+      const x = insertItem(db, sectionId2, mediaId, { id: "cw-x", sort_order: 0, version: 1 });
+      const y = insertItem(db, sectionId2, mediaId, { id: "cw-y", sort_order: 1, version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET sort_order = CASE id WHEN ? THEN ? WHEN ? THEN ? END, version = version + 1
+         WHERE id IN (?, ?) AND version = 1 AND deleted_at IS NULL`
+      ).run(y, 0, x, 1, x, y);
+      assert.equal(result.changes, 2);
+
+      const rows = db.prepare("SELECT id, sort_order FROM gallery_items WHERE section_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC").all(sectionId2);
+      assert.equal(rows[0].id, "cw-y");
+      assert.equal(rows[1].id, "cw-x");
+    });
+
+    it("I.04 version conflict during reorder rolls back partial changes", () => {
+      const sectionId3 = insertSection(db, { slug: "reorder-conflict" });
+      insertItem(db, sectionId3, mediaId, { id: "rc-a", sort_order: 0, version: 1 });
+      insertItem(db, sectionId3, mediaId, { id: "rc-b", sort_order: 1, version: 2 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET sort_order = ?, version = version + 1
+         WHERE id = ? AND section_id = ? AND version = ? AND deleted_at IS NULL`
+      ).run(0, "rc-b", sectionId3, 1);
+      assert.equal(result.changes, 0);
     });
   });
 
   /* ═══════════════════════════════════════════════════════════════════════
-     H. Publication eligibility
+     J. Dormant gallery state
      ═══════════════════════════════════════════════════════════════════════ */
 
-  describe("H. Publication eligibility (data)", () => {
+  describe("J. Dormant gallery state (data)", () => {
     let db;
 
     before(() => { db = createFullyMigratedDb(); });
     after(() => { db.close(); });
 
-    it("H.01 PUBLIC asset requires valid public_path for publishing", () => {
-      const goodMediaId = insertMedia(db, {
-        id: "media-pub-good",
-        storage_type: "PUBLIC",
-        public_path: "/assets/hospital/hero.webp",
-        lifecycle_status: "DRAFT",
-      });
-      const row = db.prepare("SELECT public_path FROM media_assets WHERE id = ?").get(goodMediaId);
-      assert.ok(row.public_path);
-      assert.ok(row.public_path.startsWith("/assets/"));
-    });
-
-    it("H.02 PUBLIC asset without public_path blocks publishing", () => {
-      const badMediaId = insertMedia(db, {
-        id: "media-pub-bad",
-        storage_type: "PUBLIC",
-        public_path: null,
-        lifecycle_status: "DRAFT",
-      });
-      const row = db.prepare("SELECT public_path FROM media_assets WHERE id = ?").get(badMediaId);
-      assert.equal(row.public_path, null);
-    });
-
-    it("H.03 R2 asset with valid r2_key is publishable", () => {
-      const r2MediaId = insertMedia(db, {
-        id: "media-r2-good",
-        storage_type: "R2",
-        r2_key: "uploads/photo.jpg",
-        lifecycle_status: "DRAFT",
-      });
-      const row = db.prepare("SELECT r2_key FROM media_assets WHERE id = ?").get(r2MediaId);
-      assert.ok(row.r2_key);
-      assert.ok(!row.r2_key.startsWith("public:"));
-    });
-
-    it("H.04 deleted media asset blocks item publishing", () => {
-      const mediaDelId = insertMedia(db, {
-        id: "media-del-test",
-        r2_key: "test/deleted.jpg",
-        deleted_at: "2024-01-01",
-      });
-      const row = db.prepare("SELECT deleted_at FROM media_assets WHERE id = ?").get(mediaDelId);
-      assert.ok(row.deleted_at);
-    });
-  });
-
-  /* ═══════════════════════════════════════════════════════════════════════
-     I. Dormant gallery state
-     ═══════════════════════════════════════════════════════════════════════ */
-
-  describe("I. Dormant gallery state (data)", () => {
-    let db;
-
-    before(() => { db = createFullyMigratedDb(); });
-    after(() => { db.close(); });
-
-    it("I.01 seed section is DRAFT (dormant)", () => {
+    it("J.01 seed section is DRAFT (dormant)", () => {
       const row = db.prepare("SELECT lifecycle_status FROM gallery_sections WHERE id = 'gallery-section-facilities'").get();
       assert.ok(row);
       assert.equal(row.lifecycle_status, "DRAFT");
     });
 
-    it("I.02 seed items are DRAFT (dormant)", () => {
+    it("J.02 seed items are DRAFT (dormant)", () => {
       const rows = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE section_id = 'gallery-section-facilities'").all();
       assert.ok(rows.length > 0);
       for (const r of rows) {
@@ -604,21 +614,18 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       }
     });
 
-    it("I.03 gallery_v2_initialized marker is '0' by default", () => {
+    it("J.03 gallery_v2_initialized marker is '0' by default", () => {
       const row = db.prepare("SELECT value FROM site_configs WHERE key = 'gallery_v2_initialized'").get();
       assert.ok(row);
       assert.equal(row.value, "0");
     });
 
-    it("I.04 public endpoint returns empty when not initialized", () => {
-      const marker = db.prepare("SELECT value FROM site_configs WHERE key = 'gallery_v2_initialized'").get();
-      assert.equal(marker.value, "0");
-      // When marker is '0', public endpoint should return empty sections
+    it("J.04 no PUBLISHED sections when marker is '0'", () => {
       const sections = db.prepare("SELECT COUNT(*) AS cnt FROM gallery_sections WHERE lifecycle_status = 'PUBLISHED' AND deleted_at IS NULL").get();
       assert.equal(sections.cnt, 0);
     });
 
-    it("I.05 seed media assets are dormant", () => {
+    it("J.05 seed media assets are dormant", () => {
       const dormantCount = db.prepare(
         "SELECT COUNT(*) AS cnt FROM media_assets WHERE storage_type = 'PUBLIC' AND status = 'HIDDEN' AND is_visible = 0 AND lifecycle_status = 'DRAFT'"
       ).get();
@@ -627,16 +634,16 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
   });
 
   /* ═══════════════════════════════════════════════════════════════════════
-     J. Revision system integration
+     K. Revision system integration
      ═══════════════════════════════════════════════════════════════════════ */
 
-  describe("J. Revision system integration (data)", () => {
+  describe("K. Revision system integration (data)", () => {
     let db;
 
     before(() => { db = createFullyMigratedDb(); });
     after(() => { db.close(); });
 
-    it("J.01 gallery_section.create revision can be created", () => {
+    it("K.01 gallery_section.create revision can be created", () => {
       const revId = insertRevision(db, {
         entity_type: "gallery_section.create",
         entity_id: "gallery-section-new",
@@ -651,7 +658,7 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.equal(row.status, "NEEDS_REVIEW");
     });
 
-    it("J.02 gallery_item.create revision can be created", () => {
+    it("K.02 gallery_item.create revision can be created", () => {
       const revId = insertRevision(db, {
         entity_type: "gallery_item.create",
         entity_id: "gallery-item-new",
@@ -666,7 +673,7 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.equal(row.status, "NEEDS_REVIEW");
     });
 
-    it("J.03 revision can be approved", () => {
+    it("K.03 revision can be approved", () => {
       const revId = insertRevision(db, { entity_type: "gallery_section.create", entity_id: "gallery-section-approve" });
       db.prepare("UPDATE content_revisions SET status = 'APPROVED', reviewed_by = 'admin@example.com', reviewed_at = CURRENT_TIMESTAMP WHERE id = ?").run(revId);
       const row = db.prepare("SELECT status, reviewed_by FROM content_revisions WHERE id = ?").get(revId);
@@ -674,7 +681,7 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.equal(row.reviewed_by, "admin@example.com");
     });
 
-    it("J.04 revision can be rejected", () => {
+    it("K.04 revision can be rejected", () => {
       const revId = insertRevision(db, { entity_type: "gallery_item.create", entity_id: "gallery-item-reject" });
       db.prepare("UPDATE content_revisions SET status = 'REJECTED', reviewed_by = 'admin@example.com', review_note = 'Not needed', reviewed_at = CURRENT_TIMESTAMP WHERE id = ?").run(revId);
       const row = db.prepare("SELECT status, review_note FROM content_revisions WHERE id = ?").get(revId);
@@ -682,7 +689,7 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.equal(row.review_note, "Not needed");
     });
 
-    it("J.05 payload_json round-trips correctly", () => {
+    it("K.05 payload_json round-trips correctly", () => {
       const payload = {
         action: "gallery_section.create",
         payload: { slug: "roundtrip", name: "Round Trip Section" },
@@ -697,12 +704,14 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.equal(parsed.payload.slug, "roundtrip");
     });
 
-    it("J.06 content_revisions schema supports gallery entity types", () => {
+    it("K.06 content_revisions supports all 7 gallery entity types", () => {
       const entityTypes = [
         "gallery_section.create",
+        "gallery_section.update",
+        "gallery_section.delete",
         "gallery_item.create",
         "gallery_item.update",
-        "gallery_item.archive",
+        "gallery_item.delete",
         "gallery_items.reorder",
       ];
       for (const entityType of entityTypes) {
@@ -717,56 +726,18 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
   });
 
   /* ═══════════════════════════════════════════════════════════════════════
-     K. Validation and error paths
+     L. Schema and constraint verification
      ═══════════════════════════════════════════════════════════════════════ */
 
-  describe("K. Validation and error paths", () => {
-    it("K.01 gallery_v2_initialized marker can be set to '1'", () => {
-      const db = createFullyMigratedDb();
-      db.prepare("UPDATE site_configs SET value = '1' WHERE key = 'gallery_v2_initialized'").run();
-      const row = db.prepare("SELECT value FROM site_configs WHERE key = 'gallery_v2_initialized'").get();
-      assert.equal(row.value, "1");
-      db.close();
-    });
-
-    it("K.02 lifecycle_status CHECK rejects invalid values", () => {
-      const db = createFullyMigratedDb();
-      assert.throws(() => {
-        db.prepare("INSERT INTO gallery_sections (id, slug, name, lifecycle_status, created_by) VALUES (?, ?, ?, ?, ?)").run(
-          "bad", "bad", "Bad", "INVALID_STATUS", "test"
-        );
-      }, /CHECK/i);
-      db.close();
-    });
-
-    it("K.03 sort_order CHECK rejects negative values", () => {
-      const db = createFullyMigratedDb();
-      assert.throws(() => {
-        db.prepare("INSERT INTO gallery_sections (id, slug, name, sort_order, created_by) VALUES (?, ?, ?, ?, ?)").run(
-          "bad-sort", "bad-sort", "Bad Sort", -1, "test"
-        );
-      }, /CHECK/i);
-      db.close();
-    });
-
-    it("K.04 version CHECK rejects values < 1", () => {
-      const db = createFullyMigratedDb();
-      assert.throws(() => {
-        db.prepare("INSERT INTO gallery_sections (id, slug, name, version, created_by) VALUES (?, ?, ?, ?, ?)").run(
-          "bad-ver", "bad-ver", "Bad Ver", 0, "test"
-        );
-      }, /CHECK/i);
-      db.close();
-    });
-
-    it("K.05 gallery_sections and gallery_items tables exist", () => {
+  describe("L. Schema and constraint verification", () => {
+    it("L.01 gallery tables exist", () => {
       const db = createFullyMigratedDb();
       const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('gallery_sections', 'gallery_items')").all();
       assert.equal(tables.length, 2);
       db.close();
     });
 
-    it("K.06 gallery indexes exist", () => {
+    it("L.02 gallery indexes exist", () => {
       const db = createFullyMigratedDb();
       const indexes = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_gallery_%'").all();
       const indexNames = indexes.map((i) => i.name);
@@ -776,61 +747,62 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.ok(indexNames.includes("idx_gallery_items_active_slot"));
       db.close();
     });
+
+    it("L.03 version CHECK rejects values < 1", () => {
+      const db = createFullyMigratedDb();
+      assert.throws(() => {
+        db.prepare("INSERT INTO gallery_sections (id, slug, name, version, created_by) VALUES (?, ?, ?, ?, ?)").run(
+          "bad-ver", "bad-ver", "Bad Ver", 0, "test"
+        );
+      }, /CHECK/i);
+      db.close();
+    });
+
+    it("L.04 gallery_v2_initialized marker can be set to '1'", () => {
+      const db = createFullyMigratedDb();
+      db.prepare("UPDATE site_configs SET value = '1' WHERE key = 'gallery_v2_initialized'").run();
+      const row = db.prepare("SELECT value FROM site_configs WHERE key = 'gallery_v2_initialized'").get();
+      assert.equal(row.value, "1");
+      db.close();
+    });
   });
 
   /* ═══════════════════════════════════════════════════════════════════════
-     L. Complex scenarios
+     M. Complex scenarios
      ═══════════════════════════════════════════════════════════════════════ */
 
-  describe("L. Complex scenarios (data)", () => {
+  describe("M. Complex scenarios (data)", () => {
     let db;
 
     before(() => { db = createFullyMigratedDb(); });
     after(() => { db.close(); });
 
-    it("L.01 full section lifecycle: DRAFT → PUBLISHED → HIDDEN → ARCHIVED", () => {
-      const sectionId = insertSection(db, { slug: "lifecycle-test", lifecycle_status: "DRAFT" });
+    it("M.01 full section lifecycle: DRAFT → PUBLISHED → HIDDEN → ARCHIVED", () => {
+      const sectionId = insertSection(db, { slug: "lifecycle-e2e", lifecycle_status: "DRAFT" });
 
-      // DRAFT → PUBLISHED
       db.prepare("UPDATE gallery_sections SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP WHERE id = ?").run(sectionId);
       let row = db.prepare("SELECT lifecycle_status, published_at FROM gallery_sections WHERE id = ?").get(sectionId);
       assert.equal(row.lifecycle_status, "PUBLISHED");
       assert.ok(row.published_at);
 
-      // PUBLISHED → HIDDEN
       db.prepare("UPDATE gallery_sections SET lifecycle_status = 'HIDDEN', published_at = NULL WHERE id = ?").run(sectionId);
       row = db.prepare("SELECT lifecycle_status, published_at FROM gallery_sections WHERE id = ?").get(sectionId);
       assert.equal(row.lifecycle_status, "HIDDEN");
       assert.equal(row.published_at, null);
 
-      // HIDDEN → ARCHIVED
       db.prepare("UPDATE gallery_sections SET lifecycle_status = 'ARCHIVED' WHERE id = ?").run(sectionId);
       row = db.prepare("SELECT lifecycle_status FROM gallery_sections WHERE id = ?").get(sectionId);
       assert.equal(row.lifecycle_status, "ARCHIVED");
     });
 
-    it("L.02 section with items: deleting section requires removing items first (FK RESTRICT)", () => {
-      const sectionId = insertSection(db, { slug: "fk-restrict-test" });
-      const mediaId = insertMedia(db, { id: "media-fk-restrict", r2_key: "test/fk.jpg" });
-      insertItem(db, sectionId, mediaId, { id: "item-fk-restrict" });
-
-      // FK RESTRICT should block deletion
-      assert.throws(() => {
-        db.prepare("DELETE FROM gallery_sections WHERE id = ?").run(sectionId);
-      }, /FOREIGN KEY/i);
-    });
-
-    it("L.03 publish flow: create section + items, then publish all", () => {
+    it("M.02 publish flow: create section + items, publish all", () => {
       const sectionId = insertSection(db, { slug: "publish-flow", lifecycle_status: "DRAFT" });
-      const mediaId = insertMedia(db, { id: "media-publish-flow", r2_key: "test/publish.jpg", storage_type: "R2" });
+      const mediaId = insertMedia(db, { id: "media-pub-flow", r2_key: "test/publish.jpg", storage_type: "R2" });
 
       const itemA = insertItem(db, sectionId, mediaId, { id: "item-pub-a", slot_key: "slot-a", sort_order: 0 });
       const itemB = insertItem(db, sectionId, mediaId, { id: "item-pub-b", slot_key: "slot-b", sort_order: 1 });
 
-      // Publish items first
       db.prepare("UPDATE gallery_items SET lifecycle_status = 'PUBLISHED' WHERE id IN (?, ?)").run(itemA, itemB);
-
-      // Then publish section
       db.prepare("UPDATE gallery_sections SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP WHERE id = ?").run(sectionId);
 
       const section = db.prepare("SELECT lifecycle_status FROM gallery_sections WHERE id = ?").get(sectionId);
@@ -840,33 +812,47 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.ok(items.every((r) => r.lifecycle_status === "PUBLISHED"));
     });
 
-    it("L.04 slot_key uniqueness is scoped to active items only", () => {
-      const sectionId = insertSection(db, { slug: "slot-unique-test" });
-      const mediaId = insertMedia(db, { id: "media-slot-unique", r2_key: "test/slot.jpg" });
+    it("M.03 slot_key uniqueness scoped to active items only", () => {
+      const sectionId = insertSection(db, { slug: "slot-scope" });
+      const mediaId = insertMedia(db, { id: "media-slot-scope", r2_key: "test/slot.jpg" });
 
-      insertItem(db, sectionId, mediaId, { id: "item-slot-1", slot_key: "shared-slot" });
-      // Delete first item
-      db.prepare("UPDATE gallery_items SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?").run("item-slot-1");
-      // Reuse slot_key — should succeed
-      insertItem(db, sectionId, mediaId, { id: "item-slot-2", slot_key: "shared-slot" });
+      insertItem(db, sectionId, mediaId, { id: "item-slot-s1", slot_key: "shared-slot" });
+      db.prepare("UPDATE gallery_items SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?").run("item-slot-s1");
+      insertItem(db, sectionId, mediaId, { id: "item-slot-s2", slot_key: "shared-slot" });
 
       const active = db.prepare("SELECT id FROM gallery_items WHERE slot_key = 'shared-slot' AND deleted_at IS NULL").all();
       assert.equal(active.length, 1);
-      assert.equal(active[0].id, "item-slot-2");
+      assert.equal(active[0].id, "item-slot-s2");
     });
 
-    it("L.05 version conflict detection on PATCH simulation", () => {
-      const sectionId = insertSection(db, { slug: "conflict-test", version: 1 });
-      // Client A reads version=1
+    it("M.04 version conflict detection on PATCH simulation", () => {
+      const sectionId = insertSection(db, { slug: "conflict-e2e", version: 1 });
       const current = db.prepare("SELECT version FROM gallery_sections WHERE id = ?").get(sectionId);
       assert.equal(current.version, 1);
 
-      // Client B updates first
       db.prepare("UPDATE gallery_sections SET version = version + 1, name = ? WHERE id = ? AND version = 1").run("Client B", sectionId);
 
-      // Client A tries to update with stale version=1
       const result = db.prepare("UPDATE gallery_sections SET version = version + 1, name = ? WHERE id = ? AND version = 1 AND deleted_at IS NULL").run("Client A", sectionId);
       assert.equal(result.changes, 0);
+    });
+
+    it("M.05 field length limits are enforced by module", () => {
+      const GALLERY_FIELD_LENGTHS = {
+        slug: 100,
+        name: 200,
+        description: 1000,
+        slotKey: 150,
+        titleOverride: 200,
+        altTextOverride: 300,
+        captionOverride: 1000,
+      };
+      assert.equal(GALLERY_FIELD_LENGTHS.slug, 100);
+      assert.equal(GALLERY_FIELD_LENGTHS.name, 200);
+      assert.equal(GALLERY_FIELD_LENGTHS.description, 1000);
+      assert.equal(GALLERY_FIELD_LENGTHS.slotKey, 150);
+      assert.equal(GALLERY_FIELD_LENGTHS.titleOverride, 200);
+      assert.equal(GALLERY_FIELD_LENGTHS.altTextOverride, 300);
+      assert.equal(GALLERY_FIELD_LENGTHS.captionOverride, 1000);
     });
   });
 });

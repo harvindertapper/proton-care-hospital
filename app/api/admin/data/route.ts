@@ -449,7 +449,12 @@ async function applyAction(action: string, payload: Record<string, unknown>, act
   if (action === "career.delete") return applyDeleteCareer(payload, actorEmail);
   if (action === "video.delete") return applyDeleteVideo(payload, actorEmail);
   if (action === "gallery_section.create") return applyGallerySectionCreate(payload, actorEmail);
+  if (action === "gallery_section.update") return applyGallerySectionUpdate(payload, actorEmail);
+  if (action === "gallery_section.delete") return applyGallerySectionDelete(payload, actorEmail);
   if (action === "gallery_item.create") return applyGalleryItemCreate(payload, actorEmail);
+  if (action === "gallery_item.update") return applyGalleryItemUpdate(payload, actorEmail);
+  if (action === "gallery_item.delete") return applyGalleryItemDelete(payload, actorEmail);
+  if (action === "gallery_items.reorder") return applyGalleryItemsReorder(payload, actorEmail);
   throw new Error(`Unsupported admin action: ${action}`);
 }
 
@@ -794,9 +799,26 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (Number.isNaN(parseExpectedVersion(obj.expectedVersion, { minimum: 1 }))) return { ok: false, error: "expectedVersion must be a positive integer." };
   } else if (action === "gallery_section.create") {
     if (typeof obj.name !== "string" || !obj.name.trim()) return { ok: false, error: "Section name is required." };
+  } else if (action === "gallery_section.update") {
+    if (typeof obj.id !== "string" || !obj.id.trim()) return { ok: false, error: "Section ID is required." };
+    if (typeof obj.expectedVersion !== "number" || !Number.isInteger(obj.expectedVersion) || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion must be a positive integer." };
+  } else if (action === "gallery_section.delete") {
+    if (typeof obj.id !== "string" || !obj.id.trim()) return { ok: false, error: "Section ID is required." };
+    if (typeof obj.expectedVersion !== "number" || !Number.isInteger(obj.expectedVersion) || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion must be a positive integer." };
   } else if (action === "gallery_item.create") {
     if (typeof obj.sectionId !== "string" || !obj.sectionId.trim()) return { ok: false, error: "sectionId is required." };
     if (typeof obj.mediaId !== "string" || !obj.mediaId.trim()) return { ok: false, error: "mediaId is required." };
+  } else if (action === "gallery_item.update") {
+    if (typeof obj.id !== "string" || !obj.id.trim()) return { ok: false, error: "Item ID is required." };
+    if (typeof obj.expectedVersion !== "number" || !Number.isInteger(obj.expectedVersion) || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion must be a positive integer." };
+    if (obj.sectionId !== undefined) return { ok: false, error: "sectionId is immutable." };
+    if (obj.mediaId !== undefined) return { ok: false, error: "mediaId is immutable." };
+  } else if (action === "gallery_item.delete") {
+    if (typeof obj.id !== "string" || !obj.id.trim()) return { ok: false, error: "Item ID is required." };
+    if (typeof obj.expectedVersion !== "number" || !Number.isInteger(obj.expectedVersion) || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion must be a positive integer." };
+  } else if (action === "gallery_items.reorder") {
+    if (typeof obj.sectionId !== "string" || !obj.sectionId.trim()) return { ok: false, error: "sectionId is required." };
+    if (!Array.isArray(obj.itemOrder) || obj.itemOrder.length === 0) return { ok: false, error: "itemOrder must be a non-empty array." };
   }
   return { ok: true };
 }
@@ -926,16 +948,14 @@ async function applyDeleteVideo(payload: Record<string, unknown>, actorEmail: st
 
 async function applyGallerySectionCreate(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 100);
-  const name = clean(payload.name, 140);
-  const description = clean(payload.description, 500);
+  const name = clean(payload.name, 200);
+  const description = clean(payload.description, 1000);
   const sortOrder = typeof payload.sortOrder === "number" && Number.isInteger(payload.sortOrder) && payload.sortOrder >= 0
     ? payload.sortOrder
     : 0;
-  const lifecycleStatus = clean(payload.lifecycleStatus, 40) || "DRAFT";
 
   if (!slug || !name) throw new Error("Section slug and name are required.");
 
-  // Check slug uniqueness
   const existing = await query("SELECT id FROM gallery_sections WHERE slug = ? AND deleted_at IS NULL LIMIT 1", slug);
   if (existing.results && existing.results.length > 0) {
     throw new Error(`A gallery section with slug "${slug}" already exists.`);
@@ -944,13 +964,12 @@ async function applyGallerySectionCreate(payload: Record<string, unknown>, actor
   const sectionId = `gallery-section-${slug}`;
   await run(
     `INSERT INTO gallery_sections (id, slug, name, description, sort_order, lifecycle_status, version, created_by, updated_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+     VALUES (?, ?, ?, ?, ?, 'DRAFT', 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
     sectionId,
     slug,
     name,
     description,
     sortOrder,
-    lifecycleStatus,
     actorEmail,
     actorEmail,
   );
@@ -958,11 +977,114 @@ async function applyGallerySectionCreate(payload: Record<string, unknown>, actor
   return { outcome: "APPLIED" as const };
 }
 
+async function applyGallerySectionUpdate(payload: Record<string, unknown>, actorEmail: string) {
+  const id = clean(payload.id, 140);
+  const expectedVersion = typeof payload.expectedVersion === "number" && Number.isInteger(payload.expectedVersion) && payload.expectedVersion >= 1
+    ? payload.expectedVersion
+    : 0;
+  if (!id) throw new Error("Section ID is required.");
+  if (!expectedVersion) throw new Error("expectedVersion is required and must be a positive integer.");
+
+  const rows = await query<{ id: string; version: number; deleted_at: string | null }>(
+    "SELECT id, version, deleted_at FROM gallery_sections WHERE id = ? LIMIT 1",
+    id,
+  );
+  const current = rows.results?.[0];
+  if (!current || current.deleted_at) throw new Error("Gallery section not found.");
+  if (current.version !== expectedVersion) throw new Error("Version conflict. The section has been modified since you loaded it.");
+
+  const updates: string[] = [];
+  const binds: unknown[] = [];
+
+  if (payload.name !== undefined) {
+    const name = clean(payload.name, 200);
+    if (!name) throw new Error("Section name cannot be empty.");
+    updates.push("name = ?");
+    binds.push(name);
+  }
+  if (payload.slug !== undefined) {
+    const slug = clean(payload.slug, 100);
+    if (!slug) throw new Error("Invalid slug.");
+    const existing = await query("SELECT id FROM gallery_sections WHERE slug = ? AND id != ? AND deleted_at IS NULL LIMIT 1", slug, id);
+    if (existing.results && existing.results.length > 0) throw new Error(`A section with slug "${slug}" already exists.`);
+    updates.push("slug = ?");
+    binds.push(slug);
+  }
+  if (payload.description !== undefined) {
+    updates.push("description = ?");
+    binds.push(clean(payload.description, 1000));
+  }
+  if (payload.sortOrder !== undefined) {
+    const sortOrder = typeof payload.sortOrder === "number" && Number.isInteger(payload.sortOrder) && payload.sortOrder >= 0 ? payload.sortOrder : 0;
+    updates.push("sort_order = ?");
+    binds.push(sortOrder);
+  }
+  if (payload.lifecycleStatus !== undefined) {
+    updates.push("lifecycle_status = ?");
+    binds.push(clean(payload.lifecycleStatus, 40));
+  }
+
+  if (updates.length === 0) throw new Error("No editable fields provided.");
+
+  updates.push("version = version + 1");
+  updates.push("updated_by = ?");
+  binds.push(actorEmail);
+  updates.push("updated_at = CURRENT_TIMESTAMP");
+
+  const result = await run(
+    `UPDATE gallery_sections SET ${updates.join(", ")} WHERE id = ? AND version = ? AND deleted_at IS NULL`,
+    ...binds,
+    id,
+    expectedVersion,
+  );
+  if (result.meta?.changes === 0) throw new Error("Version conflict. The section has been modified since you loaded it.");
+
+  await audit(actorEmail, "GALLERY_SECTION_UPDATED", "GallerySection", id, `Updated gallery section via revision approval`);
+  return { outcome: "APPLIED" as const };
+}
+
+async function applyGallerySectionDelete(payload: Record<string, unknown>, actorEmail: string) {
+  const id = clean(payload.id, 140);
+  const expectedVersion = typeof payload.expectedVersion === "number" && Number.isInteger(payload.expectedVersion) && payload.expectedVersion >= 1
+    ? payload.expectedVersion
+    : 0;
+  if (!id) throw new Error("Section ID is required.");
+  if (!expectedVersion) throw new Error("expectedVersion is required and must be a positive integer.");
+
+  const rows = await query<{ id: string; version: number; deleted_at: string | null }>(
+    "SELECT id, version, deleted_at FROM gallery_sections WHERE id = ? AND deleted_at IS NULL LIMIT 1",
+    id,
+  );
+  const current = rows.results?.[0];
+  if (!current) throw new Error("Gallery section not found.");
+  if (current.version !== expectedVersion) throw new Error("Version conflict. The section has been modified since you loaded it.");
+
+  const result = await run(
+    `UPDATE gallery_sections
+     SET lifecycle_status = 'ARCHIVED', deleted_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND version = ? AND deleted_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM gallery_items WHERE section_id = gallery_sections.id AND deleted_at IS NULL)`,
+    actorEmail,
+    id,
+    expectedVersion,
+  );
+  if (result.meta?.changes === 0) {
+    const activeCheck = await query("SELECT id FROM gallery_items WHERE section_id = ? AND deleted_at IS NULL LIMIT 1", id);
+    if (activeCheck.results && activeCheck.results.length > 0) {
+      throw new Error("Cannot delete a section that still has active gallery items. Remove all items first.");
+    }
+    throw new Error("Version conflict. The section has been modified since you loaded it.");
+  }
+
+  await audit(actorEmail, "GALLERY_SECTION_DELETED", "GallerySection", id, `Deleted gallery section via revision approval`);
+  return { outcome: "APPLIED" as const };
+}
+
 async function applyGalleryItemCreate(payload: Record<string, unknown>, actorEmail: string) {
   const sectionId = clean(payload.sectionId, 140);
   const mediaId = clean(payload.mediaId, 140);
   const slotKey = payload.slotKey !== undefined && payload.slotKey !== null
-    ? clean(payload.slotKey, 120) || null
+    ? clean(payload.slotKey, 150) || null
     : null;
   const titleOverride = clean(payload.titleOverride, 200);
   const altTextOverride = clean(payload.altTextOverride, 300);
@@ -970,26 +1092,27 @@ async function applyGalleryItemCreate(payload: Record<string, unknown>, actorEma
   const sortOrder = typeof payload.sortOrder === "number" && Number.isInteger(payload.sortOrder) && payload.sortOrder >= 0
     ? payload.sortOrder
     : 0;
-  const lifecycleStatus = clean(payload.lifecycleStatus, 40) || "DRAFT";
 
   if (!sectionId || !mediaId) throw new Error("sectionId and mediaId are required.");
 
-  // Validate section exists
   const sectionRows = await query("SELECT id FROM gallery_sections WHERE id = ? AND deleted_at IS NULL LIMIT 1", sectionId);
   if (!sectionRows.results || sectionRows.results.length === 0) {
     throw new Error("Gallery section not found.");
   }
 
-  // Validate media asset exists
-  const mediaRows = await query("SELECT id FROM media_assets WHERE id = ? AND deleted_at IS NULL LIMIT 1", mediaId);
+  const mediaRows = await query("SELECT id, category FROM media_assets WHERE id = ? AND deleted_at IS NULL LIMIT 1", mediaId);
   if (!mediaRows.results || mediaRows.results.length === 0) {
     throw new Error("Media asset not found or has been deleted.");
+  }
+  const mediaCategory = (mediaRows.results[0] as { category?: string }).category;
+  if (mediaCategory && mediaCategory !== "GALLERY") {
+    throw new Error("Media asset category must be GALLERY for gallery items.");
   }
 
   const itemId = `gallery-item-${crypto.randomUUID().slice(0, 8)}`;
   await run(
     `INSERT INTO gallery_items (id, section_id, media_id, slot_key, title_override, alt_text_override, caption_override, sort_order, lifecycle_status, version, created_by, updated_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
     itemId,
     sectionId,
     mediaId,
@@ -998,10 +1121,170 @@ async function applyGalleryItemCreate(payload: Record<string, unknown>, actorEma
     altTextOverride,
     captionOverride,
     sortOrder,
-    lifecycleStatus,
     actorEmail,
     actorEmail,
   );
   await audit(actorEmail, "GALLERY_ITEM_CREATED", "GalleryItem", itemId, `Created gallery item in section ${sectionId}`);
+  return { outcome: "APPLIED" as const };
+}
+
+async function applyGalleryItemUpdate(payload: Record<string, unknown>, actorEmail: string) {
+  const id = clean(payload.id, 140);
+  const expectedVersion = typeof payload.expectedVersion === "number" && Number.isInteger(payload.expectedVersion) && payload.expectedVersion >= 1
+    ? payload.expectedVersion
+    : 0;
+  if (!id) throw new Error("Item ID is required.");
+  if (!expectedVersion) throw new Error("expectedVersion is required and must be a positive integer.");
+  if (payload.sectionId !== undefined) throw new Error("sectionId is immutable.");
+  if (payload.mediaId !== undefined) throw new Error("mediaId is immutable.");
+
+  const rows = await query<{ id: string; version: number; deleted_at: string | null }>(
+    "SELECT id, version, deleted_at FROM gallery_items WHERE id = ? AND deleted_at IS NULL LIMIT 1",
+    id,
+  );
+  const current = rows.results?.[0];
+  if (!current || current.deleted_at) throw new Error("Gallery item not found.");
+  if (current.version !== expectedVersion) throw new Error("Version conflict. The item has been modified since you loaded it.");
+
+  const updates: string[] = [];
+  const binds: unknown[] = [];
+
+  if (payload.slotKey !== undefined) {
+    const slotKey = payload.slotKey === null || payload.slotKey === "" ? null : clean(payload.slotKey, 150) || null;
+    if (slotKey) {
+      const existing = await query("SELECT id FROM gallery_items WHERE slot_key = ? AND id != ? AND deleted_at IS NULL LIMIT 1", slotKey, id);
+      if (existing.results && existing.results.length > 0) throw new Error("This slot_key is already in use by another active item.");
+    }
+    updates.push("slot_key = ?");
+    binds.push(slotKey);
+  }
+  if (payload.titleOverride !== undefined) {
+    updates.push("title_override = ?");
+    binds.push(clean(payload.titleOverride, 200));
+  }
+  if (payload.altTextOverride !== undefined) {
+    updates.push("alt_text_override = ?");
+    binds.push(clean(payload.altTextOverride, 300));
+  }
+  if (payload.captionOverride !== undefined) {
+    updates.push("caption_override = ?");
+    binds.push(clean(payload.captionOverride, 1000));
+  }
+  if (payload.sortOrder !== undefined) {
+    const sortOrder = typeof payload.sortOrder === "number" && Number.isInteger(payload.sortOrder) && payload.sortOrder >= 0 ? payload.sortOrder : 0;
+    updates.push("sort_order = ?");
+    binds.push(sortOrder);
+  }
+  if (payload.lifecycleStatus !== undefined) {
+    updates.push("lifecycle_status = ?");
+    binds.push(clean(payload.lifecycleStatus, 40));
+  }
+
+  if (updates.length === 0) throw new Error("No editable fields provided.");
+
+  updates.push("version = version + 1");
+  updates.push("updated_by = ?");
+  binds.push(actorEmail);
+  updates.push("updated_at = CURRENT_TIMESTAMP");
+
+  const result = await run(
+    `UPDATE gallery_items SET ${updates.join(", ")} WHERE id = ? AND version = ? AND deleted_at IS NULL`,
+    ...binds,
+    id,
+    expectedVersion,
+  );
+  if (result.meta?.changes === 0) throw new Error("Version conflict. The item has been modified since you loaded it.");
+
+  await audit(actorEmail, "GALLERY_ITEM_UPDATED", "GalleryItem", id, `Updated gallery item via revision approval`);
+  return { outcome: "APPLIED" as const };
+}
+
+async function applyGalleryItemDelete(payload: Record<string, unknown>, actorEmail: string) {
+  const id = clean(payload.id, 140);
+  const expectedVersion = typeof payload.expectedVersion === "number" && Number.isInteger(payload.expectedVersion) && payload.expectedVersion >= 1
+    ? payload.expectedVersion
+    : 0;
+  if (!id) throw new Error("Item ID is required.");
+  if (!expectedVersion) throw new Error("expectedVersion is required and must be a positive integer.");
+
+  const rows = await query<{ id: string; version: number; deleted_at: string | null }>(
+    "SELECT id, version, deleted_at FROM gallery_items WHERE id = ? AND deleted_at IS NULL LIMIT 1",
+    id,
+  );
+  const current = rows.results?.[0];
+  if (!current) throw new Error("Gallery item not found.");
+  if (current.version !== expectedVersion) throw new Error("Version conflict. The item has been modified since you loaded it.");
+
+  const result = await run(
+    "UPDATE gallery_items SET deleted_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND version = ? AND deleted_at IS NULL",
+    actorEmail,
+    id,
+    expectedVersion,
+  );
+  if (result.meta?.changes === 0) throw new Error("Version conflict. The item has been modified since you loaded it.");
+
+  await audit(actorEmail, "GALLERY_ITEM_DELETED", "GalleryItem", id, `Deleted gallery item via revision approval`);
+  return { outcome: "APPLIED" as const };
+}
+
+async function applyGalleryItemsReorder(payload: Record<string, unknown>, actorEmail: string) {
+  const sectionId = clean(payload.sectionId, 140);
+  if (!sectionId) throw new Error("sectionId is required.");
+
+  const itemOrder = payload.itemOrder;
+  if (!Array.isArray(itemOrder) || itemOrder.length === 0) {
+    throw new Error("itemOrder must be a non-empty array.");
+  }
+
+  const sectionRows = await query("SELECT id FROM gallery_sections WHERE id = ? AND deleted_at IS NULL LIMIT 1", sectionId);
+  if (!sectionRows.results || sectionRows.results.length === 0) {
+    throw new Error("Gallery section not found.");
+  }
+
+  const activeItems = await query<{ id: string; version: number }>(
+    "SELECT id, version FROM gallery_items WHERE section_id = ? AND deleted_at IS NULL",
+    sectionId,
+  );
+  const activeRows = activeItems.results ?? [];
+  const activeIdSet = new Set(activeRows.map((r) => r.id));
+  const activeVersionMap = new Map(activeRows.map((r) => [r.id, r.version]));
+
+  const inputIds = new Set<string>();
+  for (const entry of itemOrder) {
+    const e = entry as Record<string, unknown>;
+    if (typeof e.id !== "string" || !e.id) throw new Error("Each itemOrder entry must have a string id.");
+    if (inputIds.has(e.id)) throw new Error("itemOrder contains duplicate IDs.");
+    inputIds.add(e.id);
+    if (!activeIdSet.has(e.id)) throw new Error(`Item ${e.id} does not exist in this section or has been deleted.`);
+  }
+
+  if (activeIdSet.size !== inputIds.size) {
+    throw new Error("itemOrder must include all active items in the section.");
+  }
+
+  for (let i = 0; i < itemOrder.length; i++) {
+    const e = itemOrder[i] as Record<string, unknown>;
+    const itemId = e.id as string;
+    const expectedVer = typeof e.version === "number" && Number.isInteger(e.version) && e.version >= 1 ? e.version : 0;
+    const currentVersion = activeVersionMap.get(itemId);
+    if (expectedVer !== currentVersion) {
+      throw new Error(`Version conflict for item ${itemId}: expected ${expectedVer}, found ${currentVersion}.`);
+    }
+
+    const result = await run(
+      `UPDATE gallery_items SET sort_order = ?, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND section_id = ? AND version = ? AND deleted_at IS NULL`,
+      i,
+      actorEmail,
+      itemId,
+      sectionId,
+      expectedVer,
+    );
+    if (result.meta?.changes === 0) {
+      throw new Error(`Version conflict for item ${itemId}: the item was modified during reorder.`);
+    }
+  }
+
+  await audit(actorEmail, "GALLERY_ITEMS_REORDERED", "GallerySection", sectionId, `Reordered ${itemOrder.length} items via revision approval`);
   return { outcome: "APPLIED" as const };
 }

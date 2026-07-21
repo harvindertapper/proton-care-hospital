@@ -10,14 +10,12 @@ import {
   isSectionSlugAvailable,
   toSectionAdminDto,
   countItemsInSection,
+  countPublishedItemsInSection,
   countSections,
   GALLERY_FIELD_LENGTHS,
   type GallerySectionRow,
 } from "@/app/lib/gallery-v2";
-import { GALLERY_LIFECYCLE_STATUSES } from "@/app/lib/media-schema";
 import { isValidLifecycleStatus } from "@/app/lib/content/lifecycle";
-
-type Row = Record<string, unknown>;
 
 /* ───────────────────────────────────────────────────────────────────────────
    GET /api/admin/gallery/sections
@@ -65,22 +63,22 @@ export async function GET(request: Request) {
       binds.push(lifecycleStatus);
     }
 
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-
     const total = await countSections(conditions, binds);
 
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const listSql = `SELECT ${GALLERY_SECTIONS_SELECT} FROM gallery_sections ${whereClause} ORDER BY sort_order ASC, id ASC LIMIT ? OFFSET ?`;
     const listResult = await query<GallerySectionRow>(listSql, ...binds, limit, offset);
 
-    const items = [];
+    const sections = [];
     for (const row of listResult.results ?? []) {
       const itemCount = await countItemsInSection(row.id);
-      items.push(toSectionAdminDto(row, itemCount));
+      const publishedItemCount = await countPublishedItemsInSection(row.id);
+      sections.push(toSectionAdminDto(row, itemCount, publishedItemCount));
     }
 
     return json({
       success: true,
-      items,
+      sections,
       pagination: {
         limit,
         offset,
@@ -96,7 +94,7 @@ export async function GET(request: Request) {
 
 /* ───────────────────────────────────────────────────────────────────────────
    POST /api/admin/gallery/sections
-   Create a new gallery section.
+   Create a new gallery section. Always starts as DRAFT.
    ─────────────────────────────────────────────────────────────────────────── */
 
 export async function POST(request: Request) {
@@ -135,13 +133,6 @@ export async function POST(request: Request) {
 
     const sortOrder = parseSortOrder(body.sortOrder);
 
-    const lifecycleStatus = clean(body.lifecycleStatus, 40);
-    if (lifecycleStatus && !isValidLifecycleStatus(lifecycleStatus)) {
-      return json({ error: "Invalid lifecycleStatus." }, { status: 400 });
-    }
-    const effectiveStatus = lifecycleStatus || "DRAFT";
-
-    // Check slug uniqueness
     const slugAvailable = await isSectionSlugAvailable(slug);
     if (!slugAvailable) {
       return json({ error: "A section with this slug already exists.", outcome: "CONFLICT" }, { status: 409 });
@@ -159,7 +150,7 @@ export async function POST(request: Request) {
           "gallery_section.create",
           sectionId,
           `Create gallery section: ${name}`,
-          JSON.stringify({ action: "gallery_section.create", payload: { slug, name, description, sortOrder, lifecycleStatus: effectiveStatus } }),
+          JSON.stringify({ action: "gallery_section.create", payload: { slug, name, description, sortOrder } }),
           auth.session.email,
         );
         await audit(auth.session.email, "REVISION_CREATED", "GallerySection", sectionId, `Create gallery section: ${name} requires super admin review`);
@@ -168,13 +159,12 @@ export async function POST(request: Request) {
       applyMutation: async () => {
         await run(
           `INSERT INTO gallery_sections (id, slug, name, description, sort_order, lifecycle_status, version, created_by, updated_by, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+           VALUES (?, ?, ?, ?, ?, 'DRAFT', 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
           sectionId,
           slug,
           name,
           description,
           sortOrder,
-          effectiveStatus,
           auth.session.email,
           auth.session.email,
         );
