@@ -162,7 +162,7 @@ export async function PATCH(
     binds.push(auth.session.email);
     updates.push("updated_at = CURRENT_TIMESTAMP");
 
-    const whereClauses = ["gi.id = ?", "gi.version = ?", "gi.deleted_at IS NULL"];
+    const whereClauses = ["id = ?", "version = ?", "deleted_at IS NULL"];
     const whereBinds: unknown[] = [id, expectedVersion];
 
     if (targetLifecycleStatus === "PUBLISHED") {
@@ -197,8 +197,14 @@ export async function PATCH(
           { status: 409 },
         );
       }
+      if (targetLifecycleStatus === "PUBLISHED") {
+        return json(
+          { error: "Media must be approved, published, and visible before this item can be published.", outcome: "CONFLICT" },
+          { status: 409 },
+        );
+      }
       return json(
-        { error: "Media must be approved, published, and visible before this item can be published.", outcome: "CONFLICT" },
+        { error: "This Gallery item changed elsewhere. The latest version has been loaded.", outcome: "CONFLICT" },
         { status: 409 },
       );
     }
@@ -212,7 +218,13 @@ export async function PATCH(
       return json({ error: "Gallery item not found after update.", outcome: "NOT_FOUND" }, { status: 404 });
     }
 
-    const dto = toItemAdminDto(updated);
+    let dto;
+    try {
+      dto = toItemAdminDto(updated);
+    } catch (dtoErr) {
+      console.error("DTO enrichment failure after GALLERY_ITEM_UPDATED:", dtoErr);
+      return json({ success: true, outcome: "APPLIED", refetchRequired: true });
+    }
 
     try {
       await audit(

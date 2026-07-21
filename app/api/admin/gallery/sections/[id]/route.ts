@@ -204,8 +204,14 @@ export async function PATCH(
           { status: 409 },
         );
       }
+      if (targetLifecycleStatus === "PUBLISHED") {
+        return json(
+          { error: "Section is not eligible for publication. All items must be PUBLISHED with approved media.", outcome: "CONFLICT" },
+          { status: 409 },
+        );
+      }
       return json(
-        { error: "Section is not eligible for publication. All items must be PUBLISHED with approved media.", outcome: "CONFLICT" },
+        { error: "This Gallery section changed elsewhere. The latest version has been loaded.", outcome: "CONFLICT" },
         { status: 409 },
       );
     }
@@ -234,7 +240,15 @@ export async function PATCH(
       console.error("Audit failure after GALLERY_SECTION_UPDATED:", auditErr);
     }
 
-    return json({ success: true, outcome: "APPLIED", item: toSectionAdminDto(updated, itemCount, publishedItemCount) });
+    let sectionDto;
+    try {
+      sectionDto = toSectionAdminDto(updated, itemCount, publishedItemCount);
+    } catch (dtoErr) {
+      console.error("DTO enrichment failure after GALLERY_SECTION_UPDATED:", dtoErr);
+      return json({ success: true, outcome: "APPLIED", refetchRequired: true });
+    }
+
+    return json({ success: true, outcome: "APPLIED", item: sectionDto });
   } catch (error) {
     console.error("Gallery section PATCH error:", error);
     return json({ error: "Failed to update gallery section." }, { status: 500 });

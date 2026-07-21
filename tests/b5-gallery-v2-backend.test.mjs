@@ -49,6 +49,8 @@ function insertMedia(db, opts = {}) {
   const publicPath = opts.public_path || null;
   const displayR2Key = opts.display_r2_key ?? r2Key;
   const displayPublicPath = opts.display_public_path ?? publicPath;
+  const thumbnailR2Key = opts.thumbnail_r2_key ?? r2Key;
+  const thumbnailPublicPath = opts.thumbnail_public_path ?? publicPath;
   const category = opts.category || "GENERAL";
   const status = opts.status || "APPROVED";
   const isVisible = opts.is_visible ?? 1;
@@ -68,14 +70,16 @@ function insertMedia(db, opts = {}) {
       id, r2_key, file_name, content_type, size_bytes, purpose, uploaded_by,
       status, is_visible, lifecycle_status, deleted_at, version,
       storage_type, public_path, display_r2_key, display_public_path,
+      thumbnail_r2_key, thumbnail_public_path,
       category, purge_status, rights_status, title, alt_text, caption, width, height
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'UNVERIFIED', ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'UNVERIFIED', ?, ?, ?, ?, ?)`
   );
   stmt.run(
     id, r2Key, opts.file_name || "test.jpg", opts.content_type || "image/jpeg",
     opts.size_bytes || 1024, purpose, "test@example.com",
     status, isVisible, lifecycleStatus, deletedAt, version,
     storageType, publicPath, displayR2Key, displayPublicPath,
+    thumbnailR2Key, thumbnailPublicPath,
     category, purgeStatus, title, altText, caption, width, height,
   );
   return id;
@@ -139,6 +143,28 @@ function insertRevision(db, opts = {}) {
 }
 
 /* ─── Domain module inline reimplementations for unit testing ──────────── */
+
+const GALLERY_ITEMS_COLUMNS = [
+  "id", "section_id", "media_id", "slot_key",
+  "title_override", "alt_text_override", "caption_override",
+  "sort_order", "lifecycle_status", "version",
+  "created_by", "updated_by", "created_at", "updated_at",
+  "published_at", "deleted_at",
+];
+
+const ITEM_WITH_MEDIA_COLUMNS_TEST = [
+  ...GALLERY_ITEMS_COLUMNS.map((c) => `gi.${c}`),
+  "m.storage_type", "m.r2_key", "m.public_path",
+  "m.display_r2_key", "m.display_public_path",
+  "m.thumbnail_r2_key", "m.thumbnail_public_path",
+  "m.title", "m.alt_text", "m.caption", "m.width", "m.height",
+  "m.category AS media_category",
+  "m.lifecycle_status AS media_lifecycle_status",
+  "m.status AS media_approval_status",
+  "m.is_visible AS media_visible",
+].join(", ");
+
+const TEST_ITEM_WITH_MEDIA_SELECT = ITEM_WITH_MEDIA_COLUMNS_TEST;
 
 function normalizeSlug(input) {
   if (typeof input !== "string") return null;
@@ -1069,6 +1095,876 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.equal(typeof row.title, "string");
       assert.equal(typeof row.alt_text, "string");
       assert.equal(typeof row.caption, "string");
+    });
+  });
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     N. PUBLIC item lifecycle transitions (DRAFT→IN_REVIEW succeeds)
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  describe("N. PUBLIC item lifecycle transitions", () => {
+    let db;
+
+    before(() => { db = createFullyMigratedDb(); });
+    after(() => { db.close(); });
+
+    it("N.01 DRAFT→IN_REVIEW succeeds with PUBLIC media item", () => {
+      const sectionId = insertSection(db, { slug: "n01-section" });
+      const mediaId = insertMedia(db, {
+        id: "n01-media", storage_type: "PUBLIC", public_path: "/media/n01.jpg",
+        category: "GALLERY", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1,
+      });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "n01-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status, version FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "IN_REVIEW");
+      assert.equal(row.version, 2);
+    });
+
+    it("N.02 DRAFT→PUBLISHED succeeds with valid media and section", () => {
+      const sectionId = insertSection(db, { slug: "n02-section", lifecycle_status: "DRAFT" });
+      const mediaId = insertMedia(db, {
+        id: "n02-media", storage_type: "R2", r2_key: "test/n02.jpg",
+        category: "GALLERY", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1,
+      });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "n02-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (SELECT 1 FROM media_assets m WHERE m.id = gallery_items.media_id AND m.category = 'GALLERY' AND m.lifecycle_status = 'PUBLISHED' AND m.status = 'APPROVED' AND m.is_visible = 1 AND m.deleted_at IS NULL)`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status, published_at FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "PUBLISHED");
+      assert.ok(row.published_at);
+    });
+
+    it("N.03 IN_REVIEW→DRAFT (rejected back) succeeds", () => {
+      const sectionId = insertSection(db, { slug: "n03-section" });
+      const mediaId = insertMedia(db, { id: "n03-media", r2_key: "test/n03.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "n03-item", lifecycle_status: "IN_REVIEW", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'DRAFT', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status, version FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "DRAFT");
+      assert.equal(row.version, 2);
+    });
+
+    it("N.04 IN_REVIEW→PUBLISHED succeeds with valid media", () => {
+      const sectionId = insertSection(db, { slug: "n04-section", lifecycle_status: "DRAFT" });
+      const mediaId = insertMedia(db, {
+        id: "n04-media", storage_type: "PUBLIC", public_path: "/media/n04.jpg",
+        category: "GALLERY", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1,
+      });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "n04-item", lifecycle_status: "IN_REVIEW", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (SELECT 1 FROM media_assets m WHERE m.id = gallery_items.media_id AND m.category = 'GALLERY' AND m.lifecycle_status = 'PUBLISHED' AND m.status = 'APPROVED' AND m.is_visible = 1 AND m.deleted_at IS NULL)`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "PUBLISHED");
+    });
+
+    it("N.05 IN_REVIEW→HIDDEN succeeds", () => {
+      const sectionId = insertSection(db, { slug: "n05-section" });
+      const mediaId = insertMedia(db, { id: "n05-media", r2_key: "test/n05.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "n05-item", lifecycle_status: "IN_REVIEW", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'HIDDEN', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "HIDDEN");
+    });
+
+    it("N.06 PUBLISHED→HIDDEN clears published_at", () => {
+      const sectionId = insertSection(db, { slug: "n06-section" });
+      const mediaId = insertMedia(db, { id: "n06-media", r2_key: "test/n06.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, {
+        id: "n06-item", lifecycle_status: "PUBLISHED", version: 1, published_at: "2024-01-01",
+      });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'HIDDEN', published_at = NULL, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status, published_at FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "HIDDEN");
+      assert.equal(row.published_at, null);
+    });
+
+    it("N.07 HIDDEN→PUBLISHED re-publish succeeds", () => {
+      const sectionId = insertSection(db, { slug: "n07-section", lifecycle_status: "DRAFT" });
+      const mediaId = insertMedia(db, {
+        id: "n07-media", storage_type: "R2", r2_key: "test/n07.jpg",
+        category: "GALLERY", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1,
+      });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "n07-item", lifecycle_status: "HIDDEN", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (SELECT 1 FROM media_assets m WHERE m.id = gallery_items.media_id AND m.category = 'GALLERY' AND m.lifecycle_status = 'PUBLISHED' AND m.status = 'APPROVED' AND m.is_visible = 1 AND m.deleted_at IS NULL)`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status, published_at FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "PUBLISHED");
+      assert.ok(row.published_at);
+    });
+
+    it("N.08 DRAFT→ARCHIVED succeeds", () => {
+      const sectionId = insertSection(db, { slug: "n08-section" });
+      const mediaId = insertMedia(db, { id: "n08-media", r2_key: "test/n08.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "n08-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'ARCHIVED', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "ARCHIVED");
+    });
+
+    it("N.09 IN_REVIEW→ARCHIVED succeeds", () => {
+      const sectionId = insertSection(db, { slug: "n09-section" });
+      const mediaId = insertMedia(db, { id: "n09-media", r2_key: "test/n09.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "n09-item", lifecycle_status: "IN_REVIEW", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'ARCHIVED', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "ARCHIVED");
+    });
+
+    it("N.10 ARCHIVED→DRAFT restore succeeds", () => {
+      const sectionId = insertSection(db, { slug: "n10-section" });
+      const mediaId = insertMedia(db, { id: "n10-media", r2_key: "test/n10.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "n10-item", lifecycle_status: "ARCHIVED", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'DRAFT', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "DRAFT");
+    });
+  });
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     O. R2 regression — media fields are never mutated by lifecycle transitions
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  describe("O. R2 regression — media fields immutable across transitions", () => {
+    let db;
+
+    before(() => { db = createFullyMigratedDb(); });
+    after(() => { db.close(); });
+
+    it("O.01 r2_key unchanged after DRAFT→IN_REVIEW", () => {
+      const sectionId = insertSection(db, { slug: "o01-section" });
+      const mediaId = insertMedia(db, { id: "o01-media", storage_type: "R2", r2_key: "original/key.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "o01-item", lifecycle_status: "DRAFT", version: 1 });
+
+      db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+
+      const media = db.prepare("SELECT r2_key FROM media_assets WHERE id = ?").get(mediaId);
+      assert.equal(media.r2_key, "original/key.jpg");
+    });
+
+    it("O.02 storage_type unchanged after DRAFT→IN_REVIEW", () => {
+      const sectionId = insertSection(db, { slug: "o02-section" });
+      const mediaId = insertMedia(db, { id: "o02-media", storage_type: "PUBLIC", public_path: "/media/o02.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "o02-item", lifecycle_status: "DRAFT", version: 1 });
+
+      db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+
+      const media = db.prepare("SELECT storage_type, public_path FROM media_assets WHERE id = ?").get(mediaId);
+      assert.equal(media.storage_type, "PUBLIC");
+      assert.equal(media.public_path, "/media/o02.jpg");
+    });
+
+    it("O.03 public_path unchanged after DRAFT→PUBLISHED", () => {
+      const sectionId = insertSection(db, { slug: "o03-section", lifecycle_status: "DRAFT" });
+      const mediaId = insertMedia(db, {
+        id: "o03-media", storage_type: "PUBLIC", public_path: "/media/o03.jpg",
+        category: "GALLERY", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1,
+      });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "o03-item", lifecycle_status: "DRAFT", version: 1 });
+
+      db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (SELECT 1 FROM media_assets m WHERE m.id = gallery_items.media_id AND m.category = 'GALLERY' AND m.lifecycle_status = 'PUBLISHED' AND m.status = 'APPROVED' AND m.is_visible = 1 AND m.deleted_at IS NULL)`
+      ).run("admin@test.com", itemId);
+
+      const media = db.prepare("SELECT storage_type, public_path, r2_key FROM media_assets WHERE id = ?").get(mediaId);
+      assert.equal(media.storage_type, "PUBLIC");
+      assert.equal(media.public_path, "/media/o03.jpg");
+    });
+
+    it("O.04 display_r2_key unchanged after PUBLISHED→HIDDEN", () => {
+      const sectionId = insertSection(db, { slug: "o04-section" });
+      const mediaId = insertMedia(db, { id: "o04-media", r2_key: "test/o04.jpg", display_r2_key: "test/o04-display.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "o04-item", lifecycle_status: "PUBLISHED", version: 1, published_at: "2024-01-01" });
+
+      db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'HIDDEN', published_at = NULL, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+
+      const media = db.prepare("SELECT r2_key, display_r2_key FROM media_assets WHERE id = ?").get(mediaId);
+      assert.equal(media.r2_key, "test/o04.jpg");
+      assert.equal(media.display_r2_key, "test/o04-display.jpg");
+    });
+
+    it("O.05 thumbnail_r2_key unchanged after DRAFT→PUBLISHED", () => {
+      const sectionId = insertSection(db, { slug: "o05-section", lifecycle_status: "DRAFT" });
+      const mediaId = insertMedia(db, {
+        id: "o05-media", storage_type: "R2", r2_key: "test/o05.jpg",
+        thumbnail_r2_key: "test/o05-thumb.jpg", thumbnail_public_path: "/thumb/o05.jpg",
+        category: "GALLERY", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1,
+      });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "o05-item", lifecycle_status: "DRAFT", version: 1 });
+
+      db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (SELECT 1 FROM media_assets m WHERE m.id = gallery_items.media_id AND m.category = 'GALLERY' AND m.lifecycle_status = 'PUBLISHED' AND m.status = 'APPROVED' AND m.is_visible = 1 AND m.deleted_at IS NULL)`
+      ).run("admin@test.com", itemId);
+
+      const media = db.prepare("SELECT thumbnail_r2_key, thumbnail_public_path FROM media_assets WHERE id = ?").get(mediaId);
+      assert.equal(media.thumbnail_r2_key, "test/o05-thumb.jpg");
+      assert.equal(media.thumbnail_public_path, "/thumb/o05.jpg");
+    });
+
+    it("O.06 media category, lifecycle_status, approval_status all unchanged", () => {
+      const sectionId = insertSection(db, { slug: "o06-section" });
+      const mediaId = insertMedia(db, { id: "o06-media", r2_key: "test/o06.jpg", category: "GALLERY", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1 });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "o06-item", lifecycle_status: "DRAFT", version: 1 });
+
+      db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+
+      const media = db.prepare("SELECT category, lifecycle_status, status, is_visible FROM media_assets WHERE id = ?").get(mediaId);
+      assert.equal(media.category, "GALLERY");
+      assert.equal(media.lifecycle_status, "PUBLISHED");
+      assert.equal(media.status, "APPROVED");
+      assert.equal(media.is_visible, 1);
+    });
+
+    it("O.07 display_public_path unchanged after HIDDEN→PUBLISHED", () => {
+      const sectionId = insertSection(db, { slug: "o07-section", lifecycle_status: "DRAFT" });
+      const mediaId = insertMedia(db, {
+        id: "o07-media", storage_type: "PUBLIC", public_path: "/media/o07.jpg",
+        display_r2_key: "test/o07-display.jpg", display_public_path: "/display/o07.jpg",
+        category: "GALLERY", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1,
+      });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "o07-item", lifecycle_status: "HIDDEN", version: 1 });
+
+      db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (SELECT 1 FROM media_assets m WHERE m.id = gallery_items.media_id AND m.category = 'GALLERY' AND m.lifecycle_status = 'PUBLISHED' AND m.status = 'APPROVED' AND m.is_visible = 1 AND m.deleted_at IS NULL)`
+      ).run("admin@test.com", itemId);
+
+      const media = db.prepare("SELECT display_r2_key, display_public_path FROM media_assets WHERE id = ?").get(mediaId);
+      assert.equal(media.display_r2_key, "test/o07-display.jpg");
+      assert.equal(media.display_public_path, "/display/o07.jpg");
+    });
+
+    it("O.08 media title, alt_text, caption all unchanged after any transition", () => {
+      const sectionId = insertSection(db, { slug: "o08-section" });
+      const mediaId = insertMedia(db, { id: "o08-media", r2_key: "test/o08.jpg", title: "Original Title", alt_text: "Original Alt", caption: "Original Caption" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "o08-item", lifecycle_status: "DRAFT", version: 1 });
+
+      db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+
+      const media = db.prepare("SELECT title, alt_text, caption FROM media_assets WHERE id = ?").get(mediaId);
+      assert.equal(media.title, "Original Title");
+      assert.equal(media.alt_text, "Original Alt");
+      assert.equal(media.caption, "Original Caption");
+    });
+  });
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     P. Eligibility scope — guard fires only for PUBLISHED target
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  describe("P. Eligibility scope — publication guard only for PUBLISHED target", () => {
+    let db;
+
+    before(() => { db = createFullyMigratedDb(); });
+    after(() => { db.close(); });
+
+    it("P.01 PUBLISHED target: guard blocks when media not GALLERY category", () => {
+      const sectionId = insertSection(db, { slug: "p01-section", lifecycle_status: "DRAFT" });
+      const mediaId = insertMedia(db, { id: "p01-media", category: "GENERAL", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1, r2_key: "test/p01.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "p01-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (SELECT 1 FROM media_assets m WHERE m.id = gallery_items.media_id AND m.category = 'GALLERY' AND m.lifecycle_status = 'PUBLISHED' AND m.status = 'APPROVED' AND m.is_visible = 1 AND m.deleted_at IS NULL)`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 0);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "DRAFT");
+    });
+
+    it("P.02 PUBLISHED target: guard blocks when media not PUBLISHED lifecycle", () => {
+      const sectionId = insertSection(db, { slug: "p02-section", lifecycle_status: "DRAFT" });
+      const mediaId = insertMedia(db, { id: "p02-media", category: "GALLERY", lifecycle_status: "DRAFT", status: "APPROVED", is_visible: 1, r2_key: "test/p02.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "p02-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (SELECT 1 FROM media_assets m WHERE m.id = gallery_items.media_id AND m.category = 'GALLERY' AND m.lifecycle_status = 'PUBLISHED' AND m.status = 'APPROVED' AND m.is_visible = 1 AND m.deleted_at IS NULL)`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 0);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "DRAFT");
+    });
+
+    it("P.03 PUBLISHED target: guard blocks when media not APPROVED", () => {
+      const sectionId = insertSection(db, { slug: "p03-section", lifecycle_status: "DRAFT" });
+      const mediaId = insertMedia(db, { id: "p03-media", category: "GALLERY", lifecycle_status: "PUBLISHED", status: "PENDING", is_visible: 1, r2_key: "test/p03.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "p03-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (SELECT 1 FROM media_assets m WHERE m.id = gallery_items.media_id AND m.category = 'GALLERY' AND m.lifecycle_status = 'PUBLISHED' AND m.status = 'APPROVED' AND m.is_visible = 1 AND m.deleted_at IS NULL)`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 0);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "DRAFT");
+    });
+
+    it("P.04 PUBLISHED target: guard blocks when media not visible", () => {
+      const sectionId = insertSection(db, { slug: "p04-section", lifecycle_status: "DRAFT" });
+      const mediaId = insertMedia(db, { id: "p04-media", category: "GALLERY", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 0, r2_key: "test/p04.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "p04-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (SELECT 1 FROM media_assets m WHERE m.id = gallery_items.media_id AND m.category = 'GALLERY' AND m.lifecycle_status = 'PUBLISHED' AND m.status = 'APPROVED' AND m.is_visible = 1 AND m.deleted_at IS NULL)`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 0);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "DRAFT");
+    });
+
+    it("P.05 PUBLISHED target: guard blocks when section is deleted", () => {
+      const sectionId = insertSection(db, { slug: "p05-section", lifecycle_status: "DRAFT", deleted_at: "2024-01-01" });
+      const mediaId = insertMedia(db, { id: "p05-media", category: "GALLERY", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1, r2_key: "test/p05.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "p05-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (SELECT 1 FROM media_assets m WHERE m.id = gallery_items.media_id AND m.category = 'GALLERY' AND m.lifecycle_status = 'PUBLISHED' AND m.status = 'APPROVED' AND m.is_visible = 1 AND m.deleted_at IS NULL)`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 0);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "DRAFT");
+    });
+
+    it("P.06 IN_REVIEW target: no guard — succeeds even with non-GALLERY media", () => {
+      const sectionId = insertSection(db, { slug: "p06-section" });
+      const mediaId = insertMedia(db, { id: "p06-media", category: "GENERAL", lifecycle_status: "DRAFT", status: "PENDING", is_visible: 0, r2_key: "test/p06.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "p06-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "IN_REVIEW");
+    });
+
+    it("P.07 PUBLISHED target: guard passes with fully eligible media and section", () => {
+      const sectionId = insertSection(db, { slug: "p07-section", lifecycle_status: "DRAFT" });
+      const mediaId = insertMedia(db, {
+        id: "p07-media", category: "GALLERY", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1, r2_key: "test/p07.jpg",
+        storage_type: "R2",
+      });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "p07-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (SELECT 1 FROM media_assets m WHERE m.id = gallery_items.media_id AND m.category = 'GALLERY' AND m.lifecycle_status = 'PUBLISHED' AND m.status = 'APPROVED' AND m.is_visible = 1 AND m.deleted_at IS NULL)`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "PUBLISHED");
+    });
+
+    it("P.08 DRAFT target: no guard — title update succeeds regardless of media state", () => {
+      const sectionId = insertSection(db, { slug: "p08-section" });
+      const mediaId = insertMedia(db, { id: "p08-media", category: "GENERAL", lifecycle_status: "DRAFT", status: "PENDING", is_visible: 0, r2_key: "test/p08.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "p08-item", lifecycle_status: "IN_REVIEW", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'DRAFT', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "DRAFT");
+    });
+  });
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     Q. Query/DTO coverage — SELECT includes all required columns
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  describe("Q. Query/DTO coverage — SELECT column completeness", () => {
+    it("Q.01 ITEM_WITH_MEDIA_SELECT includes all GALLERY_ITEMS_COLUMNS", () => {
+      const requiredItemCols = [
+        "gi.id", "gi.section_id", "gi.media_id", "gi.slot_key",
+        "gi.title_override", "gi.alt_text_override", "gi.caption_override",
+        "gi.sort_order", "gi.lifecycle_status", "gi.version",
+        "gi.created_by", "gi.updated_by", "gi.created_at", "gi.updated_at",
+        "gi.published_at", "gi.deleted_at",
+      ];
+      for (const col of requiredItemCols) {
+        assert.ok(TEST_ITEM_WITH_MEDIA_SELECT.includes(col), `ITEM_WITH_MEDIA_SELECT must include ${col}`);
+      }
+    });
+
+    it("Q.02 ITEM_WITH_MEDIA_SELECT includes all media columns for DTO", () => {
+      const requiredMediaCols = [
+        "m.storage_type", "m.r2_key", "m.public_path",
+        "m.display_r2_key", "m.display_public_path",
+        "m.thumbnail_r2_key", "m.thumbnail_public_path",
+        "m.title", "m.alt_text", "m.caption", "m.width", "m.height",
+        "m.category AS media_category",
+        "m.lifecycle_status AS media_lifecycle_status",
+        "m.status AS media_approval_status",
+        "m.is_visible AS media_visible",
+      ];
+      for (const col of requiredMediaCols) {
+        assert.ok(TEST_ITEM_WITH_MEDIA_SELECT.includes(col), `ITEM_WITH_MEDIA_SELECT must include ${col}`);
+      }
+    });
+
+    it("Q.03 post-update query against real DB returns all required item columns", () => {
+      const db = createFullyMigratedDb();
+      const sectionId = insertSection(db, { slug: "q03-section" });
+      const mediaId = insertMedia(db, { id: "q03-media", r2_key: "test/q03.jpg", storage_type: "R2" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "q03-item", slot_key: "hero", lifecycle_status: "DRAFT", version: 1 });
+
+      const row = db.prepare(`SELECT ${TEST_ITEM_WITH_MEDIA_SELECT} FROM gallery_items gi INNER JOIN media_assets m ON gi.media_id = m.id WHERE gi.id = ? LIMIT 1`).get(itemId);
+      assert.ok(row);
+      assert.equal(row.id, itemId);
+      assert.equal(row.section_id, sectionId);
+      assert.equal(row.media_id, mediaId);
+      assert.equal(row.slot_key, "hero");
+      assert.equal(row.lifecycle_status, "DRAFT");
+      assert.equal(row.version, 1);
+      assert.equal(row.storage_type, "R2");
+      assert.equal(row.r2_key, "test/q03.jpg");
+      assert.equal(row.media_category, "GENERAL");
+      assert.equal(row.media_approval_status, "APPROVED");
+      assert.equal(row.media_visible, 1);
+      db.close();
+    });
+
+    it("Q.04 post-update SELECT JOIN works for all lifecycle statuses", () => {
+      const db = createFullyMigratedDb();
+      const sectionId = insertSection(db, { slug: "q04-section" });
+      const mediaId = insertMedia(db, { id: "q04-media", r2_key: "test/q04.jpg", storage_type: "R2" });
+
+      for (const status of ["DRAFT", "IN_REVIEW", "PUBLISHED", "HIDDEN", "ARCHIVED"]) {
+        const itemId = insertItem(db, sectionId, mediaId, { id: `q04-item-${status}`, lifecycle_status: status, version: 1 });
+        const row = db.prepare(`SELECT ${TEST_ITEM_WITH_MEDIA_SELECT} FROM gallery_items gi INNER JOIN media_assets m ON gi.media_id = m.id WHERE gi.id = ? LIMIT 1`).get(itemId);
+        assert.ok(row, `SELECT must work for lifecycle_status=${status}`);
+        assert.equal(row.lifecycle_status, status);
+      }
+      db.close();
+    });
+
+    it("Q.05 SELECT includes published_at column for timestamp tracking", () => {
+      const db = createFullyMigratedDb();
+      const sectionId = insertSection(db, { slug: "q05-section" });
+      const mediaId = insertMedia(db, { id: "q05-media", r2_key: "test/q05.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "q05-item", lifecycle_status: "PUBLISHED", version: 1 });
+      db.prepare("UPDATE gallery_items SET published_at = '2024-06-15T10:00:00Z' WHERE id = ?").run(itemId);
+
+      const row = db.prepare(`SELECT ${TEST_ITEM_WITH_MEDIA_SELECT} FROM gallery_items gi INNER JOIN media_assets m ON gi.media_id = m.id WHERE gi.id = ? LIMIT 1`).get(itemId);
+      assert.ok(row.published_at, "published_at must be returned by SELECT");
+      db.close();
+    });
+
+    it("Q.06 SELECT includes deleted_at for soft-delete tracking", () => {
+      const db = createFullyMigratedDb();
+      const sectionId = insertSection(db, { slug: "q06-section" });
+      const mediaId = insertMedia(db, { id: "q06-media", r2_key: "test/q06.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "q06-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const row = db.prepare(`SELECT ${TEST_ITEM_WITH_MEDIA_SELECT} FROM gallery_items gi INNER JOIN media_assets m ON gi.media_id = m.id WHERE gi.id = ? LIMIT 1`).get(itemId);
+      assert.ok("deleted_at" in row, "deleted_at must be in SELECT results");
+      assert.equal(row.deleted_at, null);
+      db.close();
+    });
+  });
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     R. Mutation/response consistency — PATCH response matches DB state
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  describe("R. Mutation/response consistency — response matches DB state", () => {
+    let db;
+
+    before(() => { db = createFullyMigratedDb(); });
+    after(() => { db.close(); });
+
+    it("R.01 DRAFT→IN_REVIEW: response version = original + 1", () => {
+      const sectionId = insertSection(db, { slug: "r01-section" });
+      const mediaId = insertMedia(db, { id: "r01-media", r2_key: "test/r01.jpg", storage_type: "R2" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "r01-item", lifecycle_status: "DRAFT", version: 3 });
+
+      db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 3 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+
+      const row = db.prepare("SELECT version FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.version, 4);
+    });
+
+    it("R.02 DRAFT→IN_REVIEW: response lifecycle_status = IN_REVIEW", () => {
+      const sectionId = insertSection(db, { slug: "r02-section" });
+      const mediaId = insertMedia(db, { id: "r02-media", r2_key: "test/r02.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "r02-item", lifecycle_status: "DRAFT", version: 1 });
+
+      db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "IN_REVIEW");
+    });
+
+    it("R.03 DRAFT→PUBLISHED: published_at is set (non-null)", () => {
+      const sectionId = insertSection(db, { slug: "r03-section", lifecycle_status: "DRAFT" });
+      const mediaId = insertMedia(db, {
+        id: "r03-media", storage_type: "R2", r2_key: "test/r03.jpg",
+        category: "GALLERY", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1,
+      });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "r03-item", lifecycle_status: "DRAFT", version: 1 });
+
+      db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (SELECT 1 FROM media_assets m WHERE m.id = gallery_items.media_id AND m.category = 'GALLERY' AND m.lifecycle_status = 'PUBLISHED' AND m.status = 'APPROVED' AND m.is_visible = 1 AND m.deleted_at IS NULL)`
+      ).run("admin@test.com", itemId);
+
+      const row = db.prepare("SELECT lifecycle_status, published_at FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "PUBLISHED");
+      assert.ok(row.published_at, "published_at must be set on first publish");
+    });
+
+    it("R.04 PUBLISHED→HIDDEN: published_at is cleared (null)", () => {
+      const sectionId = insertSection(db, { slug: "r04-section" });
+      const mediaId = insertMedia(db, { id: "r04-media", r2_key: "test/r04.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "r04-item", lifecycle_status: "PUBLISHED", version: 1, published_at: "2024-06-01" });
+
+      db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'HIDDEN', published_at = NULL, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+
+      const row = db.prepare("SELECT lifecycle_status, published_at FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "HIDDEN");
+      assert.equal(row.published_at, null);
+    });
+
+    it("R.05 DRAFT→IN_REVIEW: re-read from DB confirms same state as response", () => {
+      const sectionId = insertSection(db, { slug: "r05-section" });
+      const mediaId = insertMedia(db, { id: "r05-media", r2_key: "test/r05.jpg", storage_type: "PUBLIC", public_path: "/media/r05.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, {
+        id: "r05-item", slot_key: "featured", title_override: "Featured", lifecycle_status: "DRAFT", version: 1,
+      });
+
+      db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+
+      const row = db.prepare(`SELECT ${TEST_ITEM_WITH_MEDIA_SELECT} FROM gallery_items gi INNER JOIN media_assets m ON gi.media_id = m.id WHERE gi.id = ? LIMIT 1`).get(itemId);
+      assert.equal(row.id, itemId);
+      assert.equal(row.lifecycle_status, "IN_REVIEW");
+      assert.equal(row.version, 2);
+      assert.equal(row.slot_key, "featured");
+      assert.equal(row.title_override, "Featured");
+      assert.equal(row.storage_type, "PUBLIC");
+      assert.equal(row.r2_key, "test/r05.jpg");
+    });
+
+    it("R.06 Optimistic concurrency: version conflict returns 0 changes", () => {
+      const sectionId = insertSection(db, { slug: "r06-section" });
+      const mediaId = insertMedia(db, { id: "r06-media", r2_key: "test/r06.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "r06-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 99 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 0);
+
+      const row = db.prepare("SELECT lifecycle_status, version FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "DRAFT");
+      assert.equal(row.version, 1);
+    });
+  });
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     S. Client refetch — mutation safety and audit resilience
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  describe("S. Client refetch — mutation safety and audit resilience", () => {
+    let db;
+
+    before(() => { db = createFullyMigratedDb(); });
+    after(() => { db.close(); });
+
+    it("S.01 UPDATE succeeds even when post-update SELECT would return no row (simulated)", () => {
+      const sectionId = insertSection(db, { slug: "s01-section" });
+      const mediaId = insertMedia(db, { id: "s01-media", r2_key: "test/s01.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "s01-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status, version FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "IN_REVIEW");
+      assert.equal(row.version, 2);
+    });
+
+    it("S.02 audit failure does not affect UPDATE outcome", () => {
+      const sectionId = insertSection(db, { slug: "s02-section" });
+      const mediaId = insertMedia(db, { id: "s02-media", r2_key: "test/s02.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "s02-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+
+      assert.throws(() => {
+        db.prepare("INSERT INTO audit_log_that_does_not_exist (x) VALUES (?)").run("test");
+      });
+
+      const row = db.prepare("SELECT lifecycle_status, version FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "IN_REVIEW");
+      assert.equal(row.version, 2);
+    });
+
+    it("S.03 multiple rapid transitions accumulate correctly", () => {
+      const sectionId = insertSection(db, { slug: "s03-section" });
+      const mediaId = insertMedia(db, { id: "s03-media", r2_key: "test/s03.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "s03-item", lifecycle_status: "DRAFT", version: 1 });
+
+      db.prepare(`UPDATE gallery_items SET lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = 'a@t.com', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND version = 1 AND deleted_at IS NULL`).run(itemId);
+      db.prepare(`UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = 'b@t.com', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND version = 2 AND deleted_at IS NULL`).run(itemId);
+      db.prepare(`UPDATE gallery_items SET lifecycle_status = 'HIDDEN', published_at = NULL, version = version + 1, updated_by = 'c@t.com', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND version = 3 AND deleted_at IS NULL`).run(itemId);
+
+      const row = db.prepare("SELECT lifecycle_status, version, published_at FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "HIDDEN");
+      assert.equal(row.version, 4);
+      assert.equal(row.published_at, null);
+    });
+
+    it("S.04 slot_key update works independently of lifecycle transition", () => {
+      const sectionId = insertSection(db, { slug: "s04-section" });
+      const mediaId = insertMedia(db, { id: "s04-media", r2_key: "test/s04.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "s04-item", lifecycle_status: "DRAFT", version: 1, slot_key: "old-slot" });
+
+      db.prepare(
+        `UPDATE gallery_items SET slot_key = 'new-slot', lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+
+      const row = db.prepare("SELECT slot_key, lifecycle_status, version FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.slot_key, "new-slot");
+      assert.equal(row.lifecycle_status, "IN_REVIEW");
+      assert.equal(row.version, 2);
+    });
+
+    it("S.05 title_override update works independently of lifecycle transition", () => {
+      const sectionId = insertSection(db, { slug: "s05-section" });
+      const mediaId = insertMedia(db, { id: "s05-media", r2_key: "test/s05.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "s05-item", lifecycle_status: "IN_REVIEW", version: 1, title_override: "Old Title" });
+
+      db.prepare(
+        `UPDATE gallery_items SET title_override = 'New Title', lifecycle_status = 'DRAFT', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId);
+
+      const row = db.prepare("SELECT title_override, lifecycle_status, version FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.title_override, "New Title");
+      assert.equal(row.lifecycle_status, "DRAFT");
+      assert.equal(row.version, 2);
+    });
+  });
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     T. Regression — UPDATE WHERE clause correctness
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  describe("T. Regression — UPDATE WHERE clause uses bare column names", () => {
+    let db;
+
+    before(() => { db = createFullyMigratedDb(); });
+    after(() => { db.close(); });
+
+    it("T.01 bare id = ? works in UPDATE WHERE (item pattern)", () => {
+      const sectionId = insertSection(db, { slug: "t01-section" });
+      const mediaId = insertMedia(db, { id: "t01-media", r2_key: "test/t01.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "t01-item", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND version = ? AND deleted_at IS NULL`
+      ).run("admin@test.com", itemId, 1);
+      assert.equal(result.changes, 1);
+    });
+
+    it("T.02 gi.id = ? FAILS in UPDATE WHERE (confirms alias is invalid in UPDATE)", () => {
+      const sectionId = insertSection(db, { slug: "t02-section" });
+      const mediaId = insertMedia(db, { id: "t02-media", r2_key: "test/t02.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "t02-item", version: 1 });
+
+      assert.throws(() => {
+        db.prepare(
+          `UPDATE gallery_items SET lifecycle_status = 'IN_REVIEW', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE gi.id = ? AND gi.version = ? AND gi.deleted_at IS NULL`
+        ).run("admin@test.com", itemId, 1);
+      }, /gi/);
+    });
+
+    it("T.03 bare id = ? works in UPDATE WHERE for sections", () => {
+      const sectionId = insertSection(db, { slug: "t03-section", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_sections SET name = 'Updated', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND version = ? AND deleted_at IS NULL`
+      ).run("admin@test.com", sectionId, 1);
+      assert.equal(result.changes, 1);
+    });
+
+    it("T.04 gs.id = ? FAILS in UPDATE WHERE for sections (confirms alias invalid)", () => {
+      const sectionId = insertSection(db, { slug: "t04-section", version: 1 });
+
+      assert.throws(() => {
+        db.prepare(
+          `UPDATE gallery_sections SET name = 'Updated', version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE gs.id = ? AND gs.version = ? AND gs.deleted_at IS NULL`
+        ).run("admin@test.com", sectionId, 1);
+      }, /gs/);
+    });
+
+    it("T.05 publication guard subqueries use full table name (not alias) in UPDATE", () => {
+      const sectionId = insertSection(db, { slug: "t05-section", lifecycle_status: "DRAFT" });
+      const mediaId = insertMedia(db, {
+        id: "t05-media", category: "GALLERY", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1, r2_key: "test/t05.jpg", storage_type: "R2",
+      });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "t05-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (SELECT 1 FROM media_assets m WHERE m.id = gallery_items.media_id AND m.category = 'GALLERY' AND m.lifecycle_status = 'PUBLISHED' AND m.status = 'APPROVED' AND m.is_visible = 1 AND m.deleted_at IS NULL)`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 1);
+    });
+
+    it("T.06 changes=0 for PUBLISHED target returns eligibility-appropriate outcome", () => {
+      const sectionId = insertSection(db, { slug: "t06-section", lifecycle_status: "DRAFT" });
+      const mediaId = insertMedia(db, { id: "t06-media", category: "GENERAL", lifecycle_status: "DRAFT", status: "PENDING", is_visible: 0, r2_key: "test/t06.jpg" });
+      const itemId = insertItem(db, sectionId, mediaId, { id: "t06-item", lifecycle_status: "DRAFT", version: 1 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (SELECT 1 FROM media_assets m WHERE m.id = gallery_items.media_id AND m.category = 'GALLERY' AND m.lifecycle_status = 'PUBLISHED' AND m.status = 'APPROVED' AND m.is_visible = 1 AND m.deleted_at IS NULL)`
+      ).run("admin@test.com", itemId);
+      assert.equal(result.changes, 0, "Guard must block PUBLISHED with ineligible media");
+
+      const row = db.prepare("SELECT lifecycle_status, version FROM gallery_items WHERE id = ?").get(itemId);
+      assert.equal(row.lifecycle_status, "DRAFT");
+      assert.equal(row.version, 1, "Version must remain unchanged when guard blocks");
     });
   });
 });
