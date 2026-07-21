@@ -448,6 +448,8 @@ async function applyAction(action: string, payload: Record<string, unknown>, act
   if (action === "blog.delete") return applyDeleteBlog(payload, actorEmail);
   if (action === "career.delete") return applyDeleteCareer(payload, actorEmail);
   if (action === "video.delete") return applyDeleteVideo(payload, actorEmail);
+  if (action === "gallery_section.create") return applyGallerySectionCreate(payload, actorEmail);
+  if (action === "gallery_item.create") return applyGalleryItemCreate(payload, actorEmail);
   throw new Error(`Unsupported admin action: ${action}`);
 }
 
@@ -790,6 +792,11 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
   } else if (action === "doctor.delete") {
     if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Doctor slug is required." };
     if (Number.isNaN(parseExpectedVersion(obj.expectedVersion, { minimum: 1 }))) return { ok: false, error: "expectedVersion must be a positive integer." };
+  } else if (action === "gallery_section.create") {
+    if (typeof obj.name !== "string" || !obj.name.trim()) return { ok: false, error: "Section name is required." };
+  } else if (action === "gallery_item.create") {
+    if (typeof obj.sectionId !== "string" || !obj.sectionId.trim()) return { ok: false, error: "sectionId is required." };
+    if (typeof obj.mediaId !== "string" || !obj.mediaId.trim()) return { ok: false, error: "mediaId is required." };
   }
   return { ok: true };
 }
@@ -910,5 +917,91 @@ async function applyDeleteVideo(payload: Record<string, unknown>, actorEmail: st
   const result = await run("UPDATE patient_videos SET is_deleted = 1 WHERE id = ? AND is_deleted = 0", id);
   requireAppliedMutation(result, Boolean(existing.results?.length), "Patient video");
   await audit(actorEmail, "VIDEO_DELETED", "PatientVideo", id, `Soft deleted video with ID: ${id}`);
+  return { outcome: "APPLIED" as const };
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Gallery v2 action handlers (revision.review integration)
+   ─────────────────────────────────────────────────────────────────────────── */
+
+async function applyGallerySectionCreate(payload: Record<string, unknown>, actorEmail: string) {
+  const slug = clean(payload.slug, 100);
+  const name = clean(payload.name, 140);
+  const description = clean(payload.description, 500);
+  const sortOrder = typeof payload.sortOrder === "number" && Number.isInteger(payload.sortOrder) && payload.sortOrder >= 0
+    ? payload.sortOrder
+    : 0;
+  const lifecycleStatus = clean(payload.lifecycleStatus, 40) || "DRAFT";
+
+  if (!slug || !name) throw new Error("Section slug and name are required.");
+
+  // Check slug uniqueness
+  const existing = await query("SELECT id FROM gallery_sections WHERE slug = ? AND deleted_at IS NULL LIMIT 1", slug);
+  if (existing.results && existing.results.length > 0) {
+    throw new Error(`A gallery section with slug "${slug}" already exists.`);
+  }
+
+  const sectionId = `gallery-section-${slug}`;
+  await run(
+    `INSERT INTO gallery_sections (id, slug, name, description, sort_order, lifecycle_status, version, created_by, updated_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    sectionId,
+    slug,
+    name,
+    description,
+    sortOrder,
+    lifecycleStatus,
+    actorEmail,
+    actorEmail,
+  );
+  await audit(actorEmail, "GALLERY_SECTION_CREATED", "GallerySection", sectionId, `Created gallery section: ${name}`);
+  return { outcome: "APPLIED" as const };
+}
+
+async function applyGalleryItemCreate(payload: Record<string, unknown>, actorEmail: string) {
+  const sectionId = clean(payload.sectionId, 140);
+  const mediaId = clean(payload.mediaId, 140);
+  const slotKey = payload.slotKey !== undefined && payload.slotKey !== null
+    ? clean(payload.slotKey, 120) || null
+    : null;
+  const titleOverride = clean(payload.titleOverride, 200);
+  const altTextOverride = clean(payload.altTextOverride, 300);
+  const captionOverride = clean(payload.captionOverride, 1000);
+  const sortOrder = typeof payload.sortOrder === "number" && Number.isInteger(payload.sortOrder) && payload.sortOrder >= 0
+    ? payload.sortOrder
+    : 0;
+  const lifecycleStatus = clean(payload.lifecycleStatus, 40) || "DRAFT";
+
+  if (!sectionId || !mediaId) throw new Error("sectionId and mediaId are required.");
+
+  // Validate section exists
+  const sectionRows = await query("SELECT id FROM gallery_sections WHERE id = ? AND deleted_at IS NULL LIMIT 1", sectionId);
+  if (!sectionRows.results || sectionRows.results.length === 0) {
+    throw new Error("Gallery section not found.");
+  }
+
+  // Validate media asset exists
+  const mediaRows = await query("SELECT id FROM media_assets WHERE id = ? AND deleted_at IS NULL LIMIT 1", mediaId);
+  if (!mediaRows.results || mediaRows.results.length === 0) {
+    throw new Error("Media asset not found or has been deleted.");
+  }
+
+  const itemId = `gallery-item-${crypto.randomUUID().slice(0, 8)}`;
+  await run(
+    `INSERT INTO gallery_items (id, section_id, media_id, slot_key, title_override, alt_text_override, caption_override, sort_order, lifecycle_status, version, created_by, updated_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    itemId,
+    sectionId,
+    mediaId,
+    slotKey,
+    titleOverride,
+    altTextOverride,
+    captionOverride,
+    sortOrder,
+    lifecycleStatus,
+    actorEmail,
+    actorEmail,
+  );
+  await audit(actorEmail, "GALLERY_ITEM_CREATED", "GalleryItem", itemId, `Created gallery item in section ${sectionId}`);
   return { outcome: "APPLIED" as const };
 }
