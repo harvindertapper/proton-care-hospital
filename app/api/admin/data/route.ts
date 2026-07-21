@@ -829,7 +829,9 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (typeof obj.expectedVersion !== "number" || !Number.isInteger(obj.expectedVersion) || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion must be a positive integer." };
   } else if (action === "gallery_items.reorder") {
     if (typeof obj.sectionId !== "string" || !obj.sectionId.trim()) return { ok: false, error: "sectionId is required." };
-    if (!Array.isArray(obj.itemOrder) || obj.itemOrder.length === 0) return { ok: false, error: "itemOrder must be a non-empty array." };
+    if (!Array.isArray(obj.itemOrder) || obj.itemOrder.length < 1 || obj.itemOrder.length > 100) {
+      return { ok: false, error: "itemOrder length must be between 1 and 100." };
+    }
   }
   return { ok: true };
 }
@@ -1219,7 +1221,7 @@ async function applyGalleryItemUpdate(payload: Record<string, unknown>, actorEma
   binds.push(actorEmail);
   updates.push("updated_at = CURRENT_TIMESTAMP");
 
-  const whereClauses = ["gi.id = ?", "gi.version = ?", "gi.deleted_at IS NULL"];
+  const whereClauses = ["id = ?", "version = ?", "deleted_at IS NULL"];
   const whereBinds: unknown[] = [id, expectedVersion];
 
   if (targetLifecycleStatus === "PUBLISHED") {
@@ -1315,14 +1317,14 @@ async function applyGalleryItemsReorder(payload: Record<string, unknown>, actorE
     const expectedVer = typeof e.version === "number" && Number.isInteger(e.version) && e.version >= 1 ? e.version : 0;
     const currentVersion = activeVersionMap.get(itemId);
     if (expectedVer !== currentVersion) {
-      throw new Error("Version conflict. The section has been modified since you loaded it.");
+      throw new MutationConflictError("Version conflict. The section has been modified since you loaded it.");
     }
     return { id: itemId, version: expectedVer };
   });
 
   const changes = await applyAtomicReorder(sectionId, orderWithVersions, actorEmail);
   if (changes !== itemOrder.length) {
-    throw new Error("Version conflict. The section has been modified since you loaded it.");
+    throw new MutationConflictError("Version conflict. The section has been modified since you loaded it.");
   }
 
   await audit(actorEmail, "GALLERY_ITEMS_REORDERED", "GallerySection", sectionId, `Reordered ${itemOrder.length} items via revision approval`);

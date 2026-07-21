@@ -1,5 +1,5 @@
-import { json, query, requireAdmin, verifyCsrf, audit, checkRateLimit, getClientIp } from "@/app/lib/server";
-import { executeRoleMutation } from "@/app/lib/mutation-result";
+import { json, query, requireAdmin, verifyCsrf, audit, checkRateLimit, getClientIp, run } from "@/app/lib/server";
+import { executeRoleMutation, MutationConflictError, MutationNotFoundError } from "@/app/lib/mutation-result";
 import { clean } from "@/app/lib/utils";
 import { GALLERY_ITEMS_SELECT, applyAtomicReorder, type GalleryItemRow } from "@/app/lib/gallery-v2";
 import { parseVersion } from "@/app/lib/gallery-v2";
@@ -59,8 +59,8 @@ export async function POST(request: Request) {
       return json({ error: "itemOrder must be an array." }, { status: 400 });
     }
 
-    if (itemOrder.length === 0) {
-      return json({ error: "itemOrder must not be empty." }, { status: 400 });
+    if (itemOrder.length < 1 || itemOrder.length > 100) {
+      return json({ error: "itemOrder length must be between 1 and 100." }, { status: 400 });
     }
 
     for (const entry of itemOrder) {
@@ -125,7 +125,7 @@ export async function POST(request: Request) {
     const applyReorder = async () => {
       const changes = await applyAtomicReorder(sectionId, itemOrder.map((e: Record<string, unknown>) => ({ id: e.id as string, version: e.version as number })), auth.session.email);
       if (changes !== itemOrder.length) {
-        throw new Error("Version conflict. The section has been modified since you loaded it.");
+        throw new MutationConflictError("Version conflict. The section has been modified since you loaded it.");
       }
       return { outcome: "APPLIED" as const };
     };
@@ -134,7 +134,7 @@ export async function POST(request: Request) {
       isStaff: auth.session.role === "STAFF",
       createRevision: async () => {
         const revId = crypto.randomUUID();
-        await query(
+        await run(
           "INSERT INTO content_revisions (id, entity_type, entity_id, title, payload_json, proposed_by) VALUES (?, ?, ?, ?, ?, ?)",
           revId,
           "gallery_items.reorder",
@@ -169,6 +169,12 @@ export async function POST(request: Request) {
     return json({ success: true, ...result });
   } catch (error) {
     console.error("Gallery reorder error:", error);
+    if (error instanceof MutationConflictError) {
+      return json({ success: false, outcome: "CONFLICT", error: error.message }, { status: 409 });
+    }
+    if (error instanceof MutationNotFoundError) {
+      return json({ success: false, outcome: "NOT_FOUND", error: error.message }, { status: 404 });
+    }
     return json({ success: false, outcome: "FAILED", error: "Failed to reorder gallery items." }, { status: 500 });
   }
 }

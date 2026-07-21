@@ -505,10 +505,10 @@ export async function applyAtomicReorder(
   const sortCaseParts = itemOrder.map(() => "WHEN ? THEN ?");
   const sortCaseBinds = itemOrder.flatMap((e, i) => [e.id, i]);
 
-  const versionCaseParts = itemOrder.map(() => "WHEN ? THEN ?");
-  const versionCaseBinds = itemOrder.flatMap((e) => [e.id, e.version]);
-
   const inPlaceholders = ids.map(() => "?").join(", ");
+
+  const verifiedOrParts = itemOrder.map(() => "(verified.id = ? AND verified.version = ?)");
+  const verifiedOrBinds = itemOrder.flatMap((e) => [e.id, e.version]);
 
   const sql = `
     UPDATE gallery_items
@@ -516,18 +516,36 @@ export async function applyAtomicReorder(
         version = version + 1,
         updated_by = ?,
         updated_at = CURRENT_TIMESTAMP
-    WHERE id IN (${inPlaceholders})
+    WHERE section_id = ?
       AND deleted_at IS NULL
-      AND section_id = ?
-      AND version = CASE id ${versionCaseParts.join(" ")} END
+      AND id IN (${inPlaceholders})
+      AND (
+        SELECT COUNT(*)
+        FROM gallery_items AS all_active
+        WHERE all_active.section_id = ?
+          AND all_active.deleted_at IS NULL
+      ) = ?
+      AND (
+        SELECT COUNT(*)
+        FROM gallery_items AS verified
+        WHERE verified.section_id = ?
+          AND verified.deleted_at IS NULL
+          AND (
+            ${verifiedOrParts.join(" OR ")}
+          )
+      ) = ?
   `;
 
   const binds = [
     ...sortCaseBinds,
     actorEmail,
+    sectionId,
     ...ids,
     sectionId,
-    ...versionCaseBinds,
+    itemOrder.length,
+    sectionId,
+    ...verifiedOrBinds,
+    itemOrder.length,
   ];
 
   const result = await run(sql, ...binds);

@@ -19,6 +19,20 @@ const mockedStatusRouteContent = statusRouteContent
   );
 await writeFile(new URL("./status-route-real-mocked.ts", import.meta.url), mockedStatusRouteContent, "utf8");
 
+// Setup dynamic mock for media-library
+const mediaLibraryContent = await readFile(new URL("../app/lib/media-library.ts", import.meta.url), "utf8");
+const mockedMediaLibraryContent = mediaLibraryContent
+  .replace('from "./media-schema";', 'from "../app/lib/media-schema.ts";');
+await writeFile(new URL("./media-library-mocked.ts", import.meta.url), mockedMediaLibraryContent, "utf8");
+
+// Setup dynamic mock for gallery-v2
+const galleryV2Content = await readFile(new URL("../app/lib/gallery-v2.ts", import.meta.url), "utf8");
+const mockedGalleryV2Content = galleryV2Content
+  .replace('from "./server";', 'from "./server-mocked.js";')
+  .replace('from "./utils";', 'from "../app/lib/utils.ts";')
+  .replace('from "./media-library";', 'from "./media-library-mocked.ts";');
+await writeFile(new URL("./gallery-v2-mocked.ts", import.meta.url), mockedGalleryV2Content, "utf8");
+
 // 2. Setup dynamic mock for admin data route
 const dataRouteContent = await readFile(new URL("../app/api/admin/data/route.ts", import.meta.url), "utf8");
 const mockedDataRouteContent = dataRouteContent
@@ -28,7 +42,8 @@ const mockedDataRouteContent = dataRouteContent
   .replace('from "@/app/lib/adminAuth";', 'from "../app/lib/adminAuth.ts";')
   .replace('from "@/app/lib/resend";', 'from "../app/lib/resend.ts";')
   .replace('from "@/app/lib/utils";', 'from "../app/lib/utils.ts";')
-  .replace('from "@/app/lib/doctor-admin";', 'from "../app/lib/doctor-admin.ts";');
+  .replace('from "@/app/lib/doctor-admin";', 'from "../app/lib/doctor-admin.ts";')
+  .replace('from "@/app/lib/gallery-v2";', 'from "./gallery-v2-mocked.ts";');
 await writeFile(new URL("./data-route-real-mocked.ts", import.meta.url), mockedDataRouteContent, "utf8");
 
 // Import the dynamically generated production-logic routes
@@ -40,7 +55,9 @@ after(async () => {
   try {
     await Promise.all([
       unlink(new URL("./status-route-real-mocked.ts", import.meta.url)),
-      unlink(new URL("./data-route-real-mocked.ts", import.meta.url))
+      unlink(new URL("./data-route-real-mocked.ts", import.meta.url)),
+      unlink(new URL("./gallery-v2-mocked.ts", import.meta.url)),
+      unlink(new URL("./media-library-mocked.ts", import.meta.url))
     ]);
   } catch {
     // Ignore cleanup errors
