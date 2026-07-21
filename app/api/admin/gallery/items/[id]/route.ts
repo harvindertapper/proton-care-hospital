@@ -229,11 +229,15 @@ export async function PATCH(
     return json({ success: true, outcome: "APPLIED", item: dto });
   } catch (error) {
     console.error("Gallery item PATCH error:", error);
-    const msg = error instanceof Error ? error.message : "Failed to update gallery item.";
-    const isInternal = msg.includes("D1") || msg.includes("SQLITE") || msg.includes("prepare") || msg.includes("bind");
+    const msg = error instanceof Error ? error.message : "";
+    const isKnownDomain = msg.includes("Cannot transition") || msg.includes("Invalid lifecycleStatus")
+      || msg.includes("No editable fields") || msg.includes("immutable")
+      || msg.includes("is already in use") || msg.includes("Media must be approved")
+      || msg.includes("Gallery item not found") || msg.includes("changed elsewhere")
+      || msg.includes("Gallery item not found after update");
     return json(
-      { success: false, outcome: "FAILED", error: isInternal ? "An internal database error occurred." : msg },
-      { status: isInternal ? 500 : 400 },
+      { success: false, outcome: "FAILED", error: isKnownDomain ? msg : "An internal error occurred." },
+      { status: isKnownDomain ? 400 : 500 },
     );
   }
 }
@@ -341,11 +345,11 @@ export async function DELETE(
     return json({ success: true, ...result });
   } catch (error) {
     console.error("Gallery item DELETE error:", error);
-    const msg = error instanceof Error ? error.message : "Failed to delete gallery item.";
-    const isInternal = msg.includes("D1") || msg.includes("SQLITE") || msg.includes("prepare") || msg.includes("bind");
+    const msg = error instanceof Error ? error.message : "";
+    const isKnownDomain = msg.includes("changed elsewhere") || msg.includes("Gallery item not found");
     return json(
-      { success: false, outcome: "FAILED", error: isInternal ? "An internal database error occurred." : msg },
-      { status: isInternal ? 500 : 400 },
+      { success: false, outcome: "FAILED", error: isKnownDomain ? msg : "An internal error occurred." },
+      { status: isKnownDomain ? 400 : 500 },
     );
   }
 }

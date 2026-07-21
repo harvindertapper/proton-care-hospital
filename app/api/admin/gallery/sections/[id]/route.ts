@@ -82,6 +82,24 @@ export async function PATCH(
       );
     }
 
+    const targetLifecycleStatus = body.lifecycleStatus !== undefined ? clean(body.lifecycleStatus, 40) : null;
+
+    if (current.lifecycle_status === "ARCHIVED") {
+      if (targetLifecycleStatus !== "DRAFT") {
+        return json(
+          { error: "This section is archived. Restore it before editing.", outcome: "CONFLICT" },
+          { status: 409 },
+        );
+      }
+      const hasMetadataEdits = body.name !== undefined || body.slug !== undefined || body.description !== undefined || body.sortOrder !== undefined;
+      if (hasMetadataEdits) {
+        return json(
+          { error: "This section is archived. Restore it before editing.", outcome: "CONFLICT" },
+          { status: 409 },
+        );
+      }
+    }
+
     const updates: string[] = [];
     const binds: unknown[] = [];
 
@@ -117,7 +135,6 @@ export async function PATCH(
       binds.push(sortOrderResult.value);
     }
 
-    const targetLifecycleStatus = body.lifecycleStatus !== undefined ? clean(body.lifecycleStatus, 40) : null;
     if (targetLifecycleStatus !== null) {
       if (!isValidLifecycleStatus(targetLifecycleStatus)) {
         return json({ error: "Invalid lifecycleStatus." }, { status: 400 });
@@ -125,12 +142,6 @@ export async function PATCH(
       if (!canTransition(current.lifecycle_status as "DRAFT" | "IN_REVIEW" | "PUBLISHED" | "HIDDEN" | "ARCHIVED", targetLifecycleStatus as "DRAFT" | "IN_REVIEW" | "PUBLISHED" | "HIDDEN" | "ARCHIVED")) {
         return json(
           { error: `Cannot transition section from ${current.lifecycle_status} to ${targetLifecycleStatus}.`, outcome: "CONFLICT" },
-          { status: 409 },
-        );
-      }
-      if (current.lifecycle_status === "ARCHIVED" && targetLifecycleStatus !== "DRAFT") {
-        return json(
-          { error: "This section is archived. Restore it to DRAFT before editing.", outcome: "CONFLICT" },
           { status: 409 },
         );
       }

@@ -66,6 +66,10 @@ export type GalleryItemDto = {
   originalUrl: string;
   displayUrl: string;
   thumbnailUrl: string;
+  mediaCategory: string;
+  mediaLifecycleStatus: string;
+  mediaApprovalStatus: string;
+  mediaVisible: number;
 };
 
 export type Pagination = {

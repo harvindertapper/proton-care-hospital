@@ -142,6 +142,10 @@ export type AdminGalleryItemDto = {
   originalUrl: string;
   displayUrl: string;
   thumbnailUrl: string;
+  mediaCategory: string;
+  mediaLifecycleStatus: string;
+  mediaApprovalStatus: string;
+  mediaVisible: number;
 };
 
 export type PublicGallerySectionDto = {
@@ -248,6 +252,10 @@ export type ItemRowWithMedia = GalleryItemRow & {
   caption: string;
   width: number | null;
   height: number | null;
+  media_category: string;
+  media_lifecycle_status: string;
+  media_approval_status: string;
+  media_visible: number;
 };
 
 function mediaRowFromItem(row: ItemRowWithMedia) {
@@ -288,6 +296,10 @@ export function toItemAdminDto(row: ItemRowWithMedia): AdminGalleryItemDto {
     originalUrl: urlResult.urls.originalUrl!,
     displayUrl: urlResult.urls.displayUrl!,
     thumbnailUrl: urlResult.urls.thumbnailUrl!,
+    mediaCategory: row.media_category,
+    mediaLifecycleStatus: row.media_lifecycle_status,
+    mediaApprovalStatus: row.media_approval_status,
+    mediaVisible: row.media_visible,
   };
 }
 
@@ -342,6 +354,10 @@ const ITEM_WITH_MEDIA_COLUMNS = [
   "m.caption",
   "m.width",
   "m.height",
+  "m.category AS media_category",
+  "m.lifecycle_status AS media_lifecycle_status",
+  "m.status AS media_approval_status",
+  "m.is_visible AS media_visible",
 ].join(", ");
 
 export const ITEM_WITH_MEDIA_SELECT = ITEM_WITH_MEDIA_COLUMNS;
@@ -369,7 +385,7 @@ export async function countSections(conditions: string[], binds: unknown[]): Pro
 }
 
 export async function countItemsInSection(sectionId: string): Promise<number> {
-  return countItems(["section_id = ?"], [sectionId]);
+  return countItems(["section_id = ?", "deleted_at IS NULL"], [sectionId]);
 }
 
 export async function countPublishedItemsInSection(sectionId: string): Promise<number> {

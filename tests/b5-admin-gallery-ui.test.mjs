@@ -893,11 +893,11 @@ test("118. Section PATCH lifecycle transition validation rejects invalid transit
     "Must return CONFLICT outcome on invalid transition");
 });
 
-test("119. Section PATCH archived-section-edit guard blocks non-DRAFT transitions", () => {
-  assert.ok(gallerySectionIdRoute.includes('current.lifecycle_status === "ARCHIVED" && targetLifecycleStatus !== "DRAFT"'),
-    "Must block editing archived section to anything other than DRAFT");
-  assert.ok(gallerySectionIdRoute.includes("Restore it to DRAFT before editing"),
-    "Must tell user to restore to DRAFT first");
+test("119. Section PATCH archived-section-edit guard blocks edits on archived sections", () => {
+  assert.ok(gallerySectionIdRoute.includes('current.lifecycle_status === "ARCHIVED"'),
+    "Must check if section is archived");
+  assert.ok(gallerySectionIdRoute.includes("Restore it before editing."),
+    "Must tell user to restore before editing");
 });
 
 test("120. Section DELETE includes specific error for active items preventing archive", () => {
@@ -926,20 +926,20 @@ test("123. Item PATCH validates lifecycle transitions and rejects invalid with 4
     "Must validate lifecycle status value before transition check");
 });
 
-test("124. Item PATCH catch-all now surfaces specific error messages instead of generic", () => {
-  assert.ok(galleryItemIdRoute.includes("error instanceof Error ? error.message : \"Failed to update gallery item.\""),
-    "Catch-all must surface error.message when available");
-  assert.ok(galleryItemIdRoute.includes("isInternal"),
-    "Must distinguish internal errors from user-facing errors");
-  assert.ok(!galleryItemIdRoute.includes("return json({ error: \"Failed to update gallery item.\" }, { status: 500 })"),
-    "Must NOT have generic catch-all that hides specific errors");
+test("124. Item PATCH catch-all uses safe allowlist for user-facing errors", () => {
+  assert.ok(galleryItemIdRoute.includes("isKnownDomain"),
+    "Must use safe allowlist for error classification");
+  assert.ok(galleryItemIdRoute.includes('"An internal error occurred."'),
+    "Must return generic message for unknown errors");
+  assert.ok(!galleryItemIdRoute.includes('"Failed to update gallery item."'),
+    "Must NOT have old generic catch-all message");
 });
 
-test("125. Item DELETE catch-all now surfaces specific error messages", () => {
-  assert.ok(galleryItemIdRoute.includes("error instanceof Error ? error.message : \"Failed to delete gallery item.\""),
-    "DELETE catch-all must surface error.message when available");
-  assert.ok(galleryItemIdRoute.includes("isInternal"),
-    "DELETE must distinguish internal errors from user-facing errors");
+test("125. Item DELETE catch-all uses safe allowlist for user-facing errors", () => {
+  assert.ok(galleryItemIdRoute.includes("isKnownDomain"),
+    "DELETE must use safe allowlist for error classification");
+  assert.ok(galleryItemIdRoute.includes('"An internal error occurred."'),
+    "DELETE must return generic message for unknown errors");
 });
 
 test("126. Item PATCH returns publication eligibility error when media guard fails", () => {
@@ -1092,8 +1092,532 @@ test("144. saveItem 409 refetches both items and sections", () => {
 });
 
 test("145. Generic error message is NOT the only catch-all for item PATCH/DELETE", () => {
-  assert.ok(galleryItemIdRoute.includes("isInternal"),
-    "Item PATCH catch-all must use isInternal classification");
-  assert.ok(galleryItemIdRoute.includes('"An internal database error occurred."'),
-    "Internal errors must return generic 'internal database error' message");
+  assert.ok(galleryItemIdRoute.includes("isKnownDomain"),
+    "Item PATCH catch-all must use safe allowlist classification");
+  assert.ok(galleryItemIdRoute.includes('"An internal error occurred."'),
+    "Unknown errors must return generic 'An internal error occurred.' message");
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   17. M3-B0 Micro-Corrective (tests 146-195)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+// --- ACTIVE COUNTS (146-153) ---
+
+test("146. countItemsInSection excludes deleted_at rows (structural)", () => {
+  assert.ok(galleryV2.includes("countItemsInSection"),
+    "Must export countItemsInSection");
+  const fnIdx = galleryV2.indexOf("export async function countItemsInSection");
+  const fnBlock = galleryV2.slice(fnIdx, fnIdx + 200);
+  assert.ok(fnBlock.includes("deleted_at IS NULL"),
+    "countItemsInSection must include deleted_at IS NULL filter");
+});
+
+test("147. countActiveItemsInSection also requires deleted_at IS NULL", () => {
+  const fnIdx = galleryV2.indexOf("export async function countActiveItemsInSection");
+  const fnBlock = galleryV2.slice(fnIdx, fnIdx + 200);
+  assert.ok(fnBlock.includes("deleted_at IS NULL"),
+    "countActiveItemsInSection must exclude deleted rows");
+});
+
+test("148. countPublishedItemsInSection requires deleted_at IS NULL", () => {
+  const fnIdx = galleryV2.indexOf("export async function countPublishedItemsInSection");
+  const fnBlock = galleryV2.slice(fnIdx, fnIdx + 200);
+  assert.ok(fnBlock.includes("deleted_at IS NULL"),
+    "countPublishedItemsInSection must exclude deleted rows");
+});
+
+test("149. countItems helper passes conditions array to SQL WHERE", () => {
+  const fnIdx = galleryV2.indexOf("export async function countItems(");
+  const fnBlock = galleryV2.slice(fnIdx, fnIdx + 350);
+  assert.ok(fnBlock.includes("conditions.join"),
+    "countItems must join conditions into SQL WHERE clause");
+});
+
+test("150. Section admin DTO receives both itemCount and publishedItemCount", () => {
+  const fnIdx = galleryV2.indexOf("export function toSectionAdminDto");
+  const fnBlock = galleryV2.slice(fnIdx, fnIdx + 300);
+  assert.ok(fnBlock.includes("itemCount"), "DTO must include itemCount");
+  assert.ok(fnBlock.includes("publishedItemCount"), "DTO must include publishedItemCount");
+});
+
+test("151. Section PATCH re-fetches itemCount and publishedItemCount after update", () => {
+  const patchIdx = gallerySectionIdRoute.indexOf("export async function PATCH");
+  const patchBlock = gallerySectionIdRoute.slice(patchIdx, patchIdx + 10000);
+  assert.ok(patchBlock.includes("countItemsInSection(id)"),
+    "Section PATCH must call countItemsInSection after update");
+  assert.ok(patchBlock.includes("countPublishedItemsInSection(id)"),
+    "Section PATCH must call countPublishedItemsInSection after update");
+});
+
+test("152. Section admin types require itemCount and publishedItemCount fields", () => {
+  assert.ok(adminMediaTypes.includes("itemCount"),
+    "GallerySectionDto type must include itemCount");
+  assert.ok(adminMediaTypes.includes("publishedItemCount"),
+    "GallerySectionDto type must include publishedItemCount");
+});
+
+test("153. GallerySectionRow type has deleted_at for soft-delete support", () => {
+  assert.ok(galleryV2.includes("deleted_at: string | null"),
+    "GallerySectionRow must have deleted_at field");
+});
+
+// --- LEGACY MEMBERSHIP (154-168) ---
+
+test("154. Legacy /api/gallery requires active gallery_items placement via EXISTS", () => {
+  assert.ok(legacyGalleryRoute.includes("EXISTS"),
+    "Legacy query must use EXISTS for placement membership");
+  assert.ok(legacyGalleryRoute.includes("gallery_items"),
+    "EXISTS must reference gallery_items table");
+  assert.ok(legacyGalleryRoute.includes("gallery_sections"),
+    "EXISTS must join gallery_sections");
+});
+
+test("155. Legacy membership requires gi.deleted_at IS NULL", () => {
+  assert.ok(legacyGalleryRoute.includes("gi.deleted_at IS NULL"),
+    "Must require active (non-deleted) gallery item placement");
+});
+
+test("156. Legacy membership requires gs.deleted_at IS NULL", () => {
+  assert.ok(legacyGalleryRoute.includes("gs.deleted_at IS NULL"),
+    "Must require active (non-deleted) parent section");
+});
+
+test("157. Legacy membership excludes ARCHIVED sections", () => {
+  assert.ok(legacyGalleryRoute.includes("ARCHIVED"),
+    "Must check for ARCHIVED section exclusion");
+  assert.ok(legacyGalleryRoute.includes("lifecycle_status != 'ARCHIVED'") || legacyGalleryRoute.includes("lifecycle_status <> 'ARCHIVED'"),
+    "Must explicitly exclude ARCHIVED sections from legacy query");
+});
+
+test("158. Legacy membership still requires media lifecycle_status PUBLISHED", () => {
+  assert.ok(legacyGalleryRoute.includes("lifecycle_status = 'PUBLISHED'"),
+    "Media must still be PUBLISHED for legacy inclusion");
+});
+
+test("159. Legacy membership still requires media status APPROVED", () => {
+  assert.ok(legacyGalleryRoute.includes("status = 'APPROVED'"),
+    "Media must still be APPROVED for legacy inclusion");
+});
+
+test("160. Legacy membership still requires media is_visible = 1", () => {
+  assert.ok(legacyGalleryRoute.includes("is_visible = 1"),
+    "Media must still be visible for legacy inclusion");
+});
+
+test("161. Legacy membership still requires media deleted_at IS NULL", () => {
+  const deletedAtCount = (legacyGalleryRoute.match(/deleted_at IS NULL/g) || []).length;
+  assert.ok(deletedAtCount >= 2,
+    "Legacy query must check deleted_at for both media and placement");
+});
+
+test("162. Legacy query uses ma. prefix for media_assets columns", () => {
+  assert.ok(legacyGalleryRoute.includes("FROM media_assets ma"),
+    "Legacy query must alias media_assets as ma");
+  assert.ok(legacyGalleryRoute.includes("ma.purpose = 'gallery'"),
+    "Must use ma. prefix for purpose filter");
+});
+
+test("163. Legacy query uses gi. prefix for gallery_items columns", () => {
+  assert.ok(legacyGalleryRoute.includes("gi.media_id = ma.id"),
+    "Must join gallery_items to media via gi.media_id = ma.id");
+  assert.ok(legacyGalleryRoute.includes("gi.section_id = gs.id"),
+    "Must join gallery_items to sections via gi.section_id = gs.id");
+});
+
+test("164. Legacy query deduplicates via EXISTS (no duplicate media rows)", () => {
+  const existsIdx = legacyGalleryRoute.indexOf("EXISTS");
+  assert.ok(existsIdx !== -1, "Must use EXISTS subquery for deduplication");
+  const existsBlock = legacyGalleryRoute.slice(existsIdx, existsIdx + 400);
+  assert.ok(existsBlock.includes("SELECT 1"),
+    "EXISTS must use SELECT 1");
+});
+
+test("165. Legacy API does not reference gallery_v2_initialized marker", () => {
+  assert.ok(!legacyGalleryRoute.includes("gallery_v2_initialized"),
+    "Legacy /api/gallery must NOT touch gallery_v2_initialized marker");
+});
+
+test("166. Legacy API still resolves media URLs via resolveMediaUrls", () => {
+  assert.ok(legacyGalleryRoute.includes("resolveMediaUrls"),
+    "Must still resolve media URLs");
+});
+
+test("167. Legacy API still skips rows with failed URL resolution", () => {
+  assert.ok(legacyGalleryRoute.includes("if (!urlResult.ok) continue"),
+    "Must skip rows where URL resolution fails");
+});
+
+test("168. Legacy API returns canonical displayUrl in response DTO", () => {
+  assert.ok(legacyGalleryRoute.includes("displayUrl:"),
+    "Response must include displayUrl");
+});
+
+// --- ACTION STATE MACHINE (169-180) ---
+
+test("169. DRAFT section shows Submit for Review (not Publish)", () => {
+  const fnIdx = galleryManagerPanel.indexOf("function getSectionActions");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 800);
+  assert.ok(fnBlock.includes('label: "Submit for Review"'),
+    "DRAFT section must offer Submit for Review");
+});
+
+test("170. IN_REVIEW section does NOT show Submit for Review (no self-transition)", () => {
+  const fnIdx = galleryManagerPanel.indexOf("function getSectionActions");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 800);
+  const inReviewIdx = fnBlock.indexOf('ls === "IN_REVIEW"');
+  assert.ok(inReviewIdx !== -1, "Must have IN_REVIEW case");
+  const inReviewBlock = fnBlock.slice(inReviewIdx, inReviewIdx + 200);
+  assert.ok(!inReviewBlock.includes('label: "Submit for Review"'),
+    "IN_REVIEW section must NOT offer Submit for Review (self-transition)");
+});
+
+test("171. IN_REVIEW section shows Return to Draft and Publish", () => {
+  const fnIdx = galleryManagerPanel.indexOf("function getSectionActions");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 800);
+  const inReviewIdx = fnBlock.indexOf('ls === "IN_REVIEW"');
+  const inReviewBlock = fnBlock.slice(inReviewIdx, inReviewIdx + 400);
+  assert.ok(inReviewBlock.includes('"Return to Draft"'),
+    "IN_REVIEW section must offer Return to Draft");
+  assert.ok(inReviewBlock.includes('"Publish"'),
+    "IN_REVIEW section must offer Publish");
+});
+
+test("172. HIDDEN section does NOT show Hide (no self-transition)", () => {
+  const fnIdx = galleryManagerPanel.indexOf("function getSectionActions");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 1200);
+  const hiddenIdx = fnBlock.indexOf('ls === "HIDDEN"');
+  assert.ok(hiddenIdx !== -1, "Must have HIDDEN case");
+  const hiddenBlock = fnBlock.slice(hiddenIdx, hiddenIdx + 300);
+  assert.ok(!hiddenBlock.includes('label: "Hide"'),
+    "HIDDEN section must NOT offer Hide (self-transition)");
+});
+
+test("173. PUBLISHED section shows Hide only", () => {
+  const fnIdx = galleryManagerPanel.indexOf("function getSectionActions");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 1200);
+  const pubIdx = fnBlock.indexOf('ls === "PUBLISHED"');
+  assert.ok(pubIdx !== -1, "Must have PUBLISHED case");
+  const pubBlock = fnBlock.slice(pubIdx, pubIdx + 120);
+  assert.ok(pubBlock.includes('"Hide"'),
+    "PUBLISHED section must offer Hide");
+  assert.ok(!pubBlock.includes('"Publish"'),
+    "PUBLISHED section must NOT offer Publish");
+  assert.ok(!pubBlock.includes('"Submit for Review"'),
+    "PUBLISHED section must NOT offer Submit for Review");
+});
+
+test("174. DRAFT item shows Submit for Review (not Publish)", () => {
+  const fnIdx = galleryManagerPanel.indexOf("function getItemActions");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 600);
+  assert.ok(fnBlock.includes('label: "Submit for Review"'),
+    "DRAFT item must offer Submit for Review");
+});
+
+test("175. IN_REVIEW item does NOT show Submit for Review (no self-transition)", () => {
+  const fnIdx = galleryManagerPanel.indexOf("function getItemActions");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 600);
+  const inReviewIdx = fnBlock.indexOf('ls === "IN_REVIEW"');
+  const inReviewBlock = fnBlock.slice(inReviewIdx, inReviewIdx + 200);
+  assert.ok(!inReviewBlock.includes('label: "Submit for Review"'),
+    "IN_REVIEW item must NOT offer Submit for Review (self-transition)");
+});
+
+test("176. HIDDEN item does NOT show Hide (no self-transition)", () => {
+  const fnIdx = galleryManagerPanel.indexOf("function getItemActions");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 600);
+  const hiddenIdx = fnBlock.indexOf('ls === "HIDDEN"');
+  const hiddenBlock = fnBlock.slice(hiddenIdx, hiddenIdx + 300);
+  assert.ok(!hiddenBlock.includes('label: "Hide"'),
+    "HIDDEN item must NOT offer Hide (self-transition)");
+});
+
+test("177. ARCHIVED item returns empty actions array", () => {
+  const fnIdx = galleryManagerPanel.indexOf("function getItemActions");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 600);
+  assert.ok(fnBlock.includes('if (ls === "ARCHIVED") return []'),
+    "ARCHIVED item must return empty actions");
+});
+
+test("178. Every emitted section action corresponds to a canonical lifecycle transition", () => {
+  const fnIdx = galleryManagerPanel.indexOf("function getSectionActions");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 800);
+  const targets = [...fnBlock.matchAll(/target:\s*"([A-Z_]+)"/g)].map(m => m[1]);
+  const validTargets = new Set(["DRAFT", "IN_REVIEW", "PUBLISHED", "HIDDEN", "ARCHIVED"]);
+  for (const t of targets) {
+    assert.ok(validTargets.has(t), `Target "${t}" must be a valid lifecycle state`);
+  }
+});
+
+test("179. Remove from Gallery remains available for DRAFT item", () => {
+  const fnIdx = galleryManagerPanel.indexOf("function getItemActions");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 1200);
+  assert.ok(fnBlock.includes('"Remove from Gallery"'),
+    "Items must always offer Remove from Gallery");
+  assert.ok(fnBlock.includes('target: "ARCHIVED"'),
+    "Remove from Gallery must target ARCHIVED");
+  assert.ok(fnBlock.includes("destructive: true"),
+    "Remove from Gallery must be marked destructive");
+});
+
+test("180. getMediaReadinessIssue returns descriptive messages for each failure", () => {
+  const fnIdx = galleryManagerPanel.indexOf("function getMediaReadinessIssue");
+  assert.ok(fnIdx !== -1, "Must define getMediaReadinessIssue function");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 500);
+  assert.ok(fnBlock.includes("Media category must be Gallery"),
+    "Must report category issue");
+  assert.ok(fnBlock.includes("Media approval required"),
+    "Must report approval issue");
+  assert.ok(fnBlock.includes("Publish the Media Library asset first"),
+    "Must report lifecycle issue");
+  assert.ok(fnBlock.includes("Media is hidden"),
+    "Must report visibility issue");
+});
+
+// --- PUBLISH GATING (181-186) ---
+
+test("181. Section Publish button is disabled when not ready", () => {
+  const fnIdx = galleryManagerPanel.indexOf("function getSectionActions");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 800);
+  assert.ok(fnBlock.includes("disabled: !isReady"),
+    "Section Publish must be conditionally disabled");
+  assert.ok(fnBlock.includes("isReady"),
+    "Section Publish readiness must be computed from itemCount and publishedItemCount");
+});
+
+test("182. Section Publish disabled reason shows correct item counts", () => {
+  const fnIdx = galleryManagerPanel.indexOf("function getSectionActions");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 800);
+  assert.ok(fnBlock.includes("disabledReason"),
+    "Section Publish must include disabledReason");
+  assert.ok(fnBlock.includes("Gallery items before publishing this section"),
+    "Disabled reason must explain what to do");
+});
+
+test("183. ActionDef type includes optional disabled and disabledReason fields", () => {
+  const typeIdx = galleryManagerPanel.indexOf("type ActionDef");
+  const typeBlock = galleryManagerPanel.slice(typeIdx, typeIdx + 200);
+  assert.ok(typeBlock.includes("disabled?: boolean"),
+    "ActionDef must have optional disabled field");
+  assert.ok(typeBlock.includes("disabledReason?: string"),
+    "ActionDef must have optional disabledReason field");
+});
+
+test("184. renderActionButtons applies disabled state to buttons", () => {
+  const fnIdx = galleryManagerPanel.indexOf("const renderActionButtons");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 1200);
+  assert.ok(fnBlock.includes("disabled={busy || !!action.disabled}"),
+    "Button must be disabled when busy or action.disabled");
+  assert.ok(fnBlock.includes("action.disabledReason"),
+    "Must use disabledReason as title attribute");
+  assert.ok(fnBlock.includes("if (action.disabled) return"),
+    "Must early-return on click when disabled");
+});
+
+test("185. Item Publish is disabled when media is not ready", () => {
+  const fnIdx = galleryManagerPanel.indexOf("function getItemActions");
+  const fnBlock = galleryManagerPanel.slice(fnIdx, fnIdx + 1200);
+  assert.ok(fnBlock.includes("disabled: !mediaReady"),
+    "Item Publish must be conditionally disabled based on media readiness");
+});
+
+test("186. Backend section PATCH still validates publication guard as defense in depth", () => {
+  assert.ok(gallerySectionIdRoute.includes("SECTION_PUBLISHED_GUARD"),
+    "Section PATCH must still include SECTION_PUBLISHED_GUARD");
+  assert.ok(gallerySectionIdRoute.includes("targetLifecycleStatus === \"PUBLISHED\""),
+    "Must apply guard only when targeting PUBLISHED");
+});
+
+// --- ARCHIVED EDITING (187-193) ---
+
+test("187. Archived section metadata-only PATCH is rejected before field processing", () => {
+  const patchIdx = gallerySectionIdRoute.indexOf("export async function PATCH");
+  const patchBlock = gallerySectionIdRoute.slice(patchIdx, patchIdx + 3000);
+  const archivedGuardIdx = patchBlock.indexOf('current.lifecycle_status === "ARCHIVED"');
+  assert.ok(archivedGuardIdx !== -1, "Must have top-level archived guard");
+  const nameUpdateIdx = patchBlock.indexOf("body.name !== undefined");
+  assert.ok(archivedGuardIdx < nameUpdateIdx, "Archived guard must come before name update processing");
+});
+
+test("188. Archived section edit guard rejects name, slug, description, sortOrder changes", () => {
+  const patchIdx = gallerySectionIdRoute.indexOf("export async function PATCH");
+  const patchBlock = gallerySectionIdRoute.slice(patchIdx, patchIdx + 3000);
+  const archivedGuardIdx = patchBlock.indexOf('current.lifecycle_status === "ARCHIVED"');
+  const guardBlock = patchBlock.slice(archivedGuardIdx, archivedGuardIdx + 500);
+  assert.ok(guardBlock.includes("body.name !== undefined"), "Must check for name edits");
+  assert.ok(guardBlock.includes("body.slug !== undefined"), "Must check for slug edits");
+  assert.ok(guardBlock.includes("body.description !== undefined"), "Must check for description edits");
+  assert.ok(guardBlock.includes("body.sortOrder !== undefined"), "Must check for sortOrder edits");
+});
+
+test("189. Archived section edit guard returns 409 with specific message", () => {
+  const patchIdx = gallerySectionIdRoute.indexOf("export async function PATCH");
+  const patchBlock = gallerySectionIdRoute.slice(patchIdx, patchIdx + 3000);
+  const archivedGuardIdx = patchBlock.indexOf('current.lifecycle_status === "ARCHIVED"');
+  const guardBlock = patchBlock.slice(archivedGuardIdx, archivedGuardIdx + 500);
+  assert.ok(guardBlock.includes('status: 409'), "Must return 409 status");
+  assert.ok(guardBlock.includes("Restore it before editing"), "Must include restore message");
+});
+
+test("190. Archived section guard allows DRAFT restore without metadata changes", () => {
+  const patchIdx = gallerySectionIdRoute.indexOf("export async function PATCH");
+  const patchBlock = gallerySectionIdRoute.slice(patchIdx, patchIdx + 3000);
+  const archivedGuardIdx = patchBlock.indexOf('current.lifecycle_status === "ARCHIVED"');
+  const guardBlock = patchBlock.slice(archivedGuardIdx, archivedGuardIdx + 500);
+  assert.ok(guardBlock.includes('targetLifecycleStatus !== "DRAFT"'),
+    "Guard must only block non-DRAFT lifecycle transitions from ARCHIVED");
+});
+
+test("191. Section PATCH lifecycle validation still checks transition validity after archived guard", () => {
+  assert.ok(gallerySectionIdRoute.includes("Cannot transition section from"),
+    "Must still validate lifecycle transitions after archived guard");
+  assert.ok(gallerySectionIdRoute.includes("canTransition"),
+    "Must use canTransition for validation");
+});
+
+test("192. Archived section guard blocks mixed restore + metadata edit", () => {
+  const patchIdx = gallerySectionIdRoute.indexOf("export async function PATCH");
+  const patchBlock = gallerySectionIdRoute.slice(patchIdx, patchIdx + 3000);
+  const archivedGuardIdx = patchBlock.indexOf('current.lifecycle_status === "ARCHIVED"');
+  const guardBlock = patchBlock.slice(archivedGuardIdx, archivedGuardIdx + 500);
+  assert.ok(guardBlock.includes("hasMetadataEdits"),
+    "Must detect mixed restore + metadata edits");
+});
+
+test("193. hasMetadataEdits checks name, slug, description, and sortOrder", () => {
+  const patchIdx = gallerySectionIdRoute.indexOf("export async function PATCH");
+  const patchBlock = gallerySectionIdRoute.slice(patchIdx, patchIdx + 3000);
+  const metaIdx = patchBlock.indexOf("hasMetadataEdits");
+  assert.ok(metaIdx !== -1, "Must define hasMetadataEdits variable");
+  const metaBlock = patchBlock.slice(metaIdx, metaIdx + 300);
+  assert.ok(metaBlock.includes("body.name"), "Must check name");
+  assert.ok(metaBlock.includes("body.slug"), "Must check slug");
+  assert.ok(metaBlock.includes("body.description"), "Must check description");
+  assert.ok(metaBlock.includes("body.sortOrder"), "Must check sortOrder");
+});
+
+// --- ERROR SAFETY (194-196) ---
+
+test("194. Item PATCH catch-all uses isKnownDomain allowlist", () => {
+  assert.ok(galleryItemIdRoute.includes("isKnownDomain"),
+    "Must use isKnownDomain allowlist for error classification");
+  assert.ok(galleryItemIdRoute.includes('"An internal error occurred."'),
+    "Must return generic message for unknown errors");
+});
+
+test("195. Item DELETE catch-all uses isKnownDomain allowlist", () => {
+  const deleteIdx = galleryItemIdRoute.indexOf("export async function DELETE");
+  const deleteBlock = galleryItemIdRoute.slice(deleteIdx, deleteIdx + 5000);
+  assert.ok(deleteBlock.includes("isKnownDomain"),
+    "DELETE must use isKnownDomain allowlist");
+  assert.ok(deleteBlock.includes('"An internal error occurred."'),
+    "DELETE must return generic message for unknown errors");
+});
+
+test("196. Section PATCH and DELETE catch blocks log errors server-side only", () => {
+  assert.ok(gallerySectionIdRoute.includes('console.error("Gallery section PATCH error:"'),
+    "Section PATCH must log errors server-side");
+  assert.ok(gallerySectionIdRoute.includes('console.error("Gallery section DELETE error:"'),
+    "Section DELETE must log errors server-side");
+});
+
+// --- MEDIA READINESS (197-200) ---
+
+test("197. ItemRowWithMedia type includes media_category, media_lifecycle_status, media_approval_status, media_visible", () => {
+  assert.ok(galleryV2.includes("media_category: string"),
+    "ItemRowWithMedia must include media_category");
+  assert.ok(galleryV2.includes("media_lifecycle_status: string"),
+    "ItemRowWithMedia must include media_lifecycle_status");
+  assert.ok(galleryV2.includes("media_approval_status: string"),
+    "ItemRowWithMedia must include media_approval_status");
+  assert.ok(galleryV2.includes("media_visible: number"),
+    "ItemRowWithMedia must include media_visible");
+});
+
+test("198. ITEM_WITH_MEDIA_SELECT includes aliased media readiness columns", () => {
+  assert.ok(galleryV2.includes("m.category AS media_category"),
+    "SELECT must include media_category alias");
+  assert.ok(galleryV2.includes("m.lifecycle_status AS media_lifecycle_status"),
+    "SELECT must include media_lifecycle_status alias");
+  assert.ok(galleryV2.includes("m.status AS media_approval_status"),
+    "SELECT must include media_approval_status alias");
+  assert.ok(galleryV2.includes("m.is_visible AS media_visible"),
+    "SELECT must include media_visible alias");
+});
+
+test("199. AdminGalleryItemDto includes media readiness fields", () => {
+  assert.ok(galleryV2.includes("mediaCategory: string"),
+    "AdminGalleryItemDto must include mediaCategory");
+  assert.ok(galleryV2.includes("mediaLifecycleStatus: string"),
+    "AdminGalleryItemDto must include mediaLifecycleStatus");
+  assert.ok(galleryV2.includes("mediaApprovalStatus: string"),
+    "AdminGalleryItemDto must include mediaApprovalStatus");
+  assert.ok(galleryV2.includes("mediaVisible: number"),
+    "AdminGalleryItemDto must include mediaVisible");
+});
+
+test("200. GalleryItemDto frontend type includes media readiness fields", () => {
+  assert.ok(adminMediaTypes.includes("mediaCategory: string"),
+    "GalleryItemDto must include mediaCategory");
+  assert.ok(adminMediaTypes.includes("mediaLifecycleStatus: string"),
+    "GalleryItemDto must include mediaLifecycleStatus");
+  assert.ok(adminMediaTypes.includes("mediaApprovalStatus: string"),
+    "GalleryItemDto must include mediaApprovalStatus");
+  assert.ok(adminMediaTypes.includes("mediaVisible: number"),
+    "GalleryItemDto must include mediaVisible");
+});
+
+// --- REGRESSION (201-205) ---
+
+test("201. toItemAdminDto maps media readiness fields from row", () => {
+  const fnIdx = galleryV2.indexOf("export function toItemAdminDto");
+  const fnBlock = galleryV2.slice(fnIdx, fnIdx + 1500);
+  assert.ok(fnBlock.includes("mediaCategory: row.media_category"),
+    "Must map media_category to mediaCategory");
+  assert.ok(fnBlock.includes("mediaLifecycleStatus: row.media_lifecycle_status"),
+    "Must map media_lifecycle_status to mediaLifecycleStatus");
+  assert.ok(fnBlock.includes("mediaApprovalStatus: row.media_approval_status"),
+    "Must map media_approval_status to mediaApprovalStatus");
+  assert.ok(fnBlock.includes("mediaVisible: row.media_visible"),
+    "Must map media_visible to mediaVisible");
+});
+
+test("202. Item card shows 'Media ready' or 'Media not ready' status", () => {
+  assert.ok(galleryManagerPanel.includes('"Media ready"'),
+    "Must display 'Media ready' when all conditions met");
+  assert.ok(galleryManagerPanel.includes('"Media not ready"'),
+    "Must display 'Media not ready' when conditions fail");
+});
+
+test("203. Item card no longer displays raw slotKey in meta area", () => {
+  const itemCardIdx = galleryManagerPanel.indexOf("item.lifecycleStatus !== \"ARCHIVED\"");
+  const itemCardBlock = galleryManagerPanel.slice(itemCardIdx - 200, itemCardIdx + 400);
+  assert.ok(!itemCardBlock.includes("Slot: {item.slotKey}"),
+    "Item card must NOT display raw slotKey in meta area");
+});
+
+test("204. Gallery v2 marker is not modified by any code change", () => {
+  assert.ok(!galleryV2.includes("gallery_v2_initialized"),
+    "gallery-v2.ts must not touch marker");
+  assert.ok(!legacyGalleryRoute.includes("gallery_v2_initialized"),
+    "Legacy route must not touch marker");
+  assert.ok(!galleryManagerPanel.includes("gallery_v2_initialized"),
+    "UI must not touch marker");
+});
+
+test("205. Existing lifecycle transition rules remain canonical", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const lifecycle = await readFile(new URL("../app/lib/content/lifecycle.ts", import.meta.url), "utf8");
+  assert.ok(lifecycle.includes("DRAFT: new Set") && lifecycle.includes('"IN_REVIEW", "ARCHIVED"'),
+    "DRAFT must transition to IN_REVIEW and ARCHIVED only");
+  assert.ok(lifecycle.includes("IN_REVIEW: new Set") && lifecycle.includes('"DRAFT", "PUBLISHED", "ARCHIVED"'),
+    "IN_REVIEW must transition to DRAFT, PUBLISHED, and ARCHIVED only");
+  assert.ok(lifecycle.includes("PUBLISHED: new Set") && lifecycle.includes('"HIDDEN", "ARCHIVED"'),
+    "PUBLISHED must transition to HIDDEN and ARCHIVED only");
+  assert.ok(lifecycle.includes("HIDDEN: new Set") && lifecycle.includes('"PUBLISHED", "ARCHIVED"'),
+    "HIDDEN must transition to PUBLISHED and ARCHIVED only");
+  assert.ok(lifecycle.includes("ARCHIVED: new Set") && lifecycle.includes('"DRAFT"'),
+    "ARCHIVED must transition to DRAFT only");
+  assert.ok(gallerySectionIdRoute.includes("canTransition"),
+    "Section route must use canTransition from lifecycle module");
 });

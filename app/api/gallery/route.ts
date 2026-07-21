@@ -20,18 +20,26 @@ type GalleryRow = {
 export async function GET() {
   try {
     const result = await query<GalleryRow>(
-      `SELECT id, r2_key, purpose, created_at,
-              storage_type, public_path,
-              display_r2_key, display_public_path,
-              thumbnail_r2_key, thumbnail_public_path,
-              title, alt_text, caption
-       FROM media_assets
-       WHERE purpose = 'gallery'
-         AND lifecycle_status = 'PUBLISHED'
-         AND status = 'APPROVED'
-         AND is_visible = 1
-         AND deleted_at IS NULL
-       ORDER BY created_at DESC
+      `SELECT ma.id, ma.r2_key, ma.purpose, ma.created_at,
+              ma.storage_type, ma.public_path,
+              ma.display_r2_key, ma.display_public_path,
+              ma.thumbnail_r2_key, ma.thumbnail_public_path,
+              ma.title, ma.alt_text, ma.caption
+       FROM media_assets ma
+       WHERE ma.purpose = 'gallery'
+         AND ma.lifecycle_status = 'PUBLISHED'
+         AND ma.status = 'APPROVED'
+         AND ma.is_visible = 1
+         AND ma.deleted_at IS NULL
+         AND EXISTS (
+           SELECT 1 FROM gallery_items gi
+           INNER JOIN gallery_sections gs ON gi.section_id = gs.id
+           WHERE gi.media_id = ma.id
+             AND gi.deleted_at IS NULL
+             AND gs.deleted_at IS NULL
+             AND gs.lifecycle_status != 'ARCHIVED'
+         )
+       ORDER BY ma.created_at DESC
        LIMIT 100`
     );
 

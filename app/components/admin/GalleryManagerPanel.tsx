@@ -54,23 +54,30 @@ type ActionDef = {
   label: string;
   target: string;
   destructive?: boolean;
+  disabled?: boolean;
+  disabledReason?: string;
 };
 
 function getSectionActions(sec: GallerySectionDto, isSuperAdmin: boolean): ActionDef[] {
   const ls = sec.lifecycleStatus;
   const hasActiveItems = (sec.itemCount ?? 0) > 0;
+  const isReady = hasActiveItems && (sec.publishedItemCount ?? 0) === (sec.itemCount ?? 0);
   if (ls === "ARCHIVED") {
     return isSuperAdmin ? [{ label: "Restore Section", target: "DRAFT" }] : [];
   }
   const actions: ActionDef[] = [];
-  if (ls === "DRAFT" || ls === "IN_REVIEW") {
+  if (ls === "DRAFT") {
     actions.push({ label: "Submit for Review", target: "IN_REVIEW" });
   }
-  if (ls === "IN_REVIEW" || ls === "HIDDEN") {
-    actions.push({ label: "Publish", target: "PUBLISHED" });
+  if (ls === "IN_REVIEW") {
+    actions.push({ label: "Return to Draft", target: "DRAFT" });
+    actions.push({ label: "Publish", target: "PUBLISHED", disabled: !isReady, disabledReason: isReady ? undefined : `Publish all ${sec.itemCount ?? 0} Gallery items before publishing this section.` });
   }
-  if (ls === "PUBLISHED" || ls === "HIDDEN") {
+  if (ls === "PUBLISHED") {
     actions.push({ label: "Hide", target: "HIDDEN" });
+  }
+  if (ls === "HIDDEN") {
+    actions.push({ label: "Publish", target: "PUBLISHED", disabled: !isReady, disabledReason: isReady ? undefined : `Publish all ${sec.itemCount ?? 0} Gallery items before publishing this section.` });
   }
   if (ls !== "PUBLISHED" && !hasActiveItems) {
     actions.push({ label: "Archive Section", target: "ARCHIVED", destructive: true });
@@ -80,18 +87,33 @@ function getSectionActions(sec: GallerySectionDto, isSuperAdmin: boolean): Actio
 
 function getItemActions(item: GalleryItemDto): ActionDef[] {
   const ls = item.lifecycleStatus;
+  if (ls === "ARCHIVED") return [];
+  const mediaReady = item.mediaLifecycleStatus === "PUBLISHED" && item.mediaApprovalStatus === "APPROVED" && item.mediaVisible === 1 && item.mediaCategory === "GALLERY";
   const actions: ActionDef[] = [];
-  if (ls === "DRAFT" || ls === "IN_REVIEW") {
+  if (ls === "DRAFT") {
     actions.push({ label: "Submit for Review", target: "IN_REVIEW" });
   }
-  if (ls === "IN_REVIEW" || ls === "HIDDEN") {
-    actions.push({ label: "Publish", target: "PUBLISHED" });
+  if (ls === "IN_REVIEW") {
+    actions.push({ label: "Return to Draft", target: "DRAFT" });
+    actions.push({ label: "Publish", target: "PUBLISHED", disabled: !mediaReady, disabledReason: mediaReady ? undefined : getMediaReadinessIssue(item) });
   }
-  if (ls === "PUBLISHED" || ls === "HIDDEN") {
+  if (ls === "PUBLISHED") {
     actions.push({ label: "Hide", target: "HIDDEN" });
+  }
+  if (ls === "HIDDEN") {
+    actions.push({ label: "Publish", target: "PUBLISHED", disabled: !mediaReady, disabledReason: mediaReady ? undefined : getMediaReadinessIssue(item) });
   }
   actions.push({ label: "Remove from Gallery", target: "ARCHIVED", destructive: true });
   return actions;
+}
+
+function getMediaReadinessIssue(item: GalleryItemDto): string {
+  const issues: string[] = [];
+  if (item.mediaCategory !== "GALLERY") issues.push("Media category must be Gallery");
+  if (item.mediaApprovalStatus !== "APPROVED") issues.push("Media approval required");
+  if (item.mediaLifecycleStatus !== "PUBLISHED") issues.push("Publish the Media Library asset first");
+  if (item.mediaVisible !== 1) issues.push("Media is hidden");
+  return issues.length > 0 ? issues.join(". ") + "." : "Media not ready";
 }
 
 export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
@@ -706,15 +728,17 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
             type="button"
             className={`button ${action.destructive ? "subtle" : "secondary"} small`}
             style={action.destructive ? { color: "#dc2626" } : undefined}
+            title={action.disabled ? action.disabledReason : undefined}
             onClick={(e) => {
               e.stopPropagation();
+              if (action.disabled) return;
               if (action.target === "ARCHIVED" && onDelete) {
                 onDelete(entity);
               } else {
                 onTransition(entity, action.target);
               }
             }}
-            disabled={busy}
+            disabled={busy || !!action.disabled}
           >
             {action.label}
           </button>
@@ -1053,8 +1077,12 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
                     <div style={styles.itemTitle}>{item.titleOverride || "Untitled"}</div>
                     <div style={styles.itemMeta}>
                       <span style={statusBadge(item.lifecycleStatus)}>{item.lifecycleStatus === "ARCHIVED" ? "Removed" : item.lifecycleStatus === "PUBLISHED" ? "Published" : item.lifecycleStatus === "HIDDEN" ? "Hidden" : item.lifecycleStatus === "IN_REVIEW" ? "Needs Review" : "Draft"}</span>
-                      {item.slotKey && <span>Slot: {item.slotKey}</span>}
                       <span>Order: {item.sortOrder ?? 0}</span>
+                      {item.lifecycleStatus !== "ARCHIVED" && (
+                        <span style={{ fontSize: 11, color: item.mediaCategory === "GALLERY" && item.mediaApprovalStatus === "APPROVED" && item.mediaLifecycleStatus === "PUBLISHED" && item.mediaVisible === 1 ? "#065f46" : "#92400e" }}>
+                          {item.mediaCategory === "GALLERY" && item.mediaApprovalStatus === "APPROVED" && item.mediaLifecycleStatus === "PUBLISHED" && item.mediaVisible === 1 ? "Media ready" : "Media not ready"}
+                        </span>
+                      )}
                     </div>
                     {renderActionButtons(item, getItemActions(item), handleLifecycleTransitionItem, handleDeleteItem)}
                   </div>
