@@ -11,7 +11,12 @@ type GalleryAsset = {
 };
 
 type ApiGalleryAsset = {
-  r2_key: string;
+  id: string;
+  displayUrl: string;
+  title?: string;
+  altText?: string;
+  caption?: string;
+  createdAt?: string;
 };
 
 type GalleryV2Section = {
@@ -40,6 +45,35 @@ function isSafeUrl(url: string): boolean {
   if (url.includes("r2.cloudflarestorage.com")) return false;
   if (/^[a-f0-9-]+$/i.test(url.split("/").pop() ?? "")) return false;
   return url.startsWith("/") || url.startsWith("http://") || url.startsWith("https://");
+}
+
+function normalizeLegacyUrl(raw: string | undefined | null): string | null {
+  if (!raw || typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+
+  if (trimmed.includes("..") || trimmed.includes("\\")) return null;
+
+  if (trimmed.includes("r2.cloudflarestorage.com")) return null;
+
+  if (trimmed.startsWith("public:")) {
+    const path = trimmed.slice("public:".length);
+    if (!path.startsWith("/assets/")) return null;
+    return path;
+  }
+
+  if (trimmed.startsWith("/")) return trimmed;
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    try {
+      const u = new URL(trimmed);
+      if (u.hostname.includes("r2.cloudflarestorage.com")) return null;
+      return trimmed;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 function isSectionArray(val: unknown): val is GalleryV2Section[] {
@@ -154,20 +188,36 @@ export default function GalleryClient() {
         const res = await fetch("/api/gallery");
         const data = (await res.json()) as { success?: boolean; assets?: ApiGalleryAsset[] };
         if (data.success && data.assets && data.assets.length > 0) {
-          const dynamicAssets: GalleryAsset[] = data.assets
-            .filter((a) => a.r2_key && !a.r2_key.includes(".."))
-            .map((asset: ApiGalleryAsset) => ({
-              url: `/api/media/${asset.r2_key}`,
-              title: "Hospital Facility",
-              note: "Protone Care Hospital Facility",
-            }));
-          const allUrls = new Set(dynamicAssets.map((a) => a.url));
-          const merged = [...dynamicAssets];
-          for (const preset of presetAssets) {
-            if (!allUrls.has(preset.url)) {
-              merged.push(preset);
+          const seenCanonical = new Set<string>();
+          const merged: GalleryAsset[] = [];
+
+          for (const asset of data.assets) {
+            const canonical = normalizeLegacyUrl(asset.displayUrl);
+            if (!canonical) continue;
+            if (seenCanonical.has(canonical)) continue;
+            seenCanonical.add(canonical);
+
+            const matchingPreset = presetAssets.find((p) => p.url === canonical);
+            if (matchingPreset) {
+              if (!merged.some((m) => m.url === matchingPreset.url)) {
+                merged.push({ ...matchingPreset });
+              }
+            } else {
+              merged.push({
+                url: canonical,
+                title: asset.title || "Hospital Facility",
+                note: asset.caption || "Protone Care Hospital Facility",
+              });
             }
           }
+
+          for (const preset of presetAssets) {
+            if (!seenCanonical.has(preset.url)) {
+              merged.push({ ...preset });
+              seenCanonical.add(preset.url);
+            }
+          }
+
           setAssets(merged);
         } else {
           setAssets(presetAssets);

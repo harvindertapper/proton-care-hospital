@@ -19,6 +19,7 @@ const [
   galleryItemIdRoute,
   galleryReorderRoute,
   mediaUploadDialog,
+  legacyGalleryRoute,
 ] = await Promise.all([
   readFile(new URL("../app/components/admin/admin-media-types.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/components/admin/admin-media-api.ts", import.meta.url), "utf8"),
@@ -36,6 +37,7 @@ const [
   readFile(new URL("../app/api/admin/gallery/items/[id]/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/admin/gallery/items/reorder/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/components/admin/MediaUploadDialog.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/api/gallery/route.ts", import.meta.url), "utf8"),
 ]);
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -746,4 +748,126 @@ test("98. Metadata saveItem 409 resets editing state after refetch", () => {
   assert.ok(catch409 !== -1, "Must catch 409");
   const block409 = block.slice(catch409, catch409 + 500);
   assert.ok(block409.includes("loadItems") && block409.includes("loadSections()"), "Must refetch items and sections before resetting editing state");
+});
+
+test("99. normalizeLegacyUrl strips public: prefix and returns /assets/ path", () => {
+  const fnIdx = galleryClient.indexOf("function normalizeLegacyUrl");
+  assert.ok(fnIdx !== -1, "normalizeLegacyUrl must exist in GalleryClient");
+  const body = galleryClient.slice(fnIdx, fnIdx + 800);
+  assert.ok(body.includes("public:") && body.includes('slice("public:".length)'), "Must strip 'public:' prefix");
+  assert.ok(body.includes('path.startsWith("/assets/")'), "Must validate public: path starts with /assets/");
+});
+
+test("100. normalizeLegacyUrl rejects traversal sequences", () => {
+  const fnIdx = galleryClient.indexOf("function normalizeLegacyUrl");
+  const body = galleryClient.slice(fnIdx, fnIdx + 800);
+  assert.ok(body.includes('".."'), "Must reject double-dot traversal");
+  assert.ok(body.includes('"\\\\"'), "Must reject backslash traversal");
+});
+
+test("101. normalizeLegacyUrl blocks R2 cloudflarestorage URLs", () => {
+  const fnIdx = galleryClient.indexOf("function normalizeLegacyUrl");
+  const body = galleryClient.slice(fnIdx, fnIdx + 800);
+  assert.ok(body.includes("r2.cloudflarestorage.com"), "Must reject R2 cloudflarestorage URLs");
+});
+
+test("102. normalizeLegacyUrl returns null for undefined, null, empty, whitespace", () => {
+  const fnIdx = galleryClient.indexOf("function normalizeLegacyUrl");
+  const body = galleryClient.slice(fnIdx, fnIdx + 800);
+  assert.ok(body.includes("trimmed.length === 0"), "Must reject empty/whitespace strings after trim");
+  assert.ok(body.includes("!raw || typeof raw !== \"string\""), "Must reject undefined and null inputs");
+});
+
+test("103. normalizeLegacyUrl passes through absolute / paths unchanged", () => {
+  const fnIdx = galleryClient.indexOf("function normalizeLegacyUrl");
+  const body = galleryClient.slice(fnIdx, fnIdx + 800);
+  assert.ok(body.includes('trimmed.startsWith("/")') && body.includes("return trimmed"), "Must pass absolute / paths through unchanged");
+});
+
+test("104. normalizeLegacyUrl allows valid http/https URLs and rejects R2 hostnames", () => {
+  const fnIdx = galleryClient.indexOf("function normalizeLegacyUrl");
+  const body = galleryClient.slice(fnIdx, fnIdx + 800);
+  assert.ok(body.includes("http://") && body.includes("https://"), "Must handle http and https URLs");
+  assert.ok(body.includes("u.hostname.includes"), "Must check hostname for R2 rejection");
+});
+
+test("105. Legacy fetch uses displayUrl from API, not r2_key", () => {
+  const fetchIdx = galleryClient.indexOf('fetch("/api/gallery")');
+  assert.ok(fetchIdx !== -1, "Must fetch /api/gallery");
+  const afterFetch = galleryClient.slice(fetchIdx, fetchIdx + 1500);
+  assert.ok(afterFetch.includes("asset.displayUrl"), "Must consume displayUrl from API response");
+  assert.ok(!afterFetch.includes("asset.r2_key"), "Must NOT reference r2_key for legacy assets");
+});
+
+test("106. Legacy fetch calls normalizeLegacyUrl on displayUrl before use", () => {
+  const fetchIdx = galleryClient.indexOf('fetch("/api/gallery")');
+  const afterFetch = galleryClient.slice(fetchIdx, fetchIdx + 1500);
+  assert.ok(afterFetch.includes("normalizeLegacyUrl(asset.displayUrl)"), "Must normalize displayUrl via normalizeLegacyUrl");
+  assert.ok(afterFetch.includes("if (!canonical) continue"), "Must skip rows that fail normalization");
+});
+
+test("107. Legacy fetch deduplicates using seenCanonical Set on normalized URLs", () => {
+  const fetchIdx = galleryClient.indexOf('fetch("/api/gallery")');
+  const afterFetch = galleryClient.slice(fetchIdx, fetchIdx + 1500);
+  assert.ok(afterFetch.includes("seenCanonical"), "Must use seenCanonical dedup Set");
+  assert.ok(afterFetch.includes("seenCanonical.has(canonical)"), "Must check canonical in seenCanonical before adding");
+});
+
+test("108. Legacy fetch merges preset assets matching canonical URLs with rich metadata", () => {
+  const fetchIdx = galleryClient.indexOf('fetch("/api/gallery")');
+  const afterFetch = galleryClient.slice(fetchIdx, fetchIdx + 1500);
+  assert.ok(afterFetch.includes("presetAssets.find"), "Must match against presetAssets");
+  assert.ok(afterFetch.includes("matchingPreset") && afterFetch.includes("{ ...matchingPreset }"), "Must spread matchingPreset to preserve rich metadata");
+});
+
+test("109. Legacy fetch appends unmatched preset assets at the end", () => {
+  const fetchIdx = galleryClient.indexOf('fetch("/api/gallery")');
+  const afterFetch = galleryClient.slice(fetchIdx, fetchIdx + 1500);
+  const appendPresetIdx = afterFetch.indexOf("for (const preset of presetAssets)");
+  assert.ok(appendPresetIdx !== -1, "Must have a loop to append unmatched presets");
+  const appendBlock = afterFetch.slice(appendPresetIdx, appendPresetIdx + 300);
+  assert.ok(appendBlock.includes("!seenCanonical.has(preset.url)"), "Must check if preset URL already seen");
+  assert.ok(appendBlock.includes("merged.push"), "Must push unmatched presets to merged");
+});
+
+test("110. Legacy API resolveMediaUrls imports and is called per row", () => {
+  assert.ok(legacyGalleryRoute.includes('from "@/app/lib/media-library"') && legacyGalleryRoute.includes("resolveMediaUrls"), "Must import resolveMediaUrls");
+  assert.ok(legacyGalleryRoute.includes("resolveMediaUrls({"), "Must call resolveMediaUrls per row");
+});
+
+test("111. Legacy API skips rows where resolveMediaUrls returns !ok", () => {
+  assert.ok(legacyGalleryRoute.includes("if (!urlResult.ok) continue"), "Must skip rows with failed URL resolution");
+});
+
+test("112. Legacy API returns displayUrl, title, altText, caption in asset DTO", () => {
+  assert.ok(legacyGalleryRoute.includes("displayUrl:"), "Must include displayUrl in response DTO");
+  assert.ok(legacyGalleryRoute.includes("title: row.title"), "Must include title");
+  assert.ok(legacyGalleryRoute.includes("altText: row.alt_text"), "Must include altText");
+  assert.ok(legacyGalleryRoute.includes("caption: row.caption"), "Must include caption");
+});
+
+test("113. Legacy API does NOT write gallery_v2_initialized marker", () => {
+  assert.ok(!legacyGalleryRoute.includes("gallery_v2_initialized"), "Legacy /api/gallery must NOT touch gallery_v2_initialized marker");
+});
+
+test("114. GalleryClient presetAssets all use /assets/ paths matching normalization", () => {
+  const presetStart = galleryClient.indexOf("const presetAssets");
+  assert.ok(presetStart !== -1, "presetAssets must exist");
+  const presetBlock = galleryClient.slice(presetStart, presetStart + 2000);
+  const urlMatches = [...presetBlock.matchAll(/url:\s*"([^"]+)"/g)];
+  assert.ok(urlMatches.length >= 7, "Must have at least 7 preset assets");
+  for (const m of urlMatches) {
+    assert.ok(m[1].startsWith("/assets/"), `Preset URL ${m[1]} must start with /assets/`);
+    assert.ok(!m[1].includes("public:"), `Preset URL ${m[1]} must not contain public: prefix`);
+  }
+});
+
+test("115. GalleryClient lightbox indices use same assets array as card grid", () => {
+  const renderIdx = galleryClient.indexOf("assets.map((asset, idx)");
+  assert.ok(renderIdx !== -1, "Card grid must iterate assets.map");
+  const lightboxIdx = galleryClient.indexOf("activeIndex !== null && assets.length > 0");
+  assert.ok(lightboxIdx !== -1, "Lightbox must gate on assets.length");
+  const lightboxRender = galleryClient.slice(lightboxIdx, lightboxIdx + 3000);
+  assert.ok(lightboxRender.includes("assets[activeIndex]"), "Lightbox must use assets[activeIndex]");
+  assert.ok(lightboxRender.includes("assets[activeIndex].url"), "Lightbox image must use same url from assets");
 });

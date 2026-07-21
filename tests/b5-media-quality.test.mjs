@@ -326,13 +326,13 @@ test("34. consent_note and uploaded_by absent from public response", () => {
 
 test("35. Dynamic assets merge with presets rather than replacing them (structural)", () => {
   assert.match(galleryClient, /presetAssets/);
-  assert.match(galleryClient, /allUrls\.has\(preset\.url\)/);
-  assert.match(galleryClient, /merged.*dynamicAssets/);
+  assert.match(galleryClient, /seenCanonical\.has\(preset\.url\)/);
+  assert.match(galleryClient, /merged\.push\(\{ \.\.\.preset \}\)/);
 });
 
 test("36. Duplicate URLs are deduplicated", () => {
-  assert.match(galleryClient, /allUrls\.has\(preset\.url\)/);
-  assert.match(galleryClient, /const allUrls = new Set/);
+  assert.match(galleryClient, /seenCanonical\.has\(canonical\)/);
+  assert.match(galleryClient, /const seenCanonical = new Set/);
 });
 
 test("37. API failure preserves verified preset Gallery", () => {
@@ -567,12 +567,12 @@ test("Doctor photo public gateway queries with deleted_at IS NULL", () => {
 
 test("GalleryClient uses generic labels instead of file_name for dynamic assets", () => {
   assert.doesNotMatch(galleryClient, /asset\.file_name/);
-  assert.match(galleryClient, /title: "Hospital Facility"/);
+  assert.match(galleryClient, /title: asset\.title \|\| "Hospital Facility"/);
 });
 
 test("GalleryClient uses generic labels instead of consent_note", () => {
   assert.doesNotMatch(galleryClient, /asset\.consent_note/);
-  assert.match(galleryClient, /note: "Protone Care Hospital Facility"/);
+  assert.match(galleryClient, /note: asset\.caption \|\| "Protone Care Hospital Facility"/);
 });
 
 test("AdminConsole no longer references compressImageForUpload in upload path", () => {
