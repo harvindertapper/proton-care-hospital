@@ -13,9 +13,10 @@ import {
   GALLERY_FIELD_LENGTHS,
   countItemsInSection,
   countPublishedItemsInSection,
+  countActiveItemsInSection,
   type GallerySectionRow,
 } from "@/app/lib/gallery-v2";
-import { isValidLifecycleStatus } from "@/app/lib/content/lifecycle";
+import { isValidLifecycleStatus, canTransition } from "@/app/lib/content/lifecycle";
 
 type Row = Record<string, unknown>;
 
@@ -76,7 +77,7 @@ export async function PATCH(
 
     if (current.version !== expectedVersion) {
       return json(
-        { error: "Version conflict. The section has been modified since you loaded it.", outcome: "CONFLICT" },
+        { error: "This Gallery section changed elsewhere. The latest version has been loaded.", outcome: "CONFLICT" },
         { status: 409 },
       );
     }
@@ -121,6 +122,27 @@ export async function PATCH(
       if (!isValidLifecycleStatus(targetLifecycleStatus)) {
         return json({ error: "Invalid lifecycleStatus." }, { status: 400 });
       }
+      if (!canTransition(current.lifecycle_status as "DRAFT" | "IN_REVIEW" | "PUBLISHED" | "HIDDEN" | "ARCHIVED", targetLifecycleStatus as "DRAFT" | "IN_REVIEW" | "PUBLISHED" | "HIDDEN" | "ARCHIVED")) {
+        return json(
+          { error: `Cannot transition section from ${current.lifecycle_status} to ${targetLifecycleStatus}.`, outcome: "CONFLICT" },
+          { status: 409 },
+        );
+      }
+      if (current.lifecycle_status === "ARCHIVED" && targetLifecycleStatus !== "DRAFT") {
+        return json(
+          { error: "This section is archived. Restore it to DRAFT before editing.", outcome: "CONFLICT" },
+          { status: 409 },
+        );
+      }
+      if (targetLifecycleStatus === "ARCHIVED") {
+        const activeItemCount = await countActiveItemsInSection(id);
+        if (activeItemCount > 0) {
+          return json(
+            { error: "Remove or archive all Gallery items before archiving this section.", outcome: "CONFLICT", activeItemCount },
+            { status: 409 },
+          );
+        }
+      }
       updates.push("lifecycle_status = ?");
       binds.push(targetLifecycleStatus);
     }
@@ -161,12 +183,18 @@ export async function PATCH(
       }
       if (recheckRow.version !== expectedVersion) {
         return json(
-          { error: "Version conflict. The section has been modified since you loaded it.", outcome: "CONFLICT" },
+          { error: "This Gallery section changed elsewhere. The latest version has been loaded.", outcome: "CONFLICT" },
+          { status: 409 },
+        );
+      }
+      if (targetLifecycleStatus === "ARCHIVED") {
+        return json(
+          { error: "Remove or archive all Gallery items before archiving this section.", outcome: "CONFLICT" },
           { status: 409 },
         );
       }
       return json(
-        { error: "Section is not eligible for publication.", outcome: "CONFLICT" },
+        { error: "Section is not eligible for publication. All items must be PUBLISHED with approved media.", outcome: "CONFLICT" },
         { status: 409 },
       );
     }
@@ -251,7 +279,7 @@ export async function DELETE(
 
     if (row.version !== expectedVersion) {
       return json(
-        { error: "Version conflict. The section has been modified since you loaded it.", outcome: "CONFLICT" },
+        { error: "This Gallery section changed elsewhere. The latest version has been loaded.", outcome: "CONFLICT" },
         { status: 409 },
       );
     }
@@ -281,9 +309,9 @@ export async function DELETE(
           id,
         );
         if (activeItemsCheck.results && activeItemsCheck.results.length > 0) {
-          throw new Error("Version conflict. The section has been modified since you loaded it.");
+          throw new Error("Remove or archive all Gallery items before archiving this section.");
         }
-        throw new Error("Version conflict. The section has been modified since you loaded it.");
+        throw new Error("This Gallery section changed elsewhere. The latest version has been loaded.");
       }
 
       try {

@@ -379,6 +379,13 @@ export async function countPublishedItemsInSection(sectionId: string): Promise<n
   );
 }
 
+export async function countActiveItemsInSection(sectionId: string): Promise<number> {
+  return countItems(
+    ["section_id = ?", "deleted_at IS NULL"],
+    [sectionId],
+  );
+}
+
 /* ───────────────────────────────────────────────────────────────────────────
    Slug & slot uniqueness checks
    ─────────────────────────────────────────────────────────────────────────── */

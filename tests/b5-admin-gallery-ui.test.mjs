@@ -20,6 +20,7 @@ const [
   galleryReorderRoute,
   mediaUploadDialog,
   legacyGalleryRoute,
+  galleryV2,
 ] = await Promise.all([
   readFile(new URL("../app/components/admin/admin-media-types.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/components/admin/admin-media-api.ts", import.meta.url), "utf8"),
@@ -38,6 +39,7 @@ const [
   readFile(new URL("../app/api/admin/gallery/items/reorder/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/components/admin/MediaUploadDialog.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/api/gallery/route.ts", import.meta.url), "utf8"),
+  readFile(new URL("../app/lib/gallery-v2.ts", import.meta.url), "utf8"),
 ]);
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -529,8 +531,9 @@ test("72. MediaPickerDialog has keyboard accessible cards and retry button", () 
    19. GalleryManagerPanel lifecycle and immutability (tests 73-76)
    ═══════════════════════════════════════════════════════════════════════════ */
 
-test("73. GalleryManagerPanel has lifecycle transition function with valid state transitions", () => {
-  assert.ok(galleryManagerPanel.includes("getTransitions"), "Must define getTransitions function");
+test("73. GalleryManagerPanel has lifecycle transition functions with valid state transitions", () => {
+  assert.ok(galleryManagerPanel.includes("getSectionActions"), "Must define getSectionActions function");
+  assert.ok(galleryManagerPanel.includes("getItemActions"), "Must define getItemActions function");
   assert.ok(galleryManagerPanel.includes("IN_REVIEW"), "DRAFT must transition to IN_REVIEW");
   assert.ok(galleryManagerPanel.includes("PUBLISHED"), "IN_REVIEW must transition to PUBLISHED");
 });
@@ -542,8 +545,8 @@ test("74. GalleryManagerPanel has immutability note style for editing items", ()
 
 test("75. GalleryManagerPanel shows confirm dialog for section and item archival", () => {
   assert.ok(galleryManagerPanel.includes("confirm("), "Must use confirm() for destructive actions");
-  assert.ok(galleryManagerPanel.includes("Archive this Gallery section?"), "Must confirm section archival");
-  assert.ok(galleryManagerPanel.includes("Archive this Gallery item?"), "Must confirm item archival");
+  assert.ok(galleryManagerPanel.includes("Archive this section?"), "Must confirm section archival");
+  assert.ok(galleryManagerPanel.includes("Remove this item from the Gallery?"), "Must confirm item removal from Gallery");
 });
 
 test("76. GalleryManagerPanel has showPicker state for MediaPickerDialog integration", () => {
@@ -601,31 +604,30 @@ test("82. Section archive PENDING_APPROVAL does NOT clear selectedSection", () =
   assert.ok(!pendBlock.includes("setSelectedSection(null)"), "PENDING_APPROVAL must NOT clear selected section optimistically");
 });
 
-test("83. Item archive APPLIED does not optimistically remove from local list", () => {
-  assert.ok(galleryManagerPanel.includes("Item archived."), "Must show 'Item archived.' on APPLIED");
+test("83. Item archive APPLIED shows 'Item removed from Gallery.' notice", () => {
+  assert.ok(galleryManagerPanel.includes("Item removed from Gallery."), "Must show 'Item removed from Gallery.' on APPLIED");
   const appliedIdx = galleryManagerPanel.indexOf('result.outcome === "APPLIED"');
   assert.ok(appliedIdx !== -1, "Must handle APPLIED outcome");
-  assert.ok(galleryManagerPanel.includes("loadItems"), "Must refetch items after archive");
+  assert.ok(galleryManagerPanel.includes("loadItems"), "Must refetch items after removal");
 });
 
-test("84. Item archive PENDING_APPROVAL does NOT optimistically remove item", () => {
-  const itemPendingIdx = galleryManagerPanel.indexOf("Item archive submitted for approval.");
+test("84. Item removal PENDING_APPROVAL shows 'Removal submitted for approval.'", () => {
+  const itemPendingIdx = galleryManagerPanel.indexOf("Removal submitted for approval.");
   assert.ok(itemPendingIdx !== -1, "Must show item pending message");
-  assert.ok(galleryManagerPanel.includes("loadSections()"), "Must refetch sections after item archive");
+  assert.ok(galleryManagerPanel.includes("loadSections()"), "Must refetch sections after item removal");
 });
 
-test("85. Section archive confirm text mentions logical archive and Staff approval", () => {
-  assert.ok(galleryManagerPanel.includes("logical archive"), "Section confirm must mention logical archive");
-  assert.ok(galleryManagerPanel.includes("does not delete media files"), "Section confirm must explain media preservation");
-  assert.ok(galleryManagerPanel.includes("Staff requests require Super Admin approval"), "Section confirm must mention Staff approval");
+test("85. Section archive confirm text mentions item removal and Super Admin restore", () => {
+  assert.ok(galleryManagerPanel.includes("Archive this section?"), "Section confirm must mention archiving");
+  assert.ok(galleryManagerPanel.includes("First remove all Gallery items"), "Section confirm must mention item removal requirement");
+  assert.ok(galleryManagerPanel.includes("restored by a Super Admin"), "Section confirm must mention Super Admin restore capability");
 });
 
-test("86. Item archive confirm text mentions logical archive and no media deletion", () => {
-  const itemConfirmIdx = galleryManagerPanel.indexOf("Archive this Gallery item?");
-  assert.ok(itemConfirmIdx !== -1, "Must have item archive confirm");
+test("86. Item removal confirm text mentions media and file preservation", () => {
+  const itemConfirmIdx = galleryManagerPanel.indexOf("Remove this item from the Gallery?");
+  assert.ok(itemConfirmIdx !== -1, "Must have item removal confirm");
   const block = galleryManagerPanel.slice(itemConfirmIdx, itemConfirmIdx + 300);
-  assert.ok(block.includes("logical archive"), "Item confirm must mention logical archive");
-  assert.ok(block.includes("does not delete the linked media asset"), "Item confirm must mention linked media preservation");
+  assert.ok(block.includes("Media Library asset and file will be preserved"), "Item confirm must mention asset preservation");
 });
 
 test("87. saveSection catches 409 and refetches sections then closes editing", () => {
@@ -648,7 +650,7 @@ test("88. saveItem catches 409 and refetches items and sections then closes edit
   const catch409 = block.indexOf("e instanceof AdminApiError && e.status === 409");
   assert.ok(catch409 !== -1, "saveItem must catch 409 AdminApiError");
   const block409 = block.slice(catch409, catch409 + 500);
-  assert.ok(block409.includes("Stale version conflict"), "Must show stale version conflict message");
+  assert.ok(block409.includes("changed elsewhere"), "Must show stale version conflict message");
   assert.ok(block409.includes("loadItems"), "Must refetch items on 409");
   assert.ok(block409.includes("loadSections()"), "Must refetch sections on 409");
   assert.ok(block409.includes("setEditingItem(null)"), "Must close item editing on 409");
@@ -703,24 +705,14 @@ test("93. handleDeleteItem 409 refetches items and sections without optimistic r
   assert.ok(!block409.includes("filter("), "Must NOT optimistically filter item on 409");
 });
 
-test("94. Section archive button text reads 'Archive' not 'Delete'", () => {
-  const sectionBtnIdx = galleryManagerPanel.indexOf("handleDeleteSection(sec)");
-  assert.ok(sectionBtnIdx !== -1, "Must find handleDeleteSection button");
-  const btnBlock = galleryManagerPanel.slice(sectionBtnIdx, sectionBtnIdx + 200);
-  assert.ok(btnBlock.includes(">"), "Button must have closing angle bracket");
-  const afterClose = btnBlock.indexOf(">");
-  const btnText = btnBlock.slice(afterClose + 1, btnBlock.indexOf("</button>") || btnBlock.length);
-  assert.ok(btnText.includes("Archive"), "Button label must be 'Archive'");
+test("94. Section archive action uses 'Archive Section' label in action system", () => {
+  assert.ok(galleryManagerPanel.includes('label: "Archive Section"'), "Section archive must be labeled 'Archive Section' in actions");
+  assert.ok(galleryManagerPanel.includes('target: "ARCHIVED"'), "Archive Section must target ARCHIVED");
 });
 
-test("95. Item archive button text reads 'Archive' not 'Delete'", () => {
-  const itemBtnIdx = galleryManagerPanel.indexOf("handleDeleteItem(item)");
-  assert.ok(itemBtnIdx !== -1, "Must find handleDeleteItem button");
-  const btnBlock = galleryManagerPanel.slice(itemBtnIdx, itemBtnIdx + 200);
-  assert.ok(btnBlock.includes(">"), "Button must have closing angle bracket");
-  const afterClose = btnBlock.indexOf(">");
-  const btnText = btnBlock.slice(afterClose + 1, btnBlock.indexOf("</button>") || btnBlock.length);
-  assert.ok(btnText.includes("Archive"), "Button label must be 'Archive'");
+test("95. Item removal action uses 'Remove from Gallery' label in action system", () => {
+  assert.ok(galleryManagerPanel.includes('label: "Remove from Gallery"'), "Item removal must be labeled 'Remove from Gallery' in actions");
+  assert.ok(galleryManagerPanel.includes('target: "ARCHIVED"'), "Remove from Gallery must target ARCHIVED");
 });
 
 test("96. handleDeleteSection does not clear selectedSection on PENDING_APPROVAL", () => {
@@ -870,4 +862,238 @@ test("115. GalleryClient lightbox indices use same assets array as card grid", (
   const lightboxRender = galleryClient.slice(lightboxIdx, lightboxIdx + 3000);
   assert.ok(lightboxRender.includes("assets[activeIndex]"), "Lightbox must use assets[activeIndex]");
   assert.ok(lightboxRender.includes("assets[activeIndex].url"), "Lightbox image must use same url from assets");
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   16. Gallery Production Recovery Controls (tests 116-145)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+// --- Section archive guard (tests 116-121) ---
+
+test("116. Section PATCH lifecycle validation imports canTransition from lifecycle module", () => {
+  assert.ok(gallerySectionIdRoute.includes('import { isValidLifecycleStatus, canTransition } from "@/app/lib/content/lifecycle"'),
+    "Must import canTransition for lifecycle validation");
+});
+
+test("117. Section PATCH ARCHIVED guard counts active items before allowing archive", () => {
+  assert.ok(gallerySectionIdRoute.includes("targetLifecycleStatus === \"ARCHIVED\""),
+    "Must check when target is ARCHIVED");
+  assert.ok(gallerySectionIdRoute.includes("countActiveItemsInSection(id)"),
+    "Must call countActiveItemsInSection to count active items");
+  assert.ok(gallerySectionIdRoute.includes("activeItemCount > 0"),
+    "Must block archive when active items exist");
+  assert.ok(gallerySectionIdRoute.includes("Remove or archive all Gallery items before archiving this section"),
+    "Must return clear error message about items");
+});
+
+test("118. Section PATCH lifecycle transition validation rejects invalid transitions with 409", () => {
+  assert.ok(gallerySectionIdRoute.includes("Cannot transition section from"),
+    "Must return specific transition error for sections");
+  assert.ok(gallerySectionIdRoute.includes("outcome: \"CONFLICT\""),
+    "Must return CONFLICT outcome on invalid transition");
+});
+
+test("119. Section PATCH archived-section-edit guard blocks non-DRAFT transitions", () => {
+  assert.ok(gallerySectionIdRoute.includes('current.lifecycle_status === "ARCHIVED" && targetLifecycleStatus !== "DRAFT"'),
+    "Must block editing archived section to anything other than DRAFT");
+  assert.ok(gallerySectionIdRoute.includes("Restore it to DRAFT before editing"),
+    "Must tell user to restore to DRAFT first");
+});
+
+test("120. Section DELETE includes specific error for active items preventing archive", () => {
+  assert.ok(gallerySectionIdRoute.includes("Remove or archive all Gallery items before archiving this section"),
+    "Section DELETE must return specific items-prevent-archive message");
+});
+
+test("121. Section PATCH publication guard returns ineligibility message on failure", () => {
+  assert.ok(gallerySectionIdRoute.includes("Section is not eligible for publication"),
+    "Must return publication ineligibility message");
+  assert.ok(gallerySectionIdRoute.includes("All items must be PUBLISHED with approved media"),
+    "Must explain publication requirements");
+});
+
+// --- Item lifecycle validation (tests 122-126) ---
+
+test("122. Item PATCH lifecycle validation imports canTransition from lifecycle module", () => {
+  assert.ok(galleryItemIdRoute.includes('import { isValidLifecycleStatus, canTransition } from "@/app/lib/content/lifecycle"'),
+    "Must import canTransition for item lifecycle validation");
+});
+
+test("123. Item PATCH validates lifecycle transitions and rejects invalid with 409", () => {
+  assert.ok(galleryItemIdRoute.includes("Cannot transition item from"),
+    "Must return specific transition error for items");
+  assert.ok(galleryItemIdRoute.includes("isValidLifecycleStatus(targetLifecycleStatus)"),
+    "Must validate lifecycle status value before transition check");
+});
+
+test("124. Item PATCH catch-all now surfaces specific error messages instead of generic", () => {
+  assert.ok(galleryItemIdRoute.includes("error instanceof Error ? error.message : \"Failed to update gallery item.\""),
+    "Catch-all must surface error.message when available");
+  assert.ok(galleryItemIdRoute.includes("isInternal"),
+    "Must distinguish internal errors from user-facing errors");
+  assert.ok(!galleryItemIdRoute.includes("return json({ error: \"Failed to update gallery item.\" }, { status: 500 })"),
+    "Must NOT have generic catch-all that hides specific errors");
+});
+
+test("125. Item DELETE catch-all now surfaces specific error messages", () => {
+  assert.ok(galleryItemIdRoute.includes("error instanceof Error ? error.message : \"Failed to delete gallery item.\""),
+    "DELETE catch-all must surface error.message when available");
+  assert.ok(galleryItemIdRoute.includes("isInternal"),
+    "DELETE must distinguish internal errors from user-facing errors");
+});
+
+test("126. Item PATCH returns publication eligibility error when media guard fails", () => {
+  assert.ok(galleryItemIdRoute.includes("Media must be approved, published, and visible before this item can be published"),
+    "Must return specific media eligibility error");
+});
+
+// --- Backend helper function (tests 127-128) ---
+
+test("127. gallery-v2.ts exports countActiveItemsInSection function", () => {
+  assert.ok(galleryV2.includes("export async function countActiveItemsInSection"),
+    "Must export countActiveItemsInSection");
+  assert.ok(galleryV2.includes("gallery_items"),
+    "Must query gallery_items table");
+  assert.ok(galleryV2.includes("deleted_at IS NULL"),
+    "Must count only non-deleted items");
+});
+
+test("128. gallery-v2.ts section PATCH route imports countActiveItemsInSection", () => {
+  assert.ok(gallerySectionIdRoute.includes("countActiveItemsInSection"),
+    "Section PATCH must import and use countActiveItemsInSection");
+});
+
+// --- UI: Section card readiness and actions (tests 129-135) ---
+
+test("129. Section card shows human-readable status labels instead of raw enums", () => {
+  assert.ok(galleryManagerPanel.includes('sec.lifecycleStatus === "ARCHIVED" ? "Archived"'),
+    "ARCHIVED must display as 'Archived'");
+  assert.ok(galleryManagerPanel.includes('sec.lifecycleStatus === "PUBLISHED" ? "Published"'),
+    "PUBLISHED must display as 'Published'");
+  assert.ok(galleryManagerPanel.includes('sec.lifecycleStatus === "HIDDEN" ? "Hidden"'),
+    "HIDDEN must display as 'Hidden'");
+  assert.ok(galleryManagerPanel.includes('sec.lifecycleStatus === "IN_REVIEW" ? "Needs Review"'),
+    "IN_REVIEW must display as 'Needs Review'");
+});
+
+test("130. Section card shows ready-to-publish or not-ready with item counts", () => {
+  assert.ok(galleryManagerPanel.includes("Ready to publish:"),
+    "Must show 'Ready to publish' label");
+  assert.ok(galleryManagerPanel.includes("Not ready:"),
+    "Must show 'Not ready' label");
+  assert.ok(galleryManagerPanel.includes("items published"),
+    "Must show items-published qualifier");
+});
+
+test("131. Section card does NOT have standalone Archive button separate from action system", () => {
+  const sectionCardBlock = galleryManagerPanel.slice(galleryManagerPanel.indexOf("sectionCard("));
+  assert.ok(!sectionCardBlock.match(/onClick.*handleDeleteSection[^)]*\}[^}]*Archive/),
+    "Must NOT have standalone Archive button outside renderActionButtons");
+});
+
+test("132. getSectionActions shows Restore Section only for ARCHIVED with SUPER_ADMIN", () => {
+  assert.ok(galleryManagerPanel.includes('label: "Restore Section"'),
+    "Must have Restore Section action");
+  assert.ok(galleryManagerPanel.includes('target: "DRAFT"'),
+    "Restore must target DRAFT");
+  const archivedBlock = galleryManagerPanel.slice(
+    galleryManagerPanel.indexOf('if (ls === "ARCHIVED")'),
+    galleryManagerPanel.indexOf('if (ls === "ARCHIVED")') + 200,
+  );
+  assert.ok(archivedBlock.includes("isSuperAdmin"),
+    "Restore Section must be gated on isSuperAdmin");
+});
+
+test("133. getSectionActions Archive Section is only available when no active items", () => {
+  const archiveIdx = galleryManagerPanel.indexOf('label: "Archive Section"');
+  assert.ok(archiveIdx !== -1, "Must have Archive Section action");
+  const archiveBlock = galleryManagerPanel.slice(archiveIdx - 100, archiveIdx + 100);
+  assert.ok(archiveBlock.includes("hasActiveItems"),
+    "Archive Section availability must depend on hasActiveItems");
+  assert.ok(archiveBlock.includes("destructive: true"),
+    "Archive Section must be marked destructive");
+});
+
+test("134. getSectionActions excludes Archive when section is PUBLISHED", () => {
+  const archiveIdx = galleryManagerPanel.indexOf('label: "Archive Section"');
+  const archiveBlock = galleryManagerPanel.slice(archiveIdx - 200, archiveIdx);
+  assert.ok(archiveBlock.includes('ls !== "PUBLISHED"'),
+    "Archive must not be available for PUBLISHED sections");
+});
+
+test("135. Section confirm text mentions restore and item removal requirement", () => {
+  assert.ok(galleryManagerPanel.includes("Archive this section? First remove all Gallery items"),
+    "Section archive confirm must mention item removal requirement");
+  assert.ok(galleryManagerPanel.includes("The section can later be restored by a Super Admin"),
+    "Section archive confirm must mention restore capability");
+});
+
+// --- UI: Item card and remove actions (tests 136-141) ---
+
+test("136. Item action button shows 'Remove from Gallery' instead of 'Archive'", () => {
+  assert.ok(galleryManagerPanel.includes('label: "Remove from Gallery"'),
+    "Item action must say 'Remove from Gallery'");
+  assert.ok(!galleryManagerPanel.match(/label:\s*"Archive"/),
+    "Must NOT have generic 'Archive' label");
+});
+
+test("137. Item confirm text says media and file will be preserved", () => {
+  assert.ok(galleryManagerPanel.includes("Remove this item from the Gallery? The original Media Library asset and file will be preserved."),
+    "Item confirm must mention media and file preservation");
+});
+
+test("138. Item lifecycle status shows human-readable labels", () => {
+  assert.ok(galleryManagerPanel.includes('item.lifecycleStatus === "ARCHIVED" ? "Removed"'),
+    "ARCHIVED items must display as 'Removed'");
+  assert.ok(galleryManagerPanel.includes('item.lifecycleStatus === "PUBLISHED" ? "Published"'),
+    "PUBLISHED items must display as 'Published'");
+  assert.ok(galleryManagerPanel.includes('item.lifecycleStatus === "IN_REVIEW" ? "Needs Review"'),
+    "IN_REVIEW items must display as 'Needs Review'");
+});
+
+test("139. Item card shows Edit button only for non-archived items", () => {
+  assert.ok(galleryManagerPanel.includes('item.lifecycleStatus !== "ARCHIVED"'),
+    "Edit button must be hidden for archived items");
+});
+
+test("140. saveItem shows undo hint on successful item creation", () => {
+  assert.ok(galleryManagerPanel.includes("Item added. You can remove it from the Gallery if needed."),
+    "Item creation success must include remove/undo hint");
+});
+
+test("141. Item actions hide lifecycle toolbar for archived items and show removed status", () => {
+  const itemArchivedCheck = galleryManagerPanel.includes('item.lifecycleStatus === "ARCHIVED" ? "Removed"');
+  assert.ok(itemArchivedCheck, "Archived items must show 'Removed' status");
+});
+
+// --- UI: Error handling and 409 refetch (tests 142-145) ---
+
+test("142. Section lifecycle transition 409 error differentiates eligibility, archive, and stale", () => {
+  assert.ok(galleryManagerPanel.includes('msg.includes("eligibility")'),
+    "Must detect eligibility errors in 409 handler");
+  assert.ok(galleryManagerPanel.includes('msg.includes("archived")'),
+    "Must detect archived errors in 409 handler");
+  assert.ok(galleryManagerPanel.includes("loadSections()"),
+    "Must refetch sections on stale version");
+});
+
+test("143. Item lifecycle transition 409 refetches items and sections on stale version", () => {
+  assert.ok(galleryManagerPanel.includes("if (selectedSection) await loadItems(selectedSection.id)"),
+    "Must refetch items on 409 stale version");
+  assert.ok(galleryManagerPanel.includes("Stale version. Please reload."),
+    "Must show stale version message on 409");
+});
+
+test("144. saveItem 409 refetches both items and sections", () => {
+  assert.ok(galleryManagerPanel.includes("if (selectedSection) await loadItems(selectedSection.id)"),
+    "saveItem must refetch items on 409");
+  assert.ok(galleryManagerPanel.includes("await loadSections()"),
+    "saveItem must refetch sections on 409");
+});
+
+test("145. Generic error message is NOT the only catch-all for item PATCH/DELETE", () => {
+  assert.ok(galleryItemIdRoute.includes("isInternal"),
+    "Item PATCH catch-all must use isInternal classification");
+  assert.ok(galleryItemIdRoute.includes('"An internal database error occurred."'),
+    "Internal errors must return generic 'internal database error' message");
 });

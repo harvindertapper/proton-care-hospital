@@ -50,19 +50,48 @@ function slugify(text: string) {
     .replace(/(^-|-$)/g, "");
 }
 
-function getTransitions(current: string): string[] {
-  switch (current) {
-    case "DRAFT":
-      return ["IN_REVIEW", "HIDDEN", "ARCHIVED"];
-    case "IN_REVIEW":
-      return ["PUBLISHED", "HIDDEN", "ARCHIVED"];
-    case "PUBLISHED":
-      return ["HIDDEN"];
-    case "HIDDEN":
-      return ["PUBLISHED", "ARCHIVED"];
-    default:
-      return [];
+type ActionDef = {
+  label: string;
+  target: string;
+  destructive?: boolean;
+};
+
+function getSectionActions(sec: GallerySectionDto, isSuperAdmin: boolean): ActionDef[] {
+  const ls = sec.lifecycleStatus;
+  const hasActiveItems = (sec.itemCount ?? 0) > 0;
+  if (ls === "ARCHIVED") {
+    return isSuperAdmin ? [{ label: "Restore Section", target: "DRAFT" }] : [];
   }
+  const actions: ActionDef[] = [];
+  if (ls === "DRAFT" || ls === "IN_REVIEW") {
+    actions.push({ label: "Submit for Review", target: "IN_REVIEW" });
+  }
+  if (ls === "IN_REVIEW" || ls === "HIDDEN") {
+    actions.push({ label: "Publish", target: "PUBLISHED" });
+  }
+  if (ls === "PUBLISHED" || ls === "HIDDEN") {
+    actions.push({ label: "Hide", target: "HIDDEN" });
+  }
+  if (ls !== "PUBLISHED" && !hasActiveItems) {
+    actions.push({ label: "Archive Section", target: "ARCHIVED", destructive: true });
+  }
+  return actions;
+}
+
+function getItemActions(item: GalleryItemDto): ActionDef[] {
+  const ls = item.lifecycleStatus;
+  const actions: ActionDef[] = [];
+  if (ls === "DRAFT" || ls === "IN_REVIEW") {
+    actions.push({ label: "Submit for Review", target: "IN_REVIEW" });
+  }
+  if (ls === "IN_REVIEW" || ls === "HIDDEN") {
+    actions.push({ label: "Publish", target: "PUBLISHED" });
+  }
+  if (ls === "PUBLISHED" || ls === "HIDDEN") {
+    actions.push({ label: "Hide", target: "HIDDEN" });
+  }
+  actions.push({ label: "Remove from Gallery", target: "ARCHIVED", destructive: true });
+  return actions;
 }
 
 export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
@@ -232,7 +261,7 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
   }
 
   async function handleDeleteSection(sec: GallerySectionDto) {
-    if (!confirm(`Archive this Gallery section? This is a logical archive and does not delete media files. The section must have no active items. Staff requests require Super Admin approval.`)) return;
+    if (!confirm("Archive this section? First remove all Gallery items. The section can later be restored by a Super Admin.")) return;
     setBusy(true);
     setError("");
     try {
@@ -262,6 +291,14 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
   }
 
   async function handleLifecycleTransitionSection(sec: GallerySectionDto, targetLifecycle: string) {
+    if (targetLifecycle === "PUBLISHED") {
+      const readyCount = sec.publishedItemCount ?? 0;
+      const totalCount = sec.itemCount ?? 0;
+      if (totalCount === 0 || readyCount !== totalCount) {
+        setError(`Not ready to publish: ${readyCount}/${totalCount} items published. All items must be published before the section.`);
+        return;
+      }
+    }
     setBusy(true);
     setError("");
     try {
@@ -274,7 +311,7 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
         }
       } else {
         if (result.outcome === "APPLIED") {
-          showNotice("Applied");
+          showNotice(targetLifecycle === "DRAFT" ? "Section restored." : `Section ${targetLifecycle.toLowerCase()}ed.`);
         } else {
           showNotice("Submitted for approval");
         }
@@ -285,8 +322,10 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
         const msg = err.message.toLowerCase();
         if (msg.includes("eligibility") || msg.includes("guard")) {
           setError("Publication eligibility not met. " + err.message);
+        } else if (msg.includes("archived") || msg.includes("restore")) {
+          setError(err.message);
         } else {
-          setError("Stale version. Please reload. " + err.message);
+          setError("Stale version. The latest section data has been loaded. " + err.message);
           await loadSections();
         }
       } else if (err instanceof AdminApiError && err.status === 404) {
@@ -349,14 +388,10 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
         fields.sortOrder = formSortOrder;
         const result = await patchGalleryItem(csrf, editingItem.id, editingItem.version, fields);
         if (sessionRole === "STAFF") {
-          if (result.outcome === "PENDING_APPROVAL") {
-            showNotice("Submitted for approval");
-          } else {
-            showNotice("Submitted for approval");
-          }
+          showNotice("Submitted for approval");
         } else {
           if (result.outcome === "APPLIED") {
-            showNotice("Applied");
+            showNotice("Item updated.");
           } else {
             showNotice("Submitted for approval");
           }
@@ -372,9 +407,9 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
           sortOrder: formSortOrder,
         });
         if (result.outcome === "PENDING_APPROVAL") {
-          showNotice("Submitted for approval");
+          showNotice("Item added — submitted for approval.");
         } else {
-          showNotice("Item created");
+          showNotice("Item added. You can remove it from the Gallery if needed.");
         }
       }
       await loadItems(selectedSection.id);
@@ -382,7 +417,7 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
       clearForm();
     } catch (e: unknown) {
       if (e instanceof AdminApiError && e.status === 409) {
-        setError("Stale version conflict. " + e.message);
+        setError("This Gallery item changed elsewhere. The latest version has been loaded. " + e.message);
         if (selectedSection) await loadItems(selectedSection.id);
         await loadSections();
         setEditingItem(null);
@@ -400,17 +435,17 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
   }
 
   async function handleDeleteItem(item: GalleryItemDto) {
-    if (!confirm(`Archive this Gallery item? This is a logical archive and does not delete the linked media asset. Staff requests require Super Admin approval.`)) return;
+    if (!confirm("Remove this item from the Gallery? The original Media Library asset and file will be preserved.")) return;
     setBusy(true);
     setError("");
     try {
       const result = await deleteGalleryItem(csrf, item.id, item.version);
       if (result.outcome === "APPLIED") {
-        showNotice("Item archived.");
+        showNotice("Item removed from Gallery.");
       } else if (result.outcome === "PENDING_APPROVAL") {
-        showNotice("Item archive submitted for approval.");
+        showNotice("Removal submitted for approval.");
       } else {
-        showNotice("Item archive submitted for approval.");
+        showNotice("Removal submitted for approval.");
       }
       if (selectedSection) await loadItems(selectedSection.id);
       await loadSections();
@@ -424,7 +459,7 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
         await loadSections();
         setError(e.message);
       } else {
-        setError(e instanceof Error ? e.message : "Failed to archive item");
+        setError(e instanceof Error ? e.message : "Failed to remove item from Gallery");
       }
     } finally {
       setBusy(false);
@@ -656,27 +691,32 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
     immutabilityNote: { fontSize: 11, color: "#92400e", fontStyle: "italic" as const, marginTop: 4 },
   };
 
-  const renderLifecycleToolbar = <T extends GallerySectionDto | GalleryItemDto>(
+  const renderActionButtons = <T extends GallerySectionDto | GalleryItemDto>(
     entity: T,
-    onTransition: (entity: T, target: string) => void
+    actions: ActionDef[],
+    onTransition: (entity: T, target: string) => void,
+    onDelete?: (entity: T) => void,
   ) => {
-    const transitions = getTransitions(entity.lifecycleStatus);
-    if (transitions.length === 0) return null;
+    if (actions.length === 0) return null;
     return (
       <div style={styles.lifecycleToolbar}>
-        {transitions.map((target) => (
+        {actions.map((action) => (
           <button
-            key={target}
+            key={action.target}
             type="button"
-            className="button subtle small"
-            aria-label={`Transition to ${target}`}
+            className={`button ${action.destructive ? "subtle" : "secondary"} small`}
+            style={action.destructive ? { color: "#dc2626" } : undefined}
             onClick={(e) => {
               e.stopPropagation();
-              onTransition(entity, target);
+              if (action.target === "ARCHIVED" && onDelete) {
+                onDelete(entity);
+              } else {
+                onTransition(entity, action.target);
+              }
             }}
             disabled={busy}
           >
-            &rarr; {target}
+            {action.label}
           </button>
         ))}
       </div>
@@ -754,6 +794,11 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
         <h4 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
           {isEdit ? "Edit Item" : "New Item"}
         </h4>
+        {!isEdit && (
+          <div style={{ padding: "8px 12px", borderRadius: 6, background: "#f0f9ff", border: "1px solid #bae6fd", fontSize: 12, color: "#0369a1", marginBottom: 12 }}>
+            Adding an item includes the selected Media Library asset in this Gallery section. It does not publish the section automatically.
+          </div>
+        )}
         <div style={styles.formRow}>
           <label style={styles.label}>Media Asset *</label>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -875,45 +920,32 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
                 <div style={styles.sectionName}>{sec.name}</div>
                 <div style={styles.sectionSlug}>{sec.slug}</div>
                 <div style={styles.sectionMeta}>
-                  <span style={statusBadge(sec.lifecycleStatus)}>{sec.lifecycleStatus}</span>
+                  <span style={statusBadge(sec.lifecycleStatus)}>{sec.lifecycleStatus === "ARCHIVED" ? "Archived" : sec.lifecycleStatus === "PUBLISHED" ? "Published" : sec.lifecycleStatus === "HIDDEN" ? "Hidden" : sec.lifecycleStatus === "IN_REVIEW" ? "Needs Review" : "Draft"}</span>
                   <span>Order: {sec.sortOrder ?? 0}</span>
-                  <span>v{sec.version ?? 1}</span>
-                  <span>
-                    Items: {sec.publishedItemCount ?? 0}/{sec.itemCount ?? 0}
-                  </span>
+                  {sec.lifecycleStatus !== "ARCHIVED" && (
+                    <span style={{ color: (sec.publishedItemCount ?? 0) === (sec.itemCount ?? 0) && (sec.itemCount ?? 0) > 0 ? "#065f46" : "#92400e", fontWeight: 600 }}>
+                      {(sec.itemCount ?? 0) > 0
+                        ? (sec.publishedItemCount ?? 0) === (sec.itemCount ?? 0)
+                          ? `Ready to publish: ${sec.publishedItemCount}/${sec.itemCount} items`
+                          : `Not ready: ${sec.publishedItemCount ?? 0}/${sec.itemCount ?? 0} items published`
+                        : "No items"}
+                    </span>
+                  )}
                 </div>
-                {renderLifecycleToolbar(sec, handleLifecycleTransitionSection)}
-                {sec.lifecycleStatus === "IN_REVIEW" && (
-                  <div style={{ fontSize: 11, color: "#92400e", marginTop: 4 }}>
-                    Publication requires all items to be PUBLISHED.
-                  </div>
-                )}
-                {sec.lifecycleStatus === "DRAFT" && (
-                  <div style={{ fontSize: 11, color: "#92400e", marginTop: 4 }}>
-                    Publication requires all items to be PUBLISHED.
-                  </div>
-                )}
+                {renderActionButtons(sec, getSectionActions(sec, sessionRole === "SUPER_ADMIN"), handleLifecycleTransitionSection, handleDeleteSection)}
                 <div style={styles.sectionActions}>
-                  <button
-                    type="button"
-                    className="button secondary small"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      startEditSection(sec);
-                    }}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="button secondary small"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteSection(sec);
-                    }}
-                  >
-                    Archive
-                  </button>
+                  {sec.lifecycleStatus !== "ARCHIVED" && (
+                    <button
+                      type="button"
+                      className="button secondary small"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startEditSection(sec);
+                      }}
+                    >
+                      Edit
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -1020,25 +1052,18 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
                   <div style={styles.itemInfo}>
                     <div style={styles.itemTitle}>{item.titleOverride || "Untitled"}</div>
                     <div style={styles.itemMeta}>
-                      <span style={statusBadge(item.lifecycleStatus)}>{item.lifecycleStatus}</span>
+                      <span style={statusBadge(item.lifecycleStatus)}>{item.lifecycleStatus === "ARCHIVED" ? "Removed" : item.lifecycleStatus === "PUBLISHED" ? "Published" : item.lifecycleStatus === "HIDDEN" ? "Hidden" : item.lifecycleStatus === "IN_REVIEW" ? "Needs Review" : "Draft"}</span>
                       {item.slotKey && <span>Slot: {item.slotKey}</span>}
                       <span>Order: {item.sortOrder ?? 0}</span>
-                      <span>v{item.version ?? 1}</span>
                     </div>
-                    {renderLifecycleToolbar(item, handleLifecycleTransitionItem)}
-                    {(item.lifecycleStatus === "IN_REVIEW" || item.lifecycleStatus === "DRAFT") && (
-                      <div style={{ fontSize: 11, color: "#92400e", marginTop: 4 }}>
-                        Media must be GALLERY category, PUBLISHED, APPROVED, visible.
-                      </div>
-                    )}
+                    {renderActionButtons(item, getItemActions(item), handleLifecycleTransitionItem, handleDeleteItem)}
                   </div>
                   <div style={styles.itemActions}>
-                    <button type="button" className="button secondary small" onClick={() => startEditItem(item)}>
-                      Edit
-                    </button>
-                    <button type="button" className="button secondary small" onClick={() => handleDeleteItem(item)}>
-                      Archive
-                    </button>
+                    {item.lifecycleStatus !== "ARCHIVED" && (
+                      <button type="button" className="button secondary small" onClick={() => startEditItem(item)}>
+                        Edit
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}

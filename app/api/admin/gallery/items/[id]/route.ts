@@ -14,7 +14,7 @@ import {
   GALLERY_FIELD_LENGTHS,
   type ItemRowWithMedia,
 } from "@/app/lib/gallery-v2";
-import { isValidLifecycleStatus } from "@/app/lib/content/lifecycle";
+import { isValidLifecycleStatus, canTransition } from "@/app/lib/content/lifecycle";
 
 type Row = Record<string, unknown>;
 
@@ -84,7 +84,7 @@ export async function PATCH(
 
     if (current.version !== expectedVersion) {
       return json(
-        { error: "Version conflict. The item has been modified since you loaded it.", outcome: "CONFLICT" },
+        { error: "This Gallery item changed elsewhere. The latest version has been loaded.", outcome: "CONFLICT" },
         { status: 409 },
       );
     }
@@ -136,6 +136,13 @@ export async function PATCH(
       if (!isValidLifecycleStatus(targetLifecycleStatus)) {
         return json({ error: "Invalid lifecycleStatus." }, { status: 400 });
       }
+      const typedTarget = targetLifecycleStatus as "DRAFT" | "IN_REVIEW" | "PUBLISHED" | "HIDDEN" | "ARCHIVED";
+      if (!canTransition(current.lifecycle_status as "DRAFT" | "IN_REVIEW" | "PUBLISHED" | "HIDDEN" | "ARCHIVED", typedTarget)) {
+        return json(
+          { error: `Cannot transition item from ${current.lifecycle_status} to ${targetLifecycleStatus}.`, outcome: "CONFLICT" },
+          { status: 409 },
+        );
+      }
       updates.push("lifecycle_status = ?");
       binds.push(targetLifecycleStatus);
     }
@@ -186,12 +193,12 @@ export async function PATCH(
       }
       if (recheckRow.version !== expectedVersion) {
         return json(
-          { error: "Version conflict. The item has been modified since you loaded it.", outcome: "CONFLICT" },
+          { error: "This Gallery item changed elsewhere. The latest version has been loaded.", outcome: "CONFLICT" },
           { status: 409 },
         );
       }
       return json(
-        { error: "Item is not eligible for publication.", outcome: "CONFLICT" },
+        { error: "Media must be approved, published, and visible before this item can be published.", outcome: "CONFLICT" },
         { status: 409 },
       );
     }
@@ -222,7 +229,12 @@ export async function PATCH(
     return json({ success: true, outcome: "APPLIED", item: dto });
   } catch (error) {
     console.error("Gallery item PATCH error:", error);
-    return json({ error: "Failed to update gallery item." }, { status: 500 });
+    const msg = error instanceof Error ? error.message : "Failed to update gallery item.";
+    const isInternal = msg.includes("D1") || msg.includes("SQLITE") || msg.includes("prepare") || msg.includes("bind");
+    return json(
+      { success: false, outcome: "FAILED", error: isInternal ? "An internal database error occurred." : msg },
+      { status: isInternal ? 500 : 400 },
+    );
   }
 }
 
@@ -275,7 +287,7 @@ export async function DELETE(
 
     if ((row.version as number) !== expectedVersion) {
       return json(
-        { error: "Version conflict. The item has been modified since you loaded it.", outcome: "CONFLICT" },
+        { error: "This Gallery item changed elsewhere. The latest version has been loaded.", outcome: "CONFLICT" },
         { status: 409 },
       );
     }
@@ -289,7 +301,7 @@ export async function DELETE(
       );
 
       if (result.meta?.changes === 0) {
-        throw new Error("Version conflict. The item has been modified since you loaded it.");
+        throw new Error("This Gallery item changed elsewhere. The latest version has been loaded.");
       }
 
       try {
@@ -329,6 +341,11 @@ export async function DELETE(
     return json({ success: true, ...result });
   } catch (error) {
     console.error("Gallery item DELETE error:", error);
-    return json({ error: "Failed to delete gallery item." }, { status: 500 });
+    const msg = error instanceof Error ? error.message : "Failed to delete gallery item.";
+    const isInternal = msg.includes("D1") || msg.includes("SQLITE") || msg.includes("prepare") || msg.includes("bind");
+    return json(
+      { success: false, outcome: "FAILED", error: isInternal ? "An internal database error occurred." : msg },
+      { status: isInternal ? 500 : 400 },
+    );
   }
 }
