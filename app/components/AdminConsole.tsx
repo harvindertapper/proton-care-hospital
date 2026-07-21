@@ -743,6 +743,7 @@ export function AdminConsole({
     }
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- legacy delete retained for reference
   async function deleteMedia(id: string) {
     if (!window.confirm("Are you sure you want to permanently delete this media asset?")) return;
     setBusy(true);
@@ -1121,7 +1122,7 @@ export function AdminConsole({
               <MediaLibraryPanel
                 csrf={session.csrf}
                 sessionRole={session.role}
-                onUpload={() => {
+                onRefresh={() => {
                   setMediaGalleryView("media");
                   refreshData(true);
                 }}
@@ -2544,6 +2545,7 @@ function VideoForm({
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- legacy upload retained for reference
 function MediaManager({
   busy,
   rows,

@@ -6,6 +6,19 @@ import type {
   MediaLibraryFilters,
 } from "./admin-media-types";
 
+export class AdminApiError extends Error {
+  status: number;
+  outcome?: string;
+  revision?: unknown;
+  constructor(message: string, status: number, opts?: { outcome?: string; revision?: unknown }) {
+    super(message);
+    this.name = "AdminApiError";
+    this.status = status;
+    this.outcome = opts?.outcome;
+    this.revision = opts?.revision;
+  }
+}
+
 type ApiResponse<T> = { success: boolean; error?: string } & T;
 
 function authHeaders(csrf: string): Record<string, string> {
@@ -15,6 +28,18 @@ function authHeaders(csrf: string): Record<string, string> {
 function qs(params: Record<string, string>): string {
   const entries = Object.entries(params).filter(([, v]) => v !== "" && v !== "ALL");
   return entries.length > 0 ? `?${new URLSearchParams(entries).toString()}` : "";
+}
+
+async function handleResponse<T>(res: Response): Promise<T> {
+  const data = (await res.json().catch(() => ({ error: "Network error." }))) as ApiResponse<T>;
+  if (!res.ok || !data.success) {
+    throw new AdminApiError(
+      String(data.error || "Request failed."),
+      res.status,
+      { outcome: (data as Record<string, unknown>).outcome as string | undefined, revision: (data as Record<string, unknown>).revision },
+    );
+  }
+  return data as T;
 }
 
 /* ──────────── Media Library ──────────── */
@@ -34,13 +59,13 @@ export async function fetchMediaLibrary(
   if (filters.category && filters.category !== "ALL") params.category = filters.category;
   if (filters.purpose && filters.purpose !== "ALL") params.purpose = filters.purpose;
   if (filters.lifecycleStatus && filters.lifecycleStatus !== "ALL") params.lifecycleStatus = filters.lifecycleStatus;
+  if ((filters as Record<string, unknown>).status && (filters as Record<string, unknown>).status !== "ALL") params.status = String((filters as Record<string, unknown>).status);
+  if ((filters as Record<string, unknown>).rightsStatus && (filters as Record<string, unknown>).rightsStatus !== "ALL") params.rightsStatus = String((filters as Record<string, unknown>).rightsStatus);
 
   const res = await fetch(`/api/admin/media/library${qs(params)}`, {
     headers: authHeaders(csrf),
   });
-  const data = (await res.json()) as ApiResponse<{ items: MediaAssetDto[]; pagination: Pagination }>;
-  if (!res.ok || !data.success) throw new Error(String(data.error || "Failed to load media library."));
-  return { items: data.items, pagination: data.pagination };
+  return handleResponse<{ items: MediaAssetDto[]; pagination: Pagination }>(res);
 }
 
 export async function patchMediaAsset(
@@ -48,29 +73,38 @@ export async function patchMediaAsset(
   id: string,
   expectedVersion: number,
   fields: Record<string, unknown>,
-): Promise<MediaAssetDto> {
+): Promise<{ outcome: string; item: MediaAssetDto }> {
   const res = await fetch(`/api/admin/media/library/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: authHeaders(csrf),
     body: JSON.stringify({ ...fields, expectedVersion }),
   });
-  const data = (await res.json()) as ApiResponse<{ outcome: string; item: MediaAssetDto }>;
-  if (!res.ok) throw new Error(String(data.error || "Failed to update media asset."));
-  return data.item;
+  return handleResponse<{ outcome: string; item: MediaAssetDto }>(res);
 }
 
 export async function deleteMediaAsset(
   csrf: string,
   id: string,
   expectedVersion: number,
-): Promise<void> {
+): Promise<{ outcome: string }> {
   const res = await fetch(`/api/admin/media/library/${encodeURIComponent(id)}`, {
     method: "DELETE",
     headers: authHeaders(csrf),
     body: JSON.stringify({ expectedVersion }),
   });
-  const data = (await res.json()) as ApiResponse<Record<string, never>>;
-  if (!res.ok) throw new Error(String(data.error || "Failed to archive media asset."));
+  return handleResponse<{ outcome: string }>(res);
+}
+
+export async function uploadMediaAsset(
+  csrf: string,
+  formData: FormData,
+): Promise<{ id: string; r2_key: string; url: string; purpose: string; [k: string]: unknown }> {
+  const res = await fetch("/api/admin/media", {
+    method: "POST",
+    headers: { "x-csrf-token": csrf },
+    body: formData,
+  });
+  return handleResponse<{ id: string; r2_key: string; url: string; purpose: string }>(res);
 }
 
 /* ──────────── Gallery Sections ──────────── */
@@ -90,9 +124,7 @@ export async function fetchGallerySections(
   const res = await fetch(`/api/admin/gallery/sections${qs(params)}`, {
     headers: authHeaders(csrf),
   });
-  const data = (await res.json()) as ApiResponse<{ sections: GallerySectionDto[]; pagination: Pagination }>;
-  if (!res.ok || !data.success) throw new Error(String(data.error || "Failed to load gallery sections."));
-  return { sections: data.sections, pagination: data.pagination };
+  return handleResponse<{ sections: GallerySectionDto[]; pagination: Pagination }>(res);
 }
 
 export async function createGallerySection(
@@ -104,9 +136,7 @@ export async function createGallerySection(
     headers: authHeaders(csrf),
     body: JSON.stringify(payload),
   });
-  const data = (await res.json()) as ApiResponse<{ outcome: string }>;
-  if (!res.ok) throw new Error(String(data.error || "Failed to create gallery section."));
-  return { outcome: data.outcome };
+  return handleResponse<{ outcome: string }>(res);
 }
 
 export async function patchGallerySection(
@@ -114,15 +144,13 @@ export async function patchGallerySection(
   id: string,
   expectedVersion: number,
   fields: Record<string, unknown>,
-): Promise<GallerySectionDto> {
+): Promise<{ outcome: string; item: GallerySectionDto }> {
   const res = await fetch(`/api/admin/gallery/sections/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: authHeaders(csrf),
     body: JSON.stringify({ ...fields, expectedVersion }),
   });
-  const data = (await res.json()) as ApiResponse<{ outcome: string; item: GallerySectionDto }>;
-  if (!res.ok) throw new Error(String(data.error || "Failed to update gallery section."));
-  return data.item;
+  return handleResponse<{ outcome: string; item: GallerySectionDto }>(res);
 }
 
 export async function deleteGallerySection(
@@ -135,9 +163,7 @@ export async function deleteGallerySection(
     headers: authHeaders(csrf),
     body: JSON.stringify({ expectedVersion }),
   });
-  const data = (await res.json()) as ApiResponse<{ outcome: string }>;
-  if (!res.ok) throw new Error(String(data.error || "Failed to delete gallery section."));
-  return { outcome: data.outcome };
+  return handleResponse<{ outcome: string }>(res);
 }
 
 /* ──────────── Gallery Items ──────────── */
@@ -159,9 +185,7 @@ export async function fetchGalleryItems(
   const res = await fetch(`/api/admin/gallery/items${qs(params)}`, {
     headers: authHeaders(csrf),
   });
-  const data = (await res.json()) as ApiResponse<{ items: GalleryItemDto[]; pagination: Pagination }>;
-  if (!res.ok || !data.success) throw new Error(String(data.error || "Failed to load gallery items."));
-  return { items: data.items, pagination: data.pagination };
+  return handleResponse<{ items: GalleryItemDto[]; pagination: Pagination }>(res);
 }
 
 export async function createGalleryItem(
@@ -181,9 +205,7 @@ export async function createGalleryItem(
     headers: authHeaders(csrf),
     body: JSON.stringify(payload),
   });
-  const data = (await res.json()) as ApiResponse<{ outcome: string }>;
-  if (!res.ok) throw new Error(String(data.error || "Failed to create gallery item."));
-  return { outcome: data.outcome };
+  return handleResponse<{ outcome: string }>(res);
 }
 
 export async function patchGalleryItem(
@@ -191,15 +213,13 @@ export async function patchGalleryItem(
   id: string,
   expectedVersion: number,
   fields: Record<string, unknown>,
-): Promise<GalleryItemDto> {
+): Promise<{ outcome: string; item: GalleryItemDto }> {
   const res = await fetch(`/api/admin/gallery/items/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: authHeaders(csrf),
     body: JSON.stringify({ ...fields, expectedVersion }),
   });
-  const data = (await res.json()) as ApiResponse<{ outcome: string; item: GalleryItemDto }>;
-  if (!res.ok) throw new Error(String(data.error || "Failed to update gallery item."));
-  return data.item;
+  return handleResponse<{ outcome: string; item: GalleryItemDto }>(res);
 }
 
 export async function deleteGalleryItem(
@@ -212,9 +232,7 @@ export async function deleteGalleryItem(
     headers: authHeaders(csrf),
     body: JSON.stringify({ expectedVersion }),
   });
-  const data = (await res.json()) as ApiResponse<{ outcome: string }>;
-  if (!res.ok) throw new Error(String(data.error || "Failed to delete gallery item."));
-  return { outcome: data.outcome };
+  return handleResponse<{ outcome: string }>(res);
 }
 
 /* ──────────── Gallery Reorder ──────────── */
@@ -229,7 +247,5 @@ export async function reorderGalleryItems(
     headers: authHeaders(csrf),
     body: JSON.stringify({ sectionId, itemOrder }),
   });
-  const data = (await res.json()) as ApiResponse<{ outcome: string }>;
-  if (!res.ok) throw new Error(String(data.error || "Failed to reorder gallery items."));
-  return { outcome: data.outcome };
+  return handleResponse<{ outcome: string }>(res);
 }

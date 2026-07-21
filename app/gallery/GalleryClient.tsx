@@ -35,6 +35,25 @@ type GalleryV2Item = {
   thumbnailUrl: string;
 };
 
+function isSafeUrl(url: string): boolean {
+  if (!url || typeof url !== "string") return false;
+  if (url.includes("r2.cloudflarestorage.com")) return false;
+  if (/^[a-f0-9-]+$/i.test(url.split("/").pop() ?? "")) return false;
+  return url.startsWith("/") || url.startsWith("http://") || url.startsWith("https://");
+}
+
+function isSectionArray(val: unknown): val is GalleryV2Section[] {
+  if (!Array.isArray(val)) return false;
+  return val.every(
+    (s): s is GalleryV2Section =>
+      typeof s === "object" &&
+      s !== null &&
+      typeof (s as Record<string, unknown>).slug === "string" &&
+      typeof (s as Record<string, unknown>).name === "string" &&
+      Array.isArray((s as Record<string, unknown>).items),
+  );
+}
+
 const presetAssets: GalleryAsset[] = [
   {
     url: "/assets/hospital/front-exterior-hero.webp",
@@ -85,21 +104,45 @@ export default function GalleryClient() {
     async function fetchGallery() {
       try {
         const v2Res = await fetch("/api/gallery/v2");
-        const v2Data = (await v2Res.json()) as { success?: boolean; enabled?: boolean; sections?: GalleryV2Section[] };
-        if (v2Data.success && v2Data.enabled && v2Data.sections && v2Data.sections.length > 0) {
-          setSections(v2Data.sections);
+        if (!v2Res.ok) throw new Error("v2 not available");
+        const v2Data = (await v2Res.json()) as {
+          success?: boolean;
+          enabled?: boolean;
+          sections?: unknown;
+        };
+
+        if (v2Data.success && v2Data.enabled) {
+          if (!isSectionArray(v2Data.sections)) throw new Error("malformed v2 body");
+          const validatedSections = v2Data.sections.filter((s) =>
+            s.items.every(
+              (item: GalleryV2Item) =>
+                item.displayUrl &&
+                isSafeUrl(item.displayUrl) &&
+                item.originalUrl &&
+                isSafeUrl(item.originalUrl),
+            ),
+          );
+          setSections(validatedSections);
           setUseV2(true);
-          const allAssets: GalleryAsset[] = [];
-          for (const section of v2Data.sections) {
+          const flatAssets: GalleryAsset[] = [];
+          for (const section of validatedSections) {
             for (const item of section.items) {
-              allAssets.push({
+              flatAssets.push({
                 url: item.displayUrl || item.originalUrl,
                 title: item.title,
                 note: item.caption,
               });
             }
           }
-          setAssets(allAssets);
+          setAssets(flatAssets);
+          setLoading(false);
+          return;
+        }
+
+        if (v2Data.success && v2Data.enabled && Array.isArray(v2Data.sections) && v2Data.sections.length === 0) {
+          setSections([]);
+          setUseV2(true);
+          setAssets([]);
           setLoading(false);
           return;
         }
@@ -111,11 +154,13 @@ export default function GalleryClient() {
         const res = await fetch("/api/gallery");
         const data = (await res.json()) as { success?: boolean; assets?: ApiGalleryAsset[] };
         if (data.success && data.assets && data.assets.length > 0) {
-          const dynamicAssets: GalleryAsset[] = data.assets.map((asset: ApiGalleryAsset) => ({
-            url: `/api/media/${asset.r2_key}`,
-            title: "Hospital Facility",
-            note: "Protone Care Hospital Facility",
-          }));
+          const dynamicAssets: GalleryAsset[] = data.assets
+            .filter((a) => a.r2_key && !a.r2_key.includes(".."))
+            .map((asset: ApiGalleryAsset) => ({
+              url: `/api/media/${asset.r2_key}`,
+              title: "Hospital Facility",
+              note: "Protone Care Hospital Facility",
+            }));
           const allUrls = new Set(dynamicAssets.map((a) => a.url));
           const merged = [...dynamicAssets];
           for (const preset of presetAssets) {
@@ -137,16 +182,15 @@ export default function GalleryClient() {
   }, []);
 
   const handlePrev = useCallback(() => {
-    if (activeIndex === null) return;
+    if (activeIndex === null || assets.length === 0) return;
     setActiveIndex((prev) => (prev === 0 ? assets.length - 1 : (prev ?? 0) - 1));
   }, [activeIndex, assets.length]);
 
   const handleNext = useCallback(() => {
-    if (activeIndex === null) return;
+    if (activeIndex === null || assets.length === 0) return;
     setActiveIndex((prev) => (prev === assets.length - 1 ? 0 : (prev ?? 0) + 1));
   }, [activeIndex, assets.length]);
 
-  // Keyboard navigation
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (activeIndex === null) return;
@@ -160,6 +204,20 @@ export default function GalleryClient() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [activeIndex, triggerEl, handlePrev, handleNext]);
+
+  function buildFlatIndexMap(): Map<GalleryV2Item, number> {
+    const map = new Map<GalleryV2Item, number>();
+    let idx = 0;
+    for (const section of sections) {
+      for (const item of section.items) {
+        map.set(item, idx);
+        idx++;
+      }
+    }
+    return map;
+  }
+
+  const flatIndexMap = useV2 ? buildFlatIndexMap() : new Map<GalleryV2Item, number>();
 
   return (
     <section className="py-12 bg-slate-50 min-h-screen">
@@ -186,71 +244,71 @@ export default function GalleryClient() {
               </div>
             ))}
           </div>
-        ) : (
-          useV2 && sections.length > 0 ? (
-            sections.map((section) => {
-              const sectionGlobalOffset = assets.findIndex((a) =>
-                section.items.some((item) => (item.displayUrl || item.originalUrl) === a.url)
-              );
-              const offset = sectionGlobalOffset >= 0 ? sectionGlobalOffset : 0;
-              return (
-                <div key={section.slug} className="mb-10">
-                  <h3 className="text-xl font-bold text-slate-800 mb-1">{section.name}</h3>
-                  {section.description && <p className="text-slate-500 text-sm mb-4">{section.description}</p>}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-                    {section.items.map((item, idx) => {
-                      const globalIdx = offset + idx;
-                      const itemUrl = item.displayUrl || item.originalUrl;
-                      return (
-                        <article
-                          key={item.slug + idx}
-                          className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between group"
-                        >
-                          <div
-                            id={`thumb-v2-${section.slug}-${idx}`}
-                            tabIndex={0}
-                            role="button"
-                            aria-label={`Open lightbox zoom view for ${item.title}`}
-                            onClick={() => {
-                              setTriggerEl(document.getElementById(`thumb-v2-${section.slug}-${idx}`));
+        ) : useV2 ? (
+          sections.length > 0 ? (
+            sections.map((section) => (
+              <div key={section.slug} className="mb-10">
+                <h3 className="text-xl font-bold text-slate-800 mb-1">{section.name}</h3>
+                {section.description && <p className="text-slate-500 text-sm mb-4">{section.description}</p>}
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+                  {section.items.map((item) => {
+                    const globalIdx = flatIndexMap.get(item) ?? 0;
+                    const itemUrl = item.displayUrl || item.originalUrl;
+                    return (
+                      <article
+                        key={`${section.slug}-${item.slug}-${globalIdx}`}
+                        className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between group"
+                      >
+                        <div
+                          id={`thumb-v2-${section.slug}-${item.slug}`}
+                          tabIndex={0}
+                          role="button"
+                          aria-label={`Open lightbox zoom view for ${item.title}`}
+                          onClick={() => {
+                            setTriggerEl(document.getElementById(`thumb-v2-${section.slug}-${item.slug}`));
+                            setActiveIndex(globalIdx);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setTriggerEl(document.getElementById(`thumb-v2-${section.slug}-${item.slug}`));
                               setActiveIndex(globalIdx);
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") {
-                                e.preventDefault();
-                                setTriggerEl(document.getElementById(`thumb-v2-${section.slug}-${idx}`));
-                                setActiveIndex(globalIdx);
-                              }
-                            }}
-                            className="relative overflow-hidden rounded-xl h-56 w-full bg-slate-100 mb-4 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
-                          >
-                            <Image
-                              src={itemUrl}
-                              alt={item.altText || item.title}
-                              width={item.width || 400}
-                              height={item.height || 300}
-                              priority={globalIdx < 3}
-                              className="object-cover w-full h-full rounded-xl transition-transform duration-500 group-hover:scale-105"
-                              unoptimized
-                            />
-                            <div className="absolute inset-0 bg-slate-900/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
-                              <div className="bg-white/95 p-3 rounded-full shadow-lg text-slate-800 transform scale-90 group-hover:scale-100 transition-transform duration-300">
-                                <ZoomIn size={20} />
-                              </div>
+                            }
+                          }}
+                          className="relative overflow-hidden rounded-xl h-56 w-full bg-slate-100 mb-4 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+                        >
+                          <Image
+                            src={itemUrl}
+                            alt={item.altText || item.title}
+                            width={item.width || 400}
+                            height={item.height || 300}
+                            priority={globalIdx < 3}
+                            className="object-cover w-full h-full rounded-xl transition-transform duration-500 group-hover:scale-105"
+                            unoptimized
+                          />
+                          <div className="absolute inset-0 bg-slate-900/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
+                            <div className="bg-white/95 p-3 rounded-full shadow-lg text-slate-800 transform scale-90 group-hover:scale-100 transition-transform duration-300">
+                              <ZoomIn size={20} />
                             </div>
                           </div>
-                          <div>
-                            <h3 className="font-semibold text-slate-800 text-lg mb-1">{item.title}</h3>
-                            <p className="text-slate-500 text-sm line-clamp-2">{item.caption}</p>
-                          </div>
-                        </article>
-                      );
-                    })}
-                  </div>
+                        </div>
+                        <div>
+                          <h3 className="font-semibold text-slate-800 text-lg mb-1">{item.title}</h3>
+                          <p className="text-slate-500 text-sm line-clamp-2">{item.caption}</p>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
-              );
-            })
+              </div>
+            ))
           ) : (
+            <div className="text-center py-16 text-slate-400">
+              <p className="text-lg font-medium">Gallery Coming Soon</p>
+              <p className="text-sm mt-1">Content is being curated. Please check back later.</p>
+            </div>
+          )
+        ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
             {assets.map((asset, idx) => (
               <article
@@ -297,16 +355,14 @@ export default function GalleryClient() {
               </article>
             ))}
           </div>
-          )
         )}
       </div>
 
-      {/* Lightbox Modal */}
-      {activeIndex !== null && (
+      {activeIndex !== null && assets.length > 0 && (
         <div
           role="dialog"
           aria-modal="true"
-          aria-label={assets[activeIndex].title}
+          aria-label={assets[activeIndex]?.title ?? "Gallery lightbox"}
           tabIndex={-1}
           ref={(el) => el?.focus()}
           className="fixed inset-0 bg-slate-950/95 z-[2000] flex flex-col justify-between p-4 md:p-8 animate-fade-in outline-none"

@@ -2,13 +2,14 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { MediaAssetDto, MediaLibraryFilters, Pagination } from "./admin-media-types";
-import { fetchMediaLibrary, patchMediaAsset, deleteMediaAsset } from "./admin-media-api";
+import { fetchMediaLibrary, deleteMediaAsset, AdminApiError } from "./admin-media-api";
 import MediaEditDialog from "./MediaEditDialog";
+import MediaUploadDialog from "./MediaUploadDialog";
 
 type Props = {
   csrf: string;
   sessionRole: "SUPER_ADMIN" | "STAFF";
-  onUpload: () => void;
+  onRefresh?: () => void;
 };
 
 const PAGE_LIMIT = 25;
@@ -17,6 +18,8 @@ const LIFECYCLE_OPTIONS = ["ALL", "DRAFT", "IN_REVIEW", "PUBLISHED", "HIDDEN", "
 const STORAGE_OPTIONS = ["ALL", "R2", "PUBLIC"] as const;
 const CATEGORY_OPTIONS = ["ALL", "GENERAL", "GALLERY", "DOCTOR", "BLOG", "VIDEO_POSTER"] as const;
 const PURPOSE_OPTIONS = ["ALL", "gallery", "doctor-photo", "admin-upload"] as const;
+const STATUS_OPTIONS = ["ALL", "NEW", "NEEDS_REVIEW", "APPROVED", "HIDDEN"] as const;
+const RIGHTS_OPTIONS = ["ALL", "UNVERIFIED", "VERIFIED_INTERNAL", "LICENSED", "PUBLIC_DOMAIN"] as const;
 
 const LIFECYCLE_COLORS: Record<string, { bg: string; color: string }> = {
   PUBLISHED: { bg: "#d1fae5", color: "#065f46" },
@@ -42,14 +45,17 @@ function useDebounce<T>(value: T, delay: number): T {
   return debounced;
 }
 
-export function MediaLibraryPanel({ csrf, sessionRole, onUpload }: Props) {
+export function MediaLibraryPanel({ csrf, sessionRole, onRefresh }: Props) {
   const [items, setItems] = useState<MediaAssetDto[]>([]);
   const [pagination, setPagination] = useState<Pagination>({ limit: PAGE_LIMIT, offset: 0, total: 0, hasMore: false });
   const [filters, setFilters] = useState<MediaLibraryFilters>({ search: "", storageType: "ALL", category: "ALL", purpose: "ALL", lifecycleStatus: "ALL" });
+  const [statusFilter, setStatusFilter] = useState<string>("ALL");
+  const [rightsFilter, setRightsFilter] = useState<string>("ALL");
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
   const [editingAsset, setEditingAsset] = useState<MediaAssetDto | null>(null);
+  const [showUpload, setShowUpload] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const debouncedSearch = useDebounce(filters.search, 300);
@@ -68,7 +74,12 @@ export function MediaLibraryPanel({ csrf, sessionRole, onUpload }: Props) {
       setError("");
 
       try {
-        const resolvedFilters: MediaLibraryFilters = { ...filters, search: debouncedSearch };
+        const resolvedFilters: MediaLibraryFilters = {
+          ...filters,
+          search: debouncedSearch,
+          status: statusFilter,
+          rightsStatus: rightsFilter,
+        } as MediaLibraryFilters;
         const result = await fetchMediaLibrary(csrf, resolvedFilters, PAGE_LIMIT, offset);
         if (controller.signal.aborted) return;
         setItems((prev) => (append ? [...prev, ...result.items] : result.items));
@@ -83,12 +94,35 @@ export function MediaLibraryPanel({ csrf, sessionRole, onUpload }: Props) {
         }
       }
     },
-    [csrf, filters, debouncedSearch],
+    [csrf, filters, debouncedSearch, statusFilter, rightsFilter],
   );
 
   useEffect(() => {
-    loadPage(0, false);
-  }, [loadPage]);
+    let cancelled = false;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const resolvedFilters: MediaLibraryFilters = {
+      ...filters,
+      search: debouncedSearch,
+      status: statusFilter,
+      rightsStatus: rightsFilter,
+    } as MediaLibraryFilters;
+    fetchMediaLibrary(csrf, resolvedFilters, PAGE_LIMIT, 0).then(
+      (result) => {
+        if (cancelled || controller.signal.aborted) return;
+        setItems(result.items);
+        setPagination(result.pagination);
+        setLoading(false);
+        setLoadingMore(false);
+      },
+      (err) => {
+        if (cancelled || controller.signal.aborted) return;
+        setError(err instanceof Error ? err.message : "Failed to load media library.");
+        setLoading(false);
+      },
+    );
+    return () => { cancelled = true; controller.abort(); };
+  }, [csrf, filters, debouncedSearch, statusFilter, rightsFilter]);
 
   const handleFilterChange = useCallback((key: keyof MediaLibraryFilters, value: string) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
@@ -96,12 +130,23 @@ export function MediaLibraryPanel({ csrf, sessionRole, onUpload }: Props) {
 
   const handleDelete = useCallback(
     async (asset: MediaAssetDto) => {
-      if (!window.confirm(`Are you sure you want to archive "${asset.fileName}"?`)) return;
+      const confirmMessage = `Archive "${asset.fileName}"?\n\nThis is a logical archive. The file will not be immediately purged from storage. The operation may be blocked if this asset is referenced by other content.`;
+      if (!window.confirm(confirmMessage)) return;
       try {
         await deleteMediaAsset(csrf, asset.id, asset.version);
         loadPage(pagination.offset, false);
       } catch (err) {
-        alert(err instanceof Error ? err.message : "Failed to archive asset.");
+        if (err instanceof AdminApiError && err.status === 409) {
+          if (err.message.toLowerCase().includes("referenced")) {
+            setError(err.message);
+            loadPage(pagination.offset, false);
+          } else {
+            setError(err.message);
+            loadPage(pagination.offset, false);
+          }
+        } else {
+          setError(err instanceof Error ? err.message : "Failed to archive asset.");
+        }
       }
     },
     [csrf, pagination.offset, loadPage],
@@ -118,14 +163,18 @@ export function MediaLibraryPanel({ csrf, sessionRole, onUpload }: Props) {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* Filter bar */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+        <label htmlFor="media-search" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}>Search media</label>
         <input
+          id="media-search"
           type="text"
           placeholder="Search media..."
           value={filters.search}
           onChange={(e) => handleFilterChange("search", e.target.value)}
           style={{ flex: "1 1 200px", padding: "8px 12px", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 14 }}
         />
+        <label htmlFor="media-storage-filter" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}>Filter by storage</label>
         <select
+          id="media-storage-filter"
           value={filters.storageType}
           onChange={(e) => handleFilterChange("storageType", e.target.value)}
           style={{ padding: "8px 12px", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 14 }}
@@ -134,7 +183,9 @@ export function MediaLibraryPanel({ csrf, sessionRole, onUpload }: Props) {
             <option key={v} value={v}>{v === "ALL" ? "All Storage" : v}</option>
           ))}
         </select>
+        <label htmlFor="media-category-filter" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}>Filter by category</label>
         <select
+          id="media-category-filter"
           value={filters.category}
           onChange={(e) => handleFilterChange("category", e.target.value)}
           style={{ padding: "8px 12px", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 14 }}
@@ -143,7 +194,9 @@ export function MediaLibraryPanel({ csrf, sessionRole, onUpload }: Props) {
             <option key={v} value={v}>{v === "ALL" ? "All Categories" : v.replace("_", " ")}</option>
           ))}
         </select>
+        <label htmlFor="media-purpose-filter" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}>Filter by purpose</label>
         <select
+          id="media-purpose-filter"
           value={filters.purpose}
           onChange={(e) => handleFilterChange("purpose", e.target.value)}
           style={{ padding: "8px 12px", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 14 }}
@@ -152,13 +205,37 @@ export function MediaLibraryPanel({ csrf, sessionRole, onUpload }: Props) {
             <option key={v} value={v}>{v === "ALL" ? "All Purposes" : v}</option>
           ))}
         </select>
+        <label htmlFor="media-lifecycle-filter" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}>Filter by lifecycle status</label>
         <select
+          id="media-lifecycle-filter"
           value={filters.lifecycleStatus}
           onChange={(e) => handleFilterChange("lifecycleStatus", e.target.value)}
           style={{ padding: "8px 12px", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 14 }}
         >
           {LIFECYCLE_OPTIONS.map((v) => (
             <option key={v} value={v}>{v === "ALL" ? "All Statuses" : v.replace("_", " ")}</option>
+          ))}
+        </select>
+        <label htmlFor="media-status-filter" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}>Filter by review status</label>
+        <select
+          id="media-status-filter"
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          style={{ padding: "8px 12px", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 14 }}
+        >
+          {STATUS_OPTIONS.map((v) => (
+            <option key={v} value={v}>{v === "ALL" ? "All Review Statuses" : v.replace("_", " ")}</option>
+          ))}
+        </select>
+        <label htmlFor="media-rights-filter" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}>Filter by rights status</label>
+        <select
+          id="media-rights-filter"
+          value={rightsFilter}
+          onChange={(e) => setRightsFilter(e.target.value)}
+          style={{ padding: "8px 12px", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 14 }}
+        >
+          {RIGHTS_OPTIONS.map((v) => (
+            <option key={v} value={v}>{v === "ALL" ? "All Rights Statuses" : v.replace("_", " ")}</option>
           ))}
         </select>
       </div>
@@ -169,7 +246,7 @@ export function MediaLibraryPanel({ csrf, sessionRole, onUpload }: Props) {
           {pagination.total.toLocaleString()} media asset{pagination.total !== 1 ? "s" : ""}
         </span>
         {isAdmin && (
-          <button className="button primary" onClick={onUpload} style={{ fontSize: 14 }}>
+          <button type="button" className="button primary" onClick={() => setShowUpload(true)} style={{ fontSize: 14 }}>
             Upload New
           </button>
         )}
@@ -177,8 +254,11 @@ export function MediaLibraryPanel({ csrf, sessionRole, onUpload }: Props) {
 
       {/* Error */}
       {error && (
-        <div style={{ padding: "12px 16px", background: "#fee2e2", color: "#991b1b", borderRadius: 8, fontSize: 14 }}>
+        <div role="alert" aria-live="assertive" style={{ padding: "12px 16px", background: "#fee2e2", color: "#991b1b", borderRadius: 8, fontSize: 14 }}>
           {error}
+          <button type="button" onClick={() => { setError(""); loadPage(pagination.offset, false); }} style={{ marginLeft: 12, fontSize: 13, background: "transparent", border: "none", color: "#991b1b", textDecoration: "underline", cursor: "pointer" }}>
+            Reload
+          </button>
         </div>
       )}
 
@@ -275,16 +355,16 @@ export function MediaLibraryPanel({ csrf, sessionRole, onUpload }: Props) {
                       </a>
                     )}
                     {asset.originalUrl && (
-                      <button className="button subtle small" style={{ fontSize: 12 }} onClick={() => handleCopyUrl(asset.originalUrl)}>
+                      <button type="button" className="button subtle small" style={{ fontSize: 12 }} onClick={() => handleCopyUrl(asset.originalUrl)}>
                         Copy URL
                       </button>
                     )}
                     {isAdmin && (
                       <>
-                        <button className="button secondary small" style={{ fontSize: 12 }} onClick={() => setEditingAsset(asset)}>
+                        <button type="button" className="button secondary small" style={{ fontSize: 12 }} onClick={() => setEditingAsset(asset)}>
                           Edit
                         </button>
-                        <button className="button subtle small" style={{ fontSize: 12, color: "#dc2626" }} onClick={() => handleDelete(asset)}>
+                        <button type="button" className="button subtle small" style={{ fontSize: 12, color: "#dc2626" }} onClick={() => handleDelete(asset)}>
                           Archive
                         </button>
                       </>
@@ -301,6 +381,7 @@ export function MediaLibraryPanel({ csrf, sessionRole, onUpload }: Props) {
       {pagination.hasMore && !loading && (
         <div style={{ textAlign: "center", padding: 8 }}>
           <button
+            type="button"
             className="button primary"
             disabled={loadingMore}
             onClick={() => loadPage(pagination.offset + PAGE_LIMIT, true)}
@@ -320,6 +401,19 @@ export function MediaLibraryPanel({ csrf, sessionRole, onUpload }: Props) {
           onSaved={() => {
             setEditingAsset(null);
             loadPage(pagination.offset, false);
+          }}
+        />
+      )}
+
+      {/* Upload dialog */}
+      {showUpload && (
+        <MediaUploadDialog
+          csrf={csrf}
+          onClose={() => setShowUpload(false)}
+          onUploaded={() => {
+            setShowUpload(false);
+            loadPage(0, false);
+            onRefresh?.();
           }}
         />
       )}

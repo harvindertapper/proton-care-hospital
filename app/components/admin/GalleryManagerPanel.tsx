@@ -12,6 +12,7 @@ import {
   patchGalleryItem,
   deleteGalleryItem,
   reorderGalleryItems,
+  AdminApiError,
 } from "./admin-media-api";
 import MediaPickerDialog from "./MediaPickerDialog";
 
@@ -49,6 +50,21 @@ function slugify(text: string) {
     .replace(/(^-|-$)/g, "");
 }
 
+function getTransitions(current: string): string[] {
+  switch (current) {
+    case "DRAFT":
+      return ["IN_REVIEW", "HIDDEN", "ARCHIVED"];
+    case "IN_REVIEW":
+      return ["PUBLISHED", "HIDDEN", "ARCHIVED"];
+    case "PUBLISHED":
+      return ["HIDDEN"];
+    case "HIDDEN":
+      return ["PUBLISHED", "ARCHIVED"];
+    default:
+      return [];
+  }
+}
+
 export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
   const [sections, setSections] = useState<GallerySectionDto[]>([]);
   const [selectedSection, setSelectedSection] = useState<GallerySectionDto | null>(null);
@@ -61,7 +77,6 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
   const [editingItem, setEditingItem] = useState<GalleryItemDto | null>(null);
   const [creatingItem, setCreatingItem] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
-  const [pickerTarget, setPickerTarget] = useState<"create" | null>(null);
   const [reorderMode, setReorderMode] = useState(false);
   const [reorderList, setReorderList] = useState<GalleryItemDto[]>([]);
   const [selectedMedia, setSelectedMedia] = useState<MediaAssetDto | null>(null);
@@ -76,6 +91,11 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
   const [formCaption, setFormCaption] = useState("");
   const [formSlotKey, setFormSlotKey] = useState("");
   const [slugManuallyEdited, setSlugManuallyEdited] = useState(false);
+
+  function showNotice(msg: string) {
+    setNotice(msg);
+    setTimeout(() => setNotice(""), 3000);
+  }
 
   const loadSections = useCallback(async () => {
     try {
@@ -99,28 +119,27 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
   );
 
   useEffect(() => {
-    (async () => {
-      setLoading(true);
-      await loadSections();
-      setLoading(false);
-    })();
-  }, [loadSections]);
+    let cancelled = false;
+    fetchGallerySections(csrf, 100, 0).then(
+      (data) => {
+        if (!cancelled) { setSections(data.sections); setLoading(false); }
+      },
+      (e: unknown) => {
+        if (!cancelled) { setError(e instanceof Error ? e.message : "Failed to load sections"); setLoading(false); }
+      },
+    );
+    return () => { cancelled = true; };
+  }, [csrf]);
 
   useEffect(() => {
-    if (selectedSection) {
-      loadItems(selectedSection.id);
-      setReorderMode(false);
-      setEditingItem(null);
-      setCreatingItem(false);
-    } else {
-      setItems([]);
-    }
-  }, [selectedSection, loadItems]);
-
-  function showNotice(msg: string) {
-    setNotice(msg);
-    setTimeout(() => setNotice(""), 3000);
-  }
+    if (!selectedSection) return;
+    let cancelled = false;
+    fetchGalleryItems(csrf, selectedSection.id, 100, 0).then(
+      (data) => { if (!cancelled) setItems(data.items); },
+      (e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load items"); },
+    );
+    return () => { cancelled = true; };
+  }, [selectedSection, csrf]);
 
   function clearForm() {
     setFormName("");
@@ -168,28 +187,40 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
     setError("");
     try {
       if (editingSection) {
-        const fields: Record<string, unknown> = {};
-        fields.name = formName.trim();
-        fields.slug = formSlug.trim() || slugify(formName);
-        if (formDescription.trim()) fields.description = formDescription.trim();
-        fields.sortOrder = formSortOrder;
-        await patchGallerySection(csrf, editingSection.id, editingSection.version, fields);
-        showNotice(sessionRole === "STAFF" ? "Update submitted for review" : "Section updated");
-        const updated = { ...editingSection, ...fields } as GallerySectionDto;
-        setSelectedSection((prev) => (prev?.id === updated.id ? updated : prev));
-      } else {
-        await createGallerySection(csrf, {
+        const result = await patchGallerySection(csrf, editingSection.id, editingSection.version, {
           name: formName.trim(),
           slug: formSlug.trim() || slugify(formName),
           description: formDescription.trim() || undefined,
           sortOrder: formSortOrder,
         });
-        showNotice(sessionRole === "STAFF" ? "Created – pending approval" : "Section created");
+        if (result.outcome === "PENDING_APPROVAL") {
+          showNotice("Submitted for approval");
+        } else {
+          showNotice("Section updated");
+        }
+        await loadSections();
+      } else {
+        const result = await createGallerySection(csrf, {
+          name: formName.trim(),
+          slug: formSlug.trim() || slugify(formName),
+          description: formDescription.trim() || undefined,
+          sortOrder: formSortOrder,
+        });
+        if (result.outcome === "PENDING_APPROVAL") {
+          showNotice("Submitted for approval");
+        } else {
+          showNotice("Section created");
+        }
+        await loadSections();
       }
-      await loadSections();
       clearForm();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to save section");
+      if (e instanceof AdminApiError && e.status === 404) {
+        await loadSections();
+        setError(e.message);
+      } else {
+        setError(e instanceof Error ? e.message : "Failed to save section");
+      }
     } finally {
       setBusy(false);
     }
@@ -201,11 +232,55 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
     setError("");
     try {
       await deleteGallerySection(csrf, sec.id, sec.version);
-      showNotice(sessionRole === "STAFF" ? "Delete submitted for review" : "Section deleted");
+      showNotice("Section deleted");
       if (selectedSection?.id === sec.id) setSelectedSection(null);
       await loadSections();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to delete section");
+      if (e instanceof AdminApiError && e.status === 404) {
+        await loadSections();
+        setError(e.message);
+      } else {
+        setError(e instanceof Error ? e.message : "Failed to delete section");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleLifecycleTransitionSection(sec: GallerySectionDto, targetLifecycle: string) {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await patchGallerySection(csrf, sec.id, sec.version, { lifecycleStatus: targetLifecycle });
+      if (sessionRole === "STAFF") {
+        if (result.outcome === "PENDING_APPROVAL") {
+          showNotice("Submitted for approval");
+        } else {
+          showNotice("Submitted for approval");
+        }
+      } else {
+        if (result.outcome === "APPLIED") {
+          showNotice("Applied");
+        } else {
+          showNotice("Submitted for approval");
+        }
+      }
+      await loadSections();
+    } catch (err: unknown) {
+      if (err instanceof AdminApiError && err.status === 409) {
+        const msg = err.message.toLowerCase();
+        if (msg.includes("eligibility") || msg.includes("guard")) {
+          setError("Publication eligibility not met. " + err.message);
+        } else {
+          setError("Stale version. Please reload. " + err.message);
+          await loadSections();
+        }
+      } else if (err instanceof AdminApiError && err.status === 404) {
+        await loadSections();
+        setError(err.message);
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to update section");
+      }
     } finally {
       setBusy(false);
     }
@@ -244,7 +319,7 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
 
   async function saveItem() {
     if (!selectedSection) return;
-    if (!selectedMedia) {
+    if (!editingItem && !selectedMedia) {
       setError("Please select a media asset");
       return;
     }
@@ -258,25 +333,47 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
         fields.captionOverride = formCaption.trim() || undefined;
         fields.slotKey = formSlotKey.trim() || undefined;
         fields.sortOrder = formSortOrder;
-        await patchGalleryItem(csrf, editingItem.id, editingItem.version, fields);
-        showNotice(sessionRole === "STAFF" ? "Item update submitted for review" : "Item updated");
+        const result = await patchGalleryItem(csrf, editingItem.id, editingItem.version, fields);
+        if (sessionRole === "STAFF") {
+          if (result.outcome === "PENDING_APPROVAL") {
+            showNotice("Submitted for approval");
+          } else {
+            showNotice("Submitted for approval");
+          }
+        } else {
+          if (result.outcome === "APPLIED") {
+            showNotice("Applied");
+          } else {
+            showNotice("Submitted for approval");
+          }
+        }
       } else {
-        await createGalleryItem(csrf, {
+        const result = await createGalleryItem(csrf, {
           sectionId: selectedSection.id,
-          mediaId: selectedMedia.id,
+          mediaId: selectedMedia!.id,
           titleOverride: formTitleOverride.trim() || undefined,
           altTextOverride: formAltText.trim() || undefined,
           captionOverride: formCaption.trim() || undefined,
           slotKey: formSlotKey.trim() || undefined,
           sortOrder: formSortOrder,
         });
-        showNotice(sessionRole === "STAFF" ? "Item created – pending approval" : "Item created");
+        if (result.outcome === "PENDING_APPROVAL") {
+          showNotice("Submitted for approval");
+        } else {
+          showNotice("Item created");
+        }
       }
       await loadItems(selectedSection.id);
       await loadSections();
       clearForm();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to save item");
+      if (e instanceof AdminApiError && e.status === 404) {
+        await loadItems(selectedSection.id);
+        await loadSections();
+        setError(e.message);
+      } else {
+        setError(e instanceof Error ? e.message : "Failed to save item");
+      }
     } finally {
       setBusy(false);
     }
@@ -288,11 +385,58 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
     setError("");
     try {
       await deleteGalleryItem(csrf, item.id, item.version);
-      showNotice(sessionRole === "STAFF" ? "Delete submitted for review" : "Item deleted");
+      showNotice("Item deleted");
       if (selectedSection) await loadItems(selectedSection.id);
       await loadSections();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to delete item");
+      if (e instanceof AdminApiError && e.status === 404) {
+        if (selectedSection) await loadItems(selectedSection.id);
+        await loadSections();
+        setError(e.message);
+      } else {
+        setError(e instanceof Error ? e.message : "Failed to delete item");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleLifecycleTransitionItem(item: GalleryItemDto, targetLifecycle: string) {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await patchGalleryItem(csrf, item.id, item.version, { lifecycleStatus: targetLifecycle });
+      if (sessionRole === "STAFF") {
+        if (result.outcome === "PENDING_APPROVAL") {
+          showNotice("Submitted for approval");
+        } else {
+          showNotice("Submitted for approval");
+        }
+      } else {
+        if (result.outcome === "APPLIED") {
+          showNotice("Applied");
+        } else {
+          showNotice("Submitted for approval");
+        }
+      }
+      if (selectedSection) await loadItems(selectedSection.id);
+      await loadSections();
+    } catch (err: unknown) {
+      if (err instanceof AdminApiError && err.status === 409) {
+        const msg = err.message.toLowerCase();
+        if (msg.includes("eligibility") || msg.includes("guard")) {
+          setError("Publication eligibility not met. " + err.message);
+        } else {
+          setError("Stale version. Please reload. " + err.message);
+          if (selectedSection) await loadItems(selectedSection.id);
+        }
+      } else if (err instanceof AdminApiError && err.status === 404) {
+        if (selectedSection) await loadItems(selectedSection.id);
+        await loadSections();
+        setError(err.message);
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to update item");
+      }
     } finally {
       setBusy(false);
     }
@@ -322,12 +466,21 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
         id: item.id,
         version: item.version,
       }));
-      await reorderGalleryItems(csrf, selectedSection.id, order);
-      showNotice("Order saved");
+      const result = await reorderGalleryItems(csrf, selectedSection.id, order);
+      if (result.outcome === "PENDING_APPROVAL") {
+        showNotice("Reorder submitted for review.");
+      } else {
+        showNotice("Order saved.");
+      }
       await loadItems(selectedSection.id);
       setReorderMode(false);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to save order");
+      if (e instanceof AdminApiError && e.status === 404) {
+        await loadItems(selectedSection.id);
+        setError(e.message);
+      } else {
+        setError(e instanceof Error ? e.message : "Failed to save order");
+      }
     } finally {
       setBusy(false);
     }
@@ -356,26 +509,140 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
     }),
     sectionName: { fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 2 },
     sectionSlug: { fontSize: 12, color: "#94a3b8", marginBottom: 6 },
-    sectionMeta: { fontSize: 12, color: "#64748b", display: "flex", gap: 12, flexWrap: "wrap" as const, alignItems: "center", marginBottom: 8 },
+    sectionMeta: {
+      fontSize: 12,
+      color: "#64748b",
+      display: "flex",
+      gap: 12,
+      flexWrap: "wrap" as const,
+      alignItems: "center",
+      marginBottom: 8,
+    },
     sectionActions: { display: "flex", gap: 6, marginTop: 8 },
-    itemCard: { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, marginBottom: 8, display: "flex", alignItems: "center", gap: 12 },
-    itemThumb: { width: 60, height: 60, objectFit: "cover" as const, borderRadius: 6, background: "#f1f5f9", flexShrink: 0 },
+    lifecycleToolbar: { display: "flex", gap: 4, flexWrap: "wrap" as const, marginTop: 6 },
+    itemCard: {
+      background: "#fff",
+      border: "1px solid #e2e8f0",
+      borderRadius: 8,
+      padding: 12,
+      marginBottom: 8,
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+    },
+    itemThumb: {
+      width: 60,
+      height: 60,
+      objectFit: "cover" as const,
+      borderRadius: 6,
+      background: "#f1f5f9",
+      flexShrink: 0,
+    },
     itemInfo: { flex: 1, minWidth: 0 },
     itemTitle: { fontSize: 13, fontWeight: 600, color: "#0f172a", marginBottom: 2 },
     itemMeta: { fontSize: 11, color: "#64748b", display: "flex", gap: 10, alignItems: "center" },
     itemActions: { display: "flex", gap: 6, flexShrink: 0 },
     formRow: { marginBottom: 12 },
     label: { display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 },
-    input: { width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13, outline: "none", boxSizing: "border-box" as const },
-    textarea: { width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13, outline: "none", boxSizing: "border-box" as const, minHeight: 60, resize: "vertical" as const },
+    input: {
+      width: "100%",
+      padding: "8px 12px",
+      border: "1px solid #d1d5db",
+      borderRadius: 6,
+      fontSize: 13,
+      outline: "none",
+      boxSizing: "border-box" as const,
+    },
+    textarea: {
+      width: "100%",
+      padding: "8px 12px",
+      border: "1px solid #d1d5db",
+      borderRadius: 6,
+      fontSize: 13,
+      outline: "none",
+      boxSizing: "border-box" as const,
+      minHeight: 60,
+      resize: "vertical" as const,
+    },
     formActions: { display: "flex", gap: 8, marginTop: 16 },
-    inlineForm: { background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: 16, marginBottom: 16 },
-    error: { padding: "10px 14px", borderRadius: 8, marginBottom: 16, fontSize: 13, fontWeight: 500, background: "#fee2e2", color: "#991b1b" },
-    success: { padding: "10px 14px", borderRadius: 8, marginBottom: 16, fontSize: 13, fontWeight: 500, background: "#d1fae5", color: "#065f46" },
+    inlineForm: {
+      background: "#f8fafc",
+      border: "1px solid #e2e8f0",
+      borderRadius: 12,
+      padding: 16,
+      marginBottom: 16,
+    },
+    error: {
+      padding: "10px 14px",
+      borderRadius: 8,
+      marginBottom: 16,
+      fontSize: 13,
+      fontWeight: 500,
+      background: "#fee2e2",
+      color: "#991b1b",
+    },
+    success: {
+      padding: "10px 14px",
+      borderRadius: 8,
+      marginBottom: 16,
+      fontSize: 13,
+      fontWeight: 500,
+      background: "#d1fae5",
+      color: "#065f46",
+    },
     emptyState: { textAlign: "center" as const, padding: "40px 20px", color: "#94a3b8", fontSize: 13 },
-    reorderItem: { display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, marginBottom: 6 },
-    reorderNumber: { width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", background: "#f1f5f9", borderRadius: 6, fontSize: 12, fontWeight: 700, color: "#475569", flexShrink: 0 },
+    reorderItem: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      padding: "10px 12px",
+      background: "#fff",
+      border: "1px solid #e2e8f0",
+      borderRadius: 8,
+      marginBottom: 6,
+    },
+    reorderNumber: {
+      width: 28,
+      height: 28,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      background: "#f1f5f9",
+      borderRadius: 6,
+      fontSize: 12,
+      fontWeight: 700,
+      color: "#475569",
+      flexShrink: 0,
+    },
     mediaPreview: { width: 48, height: 48, objectFit: "cover" as const, borderRadius: 6, background: "#f1f5f9" },
+    immutabilityNote: { fontSize: 11, color: "#92400e", fontStyle: "italic" as const, marginTop: 4 },
+  };
+
+  const renderLifecycleToolbar = <T extends GallerySectionDto | GalleryItemDto>(
+    entity: T,
+    onTransition: (entity: T, target: string) => void
+  ) => {
+    const transitions = getTransitions(entity.lifecycleStatus);
+    if (transitions.length === 0) return null;
+    return (
+      <div style={styles.lifecycleToolbar}>
+        {transitions.map((target) => (
+          <button
+            key={target}
+            type="button"
+            className="button subtle small"
+            aria-label={`Transition to ${target}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onTransition(entity, target);
+            }}
+            disabled={busy}
+          >
+            &rarr; {target}
+          </button>
+        ))}
+      </div>
+    );
   };
 
   const renderSectionForm = () => {
@@ -402,7 +669,10 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
           <input
             style={styles.input}
             value={formSlug}
-            onChange={(e) => { setFormSlug(e.target.value); setSlugManuallyEdited(true); }}
+            onChange={(e) => {
+              setFormSlug(e.target.value);
+              setSlugManuallyEdited(true);
+            }}
             placeholder="auto-generated-from-name"
           />
         </div>
@@ -427,10 +697,10 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
           />
         </div>
         <div style={styles.formActions}>
-          <button className="button primary small" onClick={saveSection} disabled={busy}>
+          <button type="submit" className="button primary small" onClick={saveSection} disabled={busy}>
             {busy ? "Saving..." : editingSection ? "Update" : "Create"}
           </button>
-          <button className="button secondary small" onClick={clearForm} disabled={busy}>
+          <button type="button" className="button secondary small" onClick={clearForm} disabled={busy}>
             Cancel
           </button>
         </div>
@@ -440,10 +710,11 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
 
   const renderItemForm = () => {
     if (!creatingItem && !editingItem) return null;
+    const isEdit = !!editingItem;
     return (
       <div style={styles.inlineForm}>
         <h4 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
-          {editingItem ? "Edit Item" : "New Item"}
+          {isEdit ? "Edit Item" : "New Item"}
         </h4>
         <div style={styles.formRow}>
           <label style={styles.label}>Media Asset *</label>
@@ -455,43 +726,73 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
                 style={styles.mediaPreview}
               />
             )}
-            <button
-              className="button secondary small"
-              type="button"
-              onClick={() => { setPickerTarget("create"); setShowPicker(true); }}
-            >
-              {selectedMedia ? "Change Media" : "Select Media"}
-            </button>
+            {isEdit ? (
+              <p style={styles.immutabilityNote}>
+                Media cannot be replaced on an existing Gallery item. Archive this item and create a new one to use
+                different media.
+              </p>
+            ) : (
+              <button type="button" className="button secondary small" onClick={() => setShowPicker(true)}>
+                {selectedMedia ? "Change Media" : "Select Media"}
+              </button>
+            )}
             {selectedMedia && <span style={{ fontSize: 12, color: "#64748b" }}>Selected</span>}
           </div>
         </div>
         <div style={styles.formRow}>
           <label style={styles.label}>Title Override</label>
-          <input style={styles.input} value={formTitleOverride} onChange={(e) => setFormTitleOverride(e.target.value)} placeholder="Custom title" />
+          <input
+            style={styles.input}
+            value={formTitleOverride}
+            onChange={(e) => setFormTitleOverride(e.target.value)}
+            placeholder="Custom title"
+          />
         </div>
         <div style={styles.formRow}>
           <label style={styles.label}>Alt Text Override</label>
-          <input style={styles.input} value={formAltText} onChange={(e) => setFormAltText(e.target.value)} placeholder="Descriptive alt text" />
+          <input
+            style={styles.input}
+            value={formAltText}
+            onChange={(e) => setFormAltText(e.target.value)}
+            placeholder="Descriptive alt text"
+          />
         </div>
         <div style={styles.formRow}>
           <label style={styles.label}>Caption Override</label>
-          <textarea style={styles.textarea} value={formCaption} onChange={(e) => setFormCaption(e.target.value)} placeholder="Optional caption" rows={2} />
+          <textarea
+            style={styles.textarea}
+            value={formCaption}
+            onChange={(e) => setFormCaption(e.target.value)}
+            placeholder="Optional caption"
+            rows={2}
+          />
         </div>
         <div style={{ display: "flex", gap: 12 }}>
           <div style={{ ...styles.formRow, flex: 1 }}>
             <label style={styles.label}>Slot Key</label>
-            <input style={styles.input} value={formSlotKey} onChange={(e) => setFormSlotKey(e.target.value)} placeholder="e.g. hero-1" />
+            <input
+              style={styles.input}
+              value={formSlotKey}
+              onChange={(e) => setFormSlotKey(e.target.value)}
+              placeholder="e.g. hero-1"
+            />
           </div>
           <div style={{ ...styles.formRow, flex: 1 }}>
             <label style={styles.label}>Sort Order</label>
-            <input style={styles.input} type="number" min={0} value={formSortOrder} onChange={(e) => setFormSortOrder(Number(e.target.value))} />
+            <input
+              style={styles.input}
+              type="number"
+              min={0}
+              value={formSortOrder}
+              onChange={(e) => setFormSortOrder(Number(e.target.value))}
+            />
           </div>
         </div>
         <div style={styles.formActions}>
-          <button className="button primary small" onClick={saveItem} disabled={busy}>
-            {busy ? "Saving..." : editingItem ? "Update" : "Create"}
+          <button type="submit" className="button primary small" onClick={saveItem} disabled={busy}>
+            {busy ? "Saving..." : isEdit ? "Update" : "Create"}
           </button>
-          <button className="button secondary small" onClick={clearForm} disabled={busy}>
+          <button type="button" className="button secondary small" onClick={clearForm} disabled={busy}>
             Cancel
           </button>
         </div>
@@ -501,7 +802,11 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
 
   return (
     <div>
-      {error && <div style={styles.error}>{error}</div>}
+      {error && (
+        <div style={styles.error} role="alert">
+          {error}
+        </div>
+      )}
       {notice && <div style={styles.success}>{notice}</div>}
 
       {loading ? (
@@ -512,7 +817,9 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
             <div style={styles.panelHeader}>
               <span style={styles.panelTitle}>Gallery Sections</span>
               {!creatingSection && !editingSection && (
-                <button className="button primary small" onClick={startCreateSection}>Add Section</button>
+                <button type="button" className="button primary small" onClick={startCreateSection}>
+                  Add Section
+                </button>
               )}
             </div>
             {renderSectionForm()}
@@ -523,7 +830,9 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
               <div
                 key={sec.id}
                 style={styles.sectionCard(selectedSection?.id === sec.id)}
-                onClick={() => { if (!creatingSection && !editingSection) setSelectedSection(sec); }}
+                onClick={() => {
+                  if (!creatingSection && !editingSection) setSelectedSection(sec);
+                }}
               >
                 <div style={styles.sectionName}>{sec.name}</div>
                 <div style={styles.sectionSlug}>{sec.slug}</div>
@@ -531,11 +840,42 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
                   <span style={statusBadge(sec.lifecycleStatus)}>{sec.lifecycleStatus}</span>
                   <span>Order: {sec.sortOrder ?? 0}</span>
                   <span>v{sec.version ?? 1}</span>
-                  <span>Items: {sec.publishedItemCount ?? 0}/{sec.itemCount ?? 0}</span>
+                  <span>
+                    Items: {sec.publishedItemCount ?? 0}/{sec.itemCount ?? 0}
+                  </span>
                 </div>
+                {renderLifecycleToolbar(sec, handleLifecycleTransitionSection)}
+                {sec.lifecycleStatus === "IN_REVIEW" && (
+                  <div style={{ fontSize: 11, color: "#92400e", marginTop: 4 }}>
+                    Publication requires all items to be PUBLISHED.
+                  </div>
+                )}
+                {sec.lifecycleStatus === "DRAFT" && (
+                  <div style={{ fontSize: 11, color: "#92400e", marginTop: 4 }}>
+                    Publication requires all items to be PUBLISHED.
+                  </div>
+                )}
                 <div style={styles.sectionActions}>
-                  <button className="button secondary small" onClick={(e) => { e.stopPropagation(); startEditSection(sec); }}>Edit</button>
-                  <button className="button secondary small" onClick={(e) => { e.stopPropagation(); handleDeleteSection(sec); }}>Delete</button>
+                  <button
+                    type="button"
+                    className="button secondary small"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startEditSection(sec);
+                    }}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="button secondary small"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteSection(sec);
+                    }}
+                  >
+                    Delete
+                  </button>
                 </div>
               </div>
             ))}
@@ -549,22 +889,35 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
               <div style={{ display: "flex", gap: 8 }}>
                 {selectedSection && !reorderMode && !creatingItem && !editingItem && (
                   <>
-                    <button className="button secondary small" onClick={enterReorderMode}>Reorder</button>
-                    <button className="button primary small" onClick={startCreateItem}>Add Item</button>
+                    <button type="button" className="button secondary small" onClick={enterReorderMode}>
+                      Reorder
+                    </button>
+                    <button type="button" className="button primary small" onClick={startCreateItem}>
+                      Add Item
+                    </button>
                   </>
                 )}
                 {reorderMode && (
                   <>
-                    <button className="button primary small" onClick={saveReorder} disabled={busy}>
+                    <button type="button" className="button primary small" onClick={saveReorder} disabled={busy}>
                       {busy ? "Saving..." : "Save Order"}
                     </button>
-                    <button className="button secondary small" onClick={() => setReorderMode(false)} disabled={busy}>Cancel</button>
+                    <button
+                      type="button"
+                      className="button secondary small"
+                      onClick={() => setReorderMode(false)}
+                      disabled={busy}
+                    >
+                      Cancel
+                    </button>
                   </>
                 )}
               </div>
             </div>
 
-            {!selectedSection && <div style={styles.emptyState}>Select a gallery section to view its items.</div>}
+            {!selectedSection && (
+              <div style={styles.emptyState}>Select a gallery section to view its items.</div>
+            )}
             {selectedSection && renderItemForm()}
             {selectedSection && !reorderMode && items.length === 0 && !creatingItem && !editingItem && (
               <div style={styles.emptyState}>No items in this section. Add one to get started.</div>
@@ -576,38 +929,81 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
                   <div key={item.id} style={styles.reorderItem}>
                     <div style={styles.reorderNumber}>{idx + 1}</div>
                     {item.thumbnailUrl && (
-                      <img src={item.thumbnailUrl} alt={item.titleOverride ?? ""} style={{ width: 32, height: 32, objectFit: "cover", borderRadius: 4 }} />
+                      <img
+                        src={item.thumbnailUrl}
+                        alt={item.titleOverride ?? ""}
+                        style={{ width: 32, height: 32, objectFit: "cover", borderRadius: 4 }}
+                      />
                     )}
                     <span style={{ flex: 1, fontSize: 13, color: "#0f172a" }}>{item.titleOverride || "Untitled"}</span>
-                    <button className="button secondary small" onClick={() => moveReorderItem(idx, -1)} disabled={idx === 0} style={{ padding: "4px 8px" }}>↑</button>
-                    <button className="button secondary small" onClick={() => moveReorderItem(idx, 1)} disabled={idx === reorderList.length - 1} style={{ padding: "4px 8px" }}>↓</button>
+                    <button
+                      type="button"
+                      className="button secondary small"
+                      onClick={() => moveReorderItem(idx, -1)}
+                      disabled={idx === 0}
+                      style={{ padding: "4px 8px" }}
+                    >
+                      &uarr;
+                    </button>
+                    <button
+                      type="button"
+                      className="button secondary small"
+                      onClick={() => moveReorderItem(idx, 1)}
+                      disabled={idx === reorderList.length - 1}
+                      style={{ padding: "4px 8px" }}
+                    >
+                      &darr;
+                    </button>
                   </div>
                 ))}
               </div>
             )}
 
-            {selectedSection && !reorderMode && items.map((item) => (
-              <div key={item.id} style={styles.itemCard}>
-                {item.thumbnailUrl ? (
-                  <img src={item.thumbnailUrl} alt={item.titleOverride ?? ""} style={styles.itemThumb} />
-                ) : (
-                  <div style={{ ...styles.itemThumb, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#94a3b8" }}>No img</div>
-                )}
-                <div style={styles.itemInfo}>
-                  <div style={styles.itemTitle}>{item.titleOverride || "Untitled"}</div>
-                  <div style={styles.itemMeta}>
-                    <span style={statusBadge(item.lifecycleStatus)}>{item.lifecycleStatus}</span>
-                    {item.slotKey && <span>Slot: {item.slotKey}</span>}
-                    <span>Order: {item.sortOrder ?? 0}</span>
-                    <span>v{item.version ?? 1}</span>
+            {selectedSection &&
+              !reorderMode &&
+              items.map((item) => (
+                <div key={item.id} style={styles.itemCard}>
+                  {item.thumbnailUrl ? (
+                    <img src={item.thumbnailUrl} alt={item.titleOverride ?? ""} style={styles.itemThumb} />
+                  ) : (
+                    <div
+                      style={{
+                        ...styles.itemThumb,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: 11,
+                        color: "#94a3b8",
+                      }}
+                    >
+                      No img
+                    </div>
+                  )}
+                  <div style={styles.itemInfo}>
+                    <div style={styles.itemTitle}>{item.titleOverride || "Untitled"}</div>
+                    <div style={styles.itemMeta}>
+                      <span style={statusBadge(item.lifecycleStatus)}>{item.lifecycleStatus}</span>
+                      {item.slotKey && <span>Slot: {item.slotKey}</span>}
+                      <span>Order: {item.sortOrder ?? 0}</span>
+                      <span>v{item.version ?? 1}</span>
+                    </div>
+                    {renderLifecycleToolbar(item, handleLifecycleTransitionItem)}
+                    {(item.lifecycleStatus === "IN_REVIEW" || item.lifecycleStatus === "DRAFT") && (
+                      <div style={{ fontSize: 11, color: "#92400e", marginTop: 4 }}>
+                        Media must be GALLERY category, PUBLISHED, APPROVED, visible.
+                      </div>
+                    )}
+                  </div>
+                  <div style={styles.itemActions}>
+                    <button type="button" className="button secondary small" onClick={() => startEditItem(item)}>
+                      Edit
+                    </button>
+                    <button type="button" className="button secondary small" onClick={() => handleDeleteItem(item)}>
+                      Delete
+                    </button>
                   </div>
                 </div>
-                <div style={styles.itemActions}>
-                  <button className="button secondary small" onClick={() => startEditItem(item)}>Edit</button>
-                  <button className="button secondary small" onClick={() => handleDeleteItem(item)}>Delete</button>
-                </div>
-              </div>
-            ))}
+              ))}
           </div>
         </div>
       )}
@@ -616,7 +1012,7 @@ export function GalleryManagerPanel({ csrf, sessionRole }: Props) {
         <MediaPickerDialog
           csrf={csrf}
           onSelect={handleMediaSelected}
-          onClose={() => { setShowPicker(false); setPickerTarget(null); }}
+          onClose={() => setShowPicker(false)}
         />
       )}
     </div>

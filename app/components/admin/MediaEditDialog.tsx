@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import type { MediaAssetDto } from "./admin-media-types";
-import { patchMediaAsset } from "./admin-media-api";
+import { patchMediaAsset, AdminApiError } from "./admin-media-api";
 
 const CATEGORIES = ["GENERAL", "GALLERY", "DOCTOR", "BLOG", "VIDEO_POSTER"] as const;
 const RIGHTS_STATUSES = ["UNVERIFIED", "VERIFIED_INTERNAL", "LICENSED", "PUBLIC_DOMAIN"] as const;
@@ -110,11 +110,15 @@ export default function MediaEditDialog({ asset, csrf, onClose, onSaved }: Props
     }
 
     try {
-      const updated = await patchMediaAsset(csrf, asset.id, asset.version, changed);
+      const result = await patchMediaAsset(csrf, asset.id, asset.version, changed);
       setSuccess("Saved.");
-      onSaved(updated);
+      onSaved(result.item);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Save failed.");
+      if (err instanceof AdminApiError && err.status === 409) {
+        setError("Stale version conflict. " + err.message);
+      } else {
+        setError(err instanceof Error ? err.message : "Save failed.");
+      }
     } finally {
       setSaving(false);
     }

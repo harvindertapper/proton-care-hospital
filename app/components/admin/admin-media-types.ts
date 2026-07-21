@@ -81,6 +81,8 @@ export type MediaLibraryFilters = {
   category: string;
   purpose: string;
   lifecycleStatus: string;
+  status?: string;
+  rightsStatus?: string;
 };
 
 export const LIFECYCLE_STATUSES = ["DRAFT", "IN_REVIEW", "PUBLISHED", "HIDDEN", "ARCHIVED"] as const;

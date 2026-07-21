@@ -6,8 +6,8 @@ const [
   adminMediaTypes,
   adminMediaApi,
   mediaLibraryPanel,
-  mediaEditDialog,
-  mediaPickerDialog,
+  _mediaEditDialog,
+  _mediaPickerDialog,
   galleryManagerPanel,
   adminConsole,
   galleryClient,
@@ -18,8 +18,7 @@ const [
   galleryItemsRoute,
   galleryItemIdRoute,
   galleryReorderRoute,
-  galleryV2Route,
-  legacyGalleryRoute,
+  mediaUploadDialog,
 ] = await Promise.all([
   readFile(new URL("../app/components/admin/admin-media-types.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/components/admin/admin-media-api.ts", import.meta.url), "utf8"),
@@ -36,8 +35,7 @@ const [
   readFile(new URL("../app/api/admin/gallery/items/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/admin/gallery/items/[id]/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/admin/gallery/items/reorder/route.ts", import.meta.url), "utf8"),
-  readFile(new URL("../app/api/gallery/v2/route.ts", import.meta.url), "utf8"),
-  readFile(new URL("../app/api/gallery/route.ts", import.meta.url), "utf8"),
+  readFile(new URL("../app/components/admin/MediaUploadDialog.tsx", import.meta.url), "utf8"),
 ]);
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -322,8 +320,8 @@ test("42. GalleryManagerPanel imports MediaPickerDialog for media selection", ()
 test("43. GalleryManagerPanel supports reorder mode with up/down arrows", () => {
   assert.ok(galleryManagerPanel.includes("reorderMode"), "Must have reorderMode state");
   assert.ok(galleryManagerPanel.includes("enterReorderMode"), "Must have enterReorderMode function");
-  assert.ok(galleryManagerPanel.includes("\u2191"), "Must have up arrow button");
-  assert.ok(galleryManagerPanel.includes("\u2193"), "Must have down arrow button");
+  assert.ok(galleryManagerPanel.includes("&uarr;"), "Must have up arrow button");
+  assert.ok(galleryManagerPanel.includes("&darr;"), "Must have down arrow button");
   assert.ok(galleryManagerPanel.includes("moveReorderItem"), "Must have moveReorderItem function");
 });
 
@@ -384,4 +382,199 @@ test("50. AdminConsole has Media & Gallery tab with sub-views (MediaLibraryPanel
   assert.ok(adminConsole.includes("<GalleryManagerPanel"), "Must render GalleryManagerPanel");
   assert.ok(adminConsole.includes("Media Library"), "Must have Media Library sub-view label");
   assert.ok(adminConsole.includes("Gallery Manager"), "Must have Gallery Manager sub-view label");
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   14. MediaUploadDialog (tests 51-55)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+test("51. MediaUploadDialog has accessible dialog attributes", () => {
+  assert.ok(mediaUploadDialog.includes('role="dialog"'), "Must have role=dialog");
+  assert.ok(mediaUploadDialog.includes('aria-modal="true"'), "Must have aria-modal=true");
+  assert.ok(mediaUploadDialog.includes("Upload Gallery Media"), "Must have aria-label or heading");
+});
+
+test("52. MediaUploadDialog accepts only JPEG, PNG, WebP via file input", () => {
+  assert.ok(mediaUploadDialog.includes('image/jpeg,image/png,image/webp'), "Must set accept to allowed MIME types");
+  assert.ok(mediaUploadDialog.includes("ALLOWED_TYPES"), "Must define ALLOWED_TYPES set");
+});
+
+test("53. MediaUploadDialog enforces 5 MiB max file size", () => {
+  assert.ok(mediaUploadDialog.includes("5 * 1024 * 1024") || mediaUploadDialog.includes("MAX_BYTES"), "Must define 5 MiB limit");
+  assert.ok(mediaUploadDialog.includes("Image must be 5 MB or smaller"), "Must show size error message");
+});
+
+test("54. MediaUploadDialog uses detectSignature before upload", () => {
+  assert.ok(mediaUploadDialog.includes("detectSignature"), "Must import and use detectSignature");
+  assert.ok(mediaUploadDialog.includes("Unsupported file format"), "Must error on invalid signature");
+  assert.ok(mediaUploadDialog.includes("Declared type does not match file content"), "Must error on type mismatch");
+});
+
+test("55. MediaUploadDialog uploads via POST then PATCHes lifecycle to DRAFT", () => {
+  assert.ok(mediaUploadDialog.includes('/api/admin/media"'), "Must POST to /api/admin/media");
+  assert.ok(mediaUploadDialog.includes('purpose", "gallery"'), "Must send purpose=gallery");
+  assert.ok(mediaUploadDialog.includes('lifecycleStatus: "DRAFT"'), "Must PATCH lifecycle to DRAFT after upload");
+  assert.ok(mediaUploadDialog.includes('status: "NEEDS_REVIEW"'), "Must PATCH status to NEEDS_REVIEW");
+  assert.ok(mediaUploadDialog.includes("expectedVersion"), "Must include expectedVersion in PATCH");
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   15. AdminApiError and typed API errors (tests 56-60)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+test("56. AdminApiError class has status, outcome, and revision fields", () => {
+  assert.ok(adminMediaApi.includes("status: number"), "Must have status field");
+  assert.ok(adminMediaApi.includes("outcome?: string"), "Must have optional outcome field");
+  assert.ok(adminMediaApi.includes("revision?: unknown"), "Must have optional revision field");
+});
+
+test("57. AdminApiError extends Error with name AdminApiError", () => {
+  assert.ok(adminMediaApi.includes('extends Error'), "AdminApiError must extend Error");
+  assert.ok(adminMediaApi.includes('this.name = "AdminApiError"'), "Must set name to AdminApiError");
+});
+
+test("58. patchMediaAsset sends expectedVersion in JSON body", () => {
+  assert.ok(adminMediaApi.includes("body: JSON.stringify({ ...fields, expectedVersion })"), "Must include expectedVersion in PATCH body");
+});
+
+test("59. All delete API functions pass expectedVersion in body", () => {
+  assert.ok(adminMediaApi.includes("body: JSON.stringify({ expectedVersion })"), "Must send expectedVersion in DELETE body");
+});
+
+test("60. fetchMediaLibrary passes status and rightsStatus query params", () => {
+  assert.ok(adminMediaApi.includes("params.status = String"), "Must pass status query param");
+  assert.ok(adminMediaApi.includes("params.rightsStatus = String"), "Must pass rightsStatus query param");
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   16. Staff pending behavior (tests 61-64)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+test("61. GalleryManagerPanel handles PENDING_APPROVAL outcome for item transitions", () => {
+  assert.ok(galleryManagerPanel.includes('result.outcome === "PENDING_APPROVAL"'), "Must check PENDING_APPROVAL outcome");
+  assert.ok(galleryManagerPanel.includes("Submitted for approval"), "Must show submitted-for-approval notice");
+});
+
+test("62. GalleryManagerPanel handles PENDING_APPROVAL for reorder saves", () => {
+  const reorderSection = galleryManagerPanel.slice(galleryManagerPanel.indexOf("async function saveReorder"));
+  assert.ok(reorderSection.includes("PENDING_APPROVAL"), "Reorder must check PENDING_APPROVAL outcome");
+});
+
+test("63. GallerySectionsRoute POST creates revision for Staff via executeRoleMutation", () => {
+  assert.ok(gallerySectionsRoute.includes("executeRoleMutation"), "Must use executeRoleMutation for Staff");
+  assert.ok(gallerySectionsRoute.includes("createRevision"), "Must define createRevision callback");
+});
+
+test("64. GalleryManagerPanel handles section lifecycle transitions via patchGallerySection", () => {
+  assert.ok(galleryManagerPanel.includes("patchGallerySection(csrf"), "Must call patchGallerySection with csrf");
+  assert.ok(galleryManagerPanel.includes("editingSection.version"), "Must pass section version for concurrency");
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   17. Typed error 409 handling (tests 65-68)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+test("65. GalleryManagerPanel catches AdminApiError with status 409 for stale version on items", () => {
+  assert.ok(galleryManagerPanel.includes("err instanceof AdminApiError && err.status === 409"), "Must catch 409 AdminApiError for items");
+  assert.ok(galleryManagerPanel.includes("Stale version. Please reload"), "Must show stale version message");
+});
+
+test("66. MediaLibraryPanel catches AdminApiError with status 409 for archive conflict", () => {
+  assert.ok(mediaLibraryPanel.includes("err instanceof AdminApiError && err.status === 409"), "Must catch 409 AdminApiError");
+  assert.ok(mediaLibraryPanel.includes("referenced"), "Must handle referenced conflict on 409");
+});
+
+test("67. GalleryManagerPanel catches AdminApiError with status 404 for deleted entities", () => {
+  assert.ok(galleryManagerPanel.includes("err instanceof AdminApiError && err.status === 404"), "Must catch 404 AdminApiError");
+});
+
+test("68. GalleryManagerPanel catches AdminApiError eligibility/guard errors", () => {
+  assert.ok(galleryManagerPanel.includes("eligibility") && galleryManagerPanel.includes("guard"), "Must handle eligibility or guard errors");
+  assert.ok(galleryManagerPanel.includes("Publication eligibility not met"), "Must show eligibility error message");
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   18. MediaPickerDialog GALLERY isolation and features (tests 69-72)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+test("69. MediaPickerDialog fetches with category=GALLERY only", () => {
+  assert.ok(_mediaPickerDialog.includes('category: "GALLERY"'), "Must query with category GALLERY");
+  assert.ok(_mediaPickerDialog.includes("Select Gallery Asset"), "Must have Gallery-specific heading");
+});
+
+test("70. MediaPickerDialog shows PUBLICATION ELIGIBLE badge for eligible assets", () => {
+  assert.ok(_mediaPickerDialog.includes("PUBLICATION ELIGIBLE"), "Must show eligibility badge");
+  assert.ok(_mediaPickerDialog.includes("isEligible"), "Must define eligibility check function");
+  assert.ok(_mediaPickerDialog.includes('lifecycleStatus === "PUBLISHED"'), "Eligibility requires PUBLISHED lifecycle");
+});
+
+test("71. MediaPickerDialog has lifecycle filter with6 options", () => {
+  assert.ok(_mediaPickerDialog.includes('"ALL"'), "Must have ALL option");
+  assert.ok(_mediaPickerDialog.includes('"DRAFT"'), "Must have DRAFT option");
+  assert.ok(_mediaPickerDialog.includes('"PUBLISHED"'), "Must have PUBLISHED option");
+  assert.ok(_mediaPickerDialog.includes('"IN_REVIEW"'), "Must have IN_REVIEW option");
+  assert.ok(_mediaPickerDialog.includes('"HIDDEN"'), "Must have HIDDEN option");
+  assert.ok(_mediaPickerDialog.includes('"ARCHIVED"'), "Must have ARCHIVED option");
+});
+
+test("72. MediaPickerDialog has keyboard accessible cards and retry button", () => {
+  assert.ok(_mediaPickerDialog.includes("tabIndex={0}"), "Cards must be focusable");
+  assert.ok(_mediaPickerDialog.includes("handleCardKeyDown"), "Must have keyboard handler for cards");
+  assert.ok(_mediaPickerDialog.includes('aria-label="Retry loading assets"'), "Must have accessible retry button");
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   19. GalleryManagerPanel lifecycle and immutability (tests 73-76)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+test("73. GalleryManagerPanel has lifecycle transition function with valid state transitions", () => {
+  assert.ok(galleryManagerPanel.includes("getTransitions"), "Must define getTransitions function");
+  assert.ok(galleryManagerPanel.includes("IN_REVIEW"), "DRAFT must transition to IN_REVIEW");
+  assert.ok(galleryManagerPanel.includes("PUBLISHED"), "IN_REVIEW must transition to PUBLISHED");
+});
+
+test("74. GalleryManagerPanel has immutability note style for editing items", () => {
+  assert.ok(galleryManagerPanel.includes("immutabilityNote"), "Must define immutabilityNote style");
+  assert.ok(galleryManagerPanel.includes("fontStyle"), "Immutability note must use italic font style");
+});
+
+test("75. GalleryManagerPanel shows confirm dialog for section and item deletion", () => {
+  assert.ok(galleryManagerPanel.includes("confirm("), "Must use confirm() for destructive actions");
+  assert.ok(galleryManagerPanel.includes('Delete section'), "Must confirm section deletion");
+  assert.ok(galleryManagerPanel.includes('Delete item'), "Must confirm item deletion");
+});
+
+test("76. GalleryManagerPanel has showPicker state for MediaPickerDialog integration", () => {
+  assert.ok(galleryManagerPanel.includes("showPicker"), "Must have showPicker state");
+  assert.ok(galleryManagerPanel.includes("<MediaPickerDialog"), "Must render MediaPickerDialog");
+  assert.ok(galleryManagerPanel.includes("handleMediaSelected"), "Must handle media selection callback");
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   20. GalleryClient URL validation and v2 handling (tests 77-80)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+test("77. GalleryClient isSafeUrl rejects raw R2 keys and cloudflarestorage URLs", () => {
+  assert.ok(galleryClient.includes("r2.cloudflarestorage.com"), "Must reject R2 storage URLs");
+  assert.ok(galleryClient.includes("isSafeUrl"), "Must define isSafeUrl function");
+});
+
+test("78. GalleryClient isSectionArray validates section structure with slug, name, and items", () => {
+  assert.ok(galleryClient.includes("isSectionArray"), "Must define isSectionArray type guard");
+  assert.ok(galleryClient.includes('typeof (s as Record<string, unknown>).slug === "string"'), "Must validate slug is string");
+  assert.ok(galleryClient.includes('typeof (s as Record<string, unknown>).name === "string"'), "Must validate name is string");
+  assert.ok(galleryClient.includes("Array.isArray((s as Record<string, unknown>).items)"), "Must validate items is array");
+});
+
+test("79. GalleryClient renders Gallery Coming Soon for enabled-empty v2 sections", () => {
+  assert.ok(galleryClient.includes("Gallery Coming Soon"), "Must show coming soon for empty v2");
+  assert.ok(galleryClient.includes("Content is being curated"), "Must show placeholder message");
+  assert.ok(galleryClient.includes("sections.length > 0"), "Must check sections length before rendering");
+});
+
+test("80. GalleryClient uses buildFlatIndexMap for lightbox index mapping", () => {
+  assert.ok(galleryClient.includes("buildFlatIndexMap"), "Must define buildFlatIndexMap function");
+  assert.ok(galleryClient.includes("flatIndexMap"), "Must use flatIndexMap for item indices");
+  assert.ok(galleryClient.includes("flatIndexMap.get(item)"), "Must look up item index from map");
+  assert.ok(galleryClient.includes("activeIndex + 1} / {assets.length}"), "Must show lightbox position counter");
 });
