@@ -20,16 +20,16 @@ type Row = Record<string, unknown>;
 function parseLimit(raw: unknown): { ok: true; value: number } | { ok: false; error: string } {
   if (raw === null || raw === undefined) return { ok: true, value: 25 };
   const n = Number(raw);
-  if (!Number.isFinite(n) || n < 1) return { ok: false, error: "limit must be a positive integer." };
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) return { ok: false, error: "limit must be a positive integer." };
   if (n > 100) return { ok: false, error: "limit must be at most 100." };
-  return { ok: true, value: Math.floor(n) };
+  return { ok: true, value: n };
 }
 
 function parseOffset(raw: unknown): { ok: true; value: number } | { ok: false; error: string } {
   if (raw === null || raw === undefined) return { ok: true, value: 0 };
   const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) return { ok: false, error: "offset must be a non-negative integer." };
-  return { ok: true, value: Math.floor(n) };
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return { ok: false, error: "offset must be a non-negative integer." };
+  return { ok: true, value: n };
 }
 
 function isIn(val: unknown, set: ReadonlySet<string>): val is string {
@@ -161,7 +161,8 @@ export async function GET(request: Request) {
     for (const row of listResult.results ?? []) {
       const dtoResult = toAdminDto(row as Parameters<typeof toAdminDto>[0]);
       if (!dtoResult.ok) {
-        return json({ error: `Failed to convert media asset to DTO: ${dtoResult.error}` }, { status: 500 });
+        console.error(`Media asset in list failed DTO conversion:`, dtoResult.error);
+        return json({ error: "Media Library contains invalid asset metadata." }, { status: 500 });
       }
       items.push(dtoResult.dto);
     }

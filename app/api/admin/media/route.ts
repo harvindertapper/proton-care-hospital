@@ -1,6 +1,7 @@
 import { audit, checkRateLimit, getClientIp, getR2, json, query, requireAdmin, run, verifyCsrf } from "@/app/lib/server";
 import { executeMediaDeletion } from "@/app/lib/mutation-result";
 import { ALLOWED_MIME_TYPES, ALLOWED_PURPOSES, MAX_IMAGE_BYTES, detectSignature } from "@/app/lib/media-policy";
+import { generateR2MediaUrl } from "@/app/lib/media-library";
 
 function safeName(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-|-$/g, "").slice(0, 120) || "upload";
@@ -188,22 +189,32 @@ export async function DELETE(request: Request) {
     );
   }
 
-  // Doctor reference check: check all URL variants that could be stored in photo_url
-  const doctorRefKeys = [asset.r2_key];
-  const displayR2Key = await query<{ display_r2_key: string | null; thumbnail_r2_key: string | null }>(
+  // Doctor reference check: use canonical segment-encoded URLs for all R2 key variants
+  const originalResult = generateR2MediaUrl(asset.r2_key);
+  if (!originalResult.ok) {
+    return json({ error: "Media asset has invalid storage locator." }, { status: 500 });
+  }
+  const doctorRefUrls: string[] = [originalResult.url];
+
+  const dKeyRow = await query<{ display_r2_key: string | null; thumbnail_r2_key: string | null }>(
     "SELECT display_r2_key, thumbnail_r2_key FROM media_assets WHERE id = ? LIMIT 1",
     id,
   );
-  const dKey = displayR2Key.results?.[0]?.display_r2_key;
-  if (dKey && dKey !== asset.r2_key) doctorRefKeys.push(dKey);
-  const tKey = displayR2Key.results?.[0]?.thumbnail_r2_key;
-  if (tKey && tKey !== asset.r2_key && tKey !== dKey) doctorRefKeys.push(tKey);
+  const dKey = dKeyRow.results?.[0]?.display_r2_key;
+  if (dKey) {
+    const displayResult = generateR2MediaUrl(dKey);
+    if (displayResult.ok && !doctorRefUrls.includes(displayResult.url)) doctorRefUrls.push(displayResult.url);
+  }
+  const tKey = dKeyRow.results?.[0]?.thumbnail_r2_key;
+  if (tKey) {
+    const thumbResult = generateR2MediaUrl(tKey);
+    if (thumbResult.ok && !doctorRefUrls.includes(thumbResult.url)) doctorRefUrls.push(thumbResult.url);
+  }
 
-  for (const key of doctorRefKeys) {
-    const exactUrl = `/api/media/${key}`;
+  for (const url of doctorRefUrls) {
     const photoRefs = await query<{ id: string }>(
       "SELECT id FROM doctor_profiles WHERE photo_url = ? LIMIT 1",
-      exactUrl,
+      url,
     );
     if (photoRefs.results && photoRefs.results.length > 0) {
       return json(

@@ -844,7 +844,7 @@ describe("H. Corrective: GET query strictness and DTO integrity", () => {
 
   it("H.97. Invalid DTO row returns 500, not silent skip (structural)", () => {
     const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "route.ts"), "utf8");
-    assert.ok(routeContent.includes("Failed to convert media asset to DTO"), "GET must return 500 for invalid DTO");
+    assert.ok(routeContent.includes("Media Library contains invalid asset metadata"), "GET must return generic DTO error");
     assert.ok(!routeContent.includes("if \\(dtoResult\\.ok\\)\\s*\\{\\s*items\\.push"), "GET must not silently skip invalid DTOs");
   });
 });
@@ -893,6 +893,135 @@ describe("H. Corrective: thumbnail URL reference coverage", () => {
     assert.equal(result.ok, false);
     assert.ok(result.error.includes("Unknown storage type"));
     assert.ok(!result.error.includes("null"));
+  });
+});
+
+/* ─── Micro-Corrective Tests (I.103–I.113) ─────────────────────────────── */
+
+describe("I. Canonical reference URLs and strict requests", () => {
+  it("I.103. Encoded R2 original Doctor reference blocks library DELETE", () => {
+    const db = createFullyMigratedDb();
+    const id = insertMedia(db, { storage_type: "R2", r2_key: "folder/doctor photo (1).webp" });
+    const result = generateR2MediaUrl("folder/doctor photo (1).webp");
+    assert.equal(result.ok, true);
+    assert.equal(result.url, "/api/media/folder/doctor%20photo%20(1).webp");
+    insertDoctor(db, { photo_url: result.url });
+    const refs = db.prepare("SELECT id FROM doctor_profiles WHERE photo_url = ?").all(result.url);
+    assert.ok(refs.length > 0, "Doctor referencing canonical encoded URL must block delete");
+    const doctorRefUrls = [result.url];
+    const placeholders = doctorRefUrls.map(() => "?").join(", ");
+    const sql = `UPDATE media_assets SET lifecycle_status = 'ARCHIVED', version = version + 1 WHERE id = ? AND version = ? AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM gallery_items WHERE media_id = media_assets.id) AND NOT EXISTS (SELECT 1 FROM doctor_profiles WHERE photo_url IN (${placeholders}))`;
+    const updateResult = db.prepare(sql).run(id, 1, ...doctorRefUrls);
+    assert.equal(updateResult.changes, 0, "Encoded original R2 Doctor reference must block");
+    db.close();
+  });
+
+  it("I.104. Encoded R2 display Doctor reference blocks library DELETE", () => {
+    const db = createFullyMigratedDb();
+    const id = insertMedia(db, { storage_type: "R2", r2_key: "photos/main.webp", display_r2_key: "photos/display (2).webp" });
+    const displayResult = generateR2MediaUrl("photos/display (2).webp");
+    assert.equal(displayResult.ok, true);
+    assert.equal(displayResult.url, "/api/media/photos/display%20(2).webp");
+    insertDoctor(db, { photo_url: displayResult.url });
+    const originalResult = generateR2MediaUrl("photos/main.webp");
+    const doctorRefUrls = [originalResult.url];
+    if (!doctorRefUrls.includes(displayResult.url)) doctorRefUrls.push(displayResult.url);
+    const placeholders = doctorRefUrls.map(() => "?").join(", ");
+    const sql = `UPDATE media_assets SET lifecycle_status = 'ARCHIVED', version = version + 1 WHERE id = ? AND version = ? AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM gallery_items WHERE media_id = media_assets.id) AND NOT EXISTS (SELECT 1 FROM doctor_profiles WHERE photo_url IN (${placeholders}))`;
+    const updateResult = db.prepare(sql).run(id, 1, ...doctorRefUrls);
+    assert.equal(updateResult.changes, 0, "Encoded display R2 Doctor reference must block");
+    db.close();
+  });
+
+  it("I.105. Encoded R2 thumbnail Doctor reference blocks library DELETE", () => {
+    const db = createFullyMigratedDb();
+    const id = insertMedia(db, { storage_type: "R2", r2_key: "photos/main.webp", display_r2_key: "photos/main.webp", thumbnail_r2_key: "thumbs/thumb (3).webp" });
+    const thumbResult = generateR2MediaUrl("thumbs/thumb (3).webp");
+    assert.equal(thumbResult.ok, true);
+    assert.equal(thumbResult.url, "/api/media/thumbs/thumb%20(3).webp");
+    insertDoctor(db, { photo_url: thumbResult.url });
+    const doctorRefUrls = [generateR2MediaUrl("photos/main.webp").url];
+    if (!doctorRefUrls.includes(thumbResult.url)) doctorRefUrls.push(thumbResult.url);
+    const placeholders = doctorRefUrls.map(() => "?").join(", ");
+    const sql = `UPDATE media_assets SET lifecycle_status = 'ARCHIVED', version = version + 1 WHERE id = ? AND version = ? AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM gallery_items WHERE media_id = media_assets.id) AND NOT EXISTS (SELECT 1 FROM doctor_profiles WHERE photo_url IN (${placeholders}))`;
+    const updateResult = db.prepare(sql).run(id, 1, ...doctorRefUrls);
+    assert.equal(updateResult.changes, 0, "Encoded thumbnail R2 Doctor reference must block");
+    db.close();
+  });
+
+  it("I.106. Canonical encoded URLs used in atomic NOT EXISTS binds", () => {
+    const db = createFullyMigratedDb();
+    const id = insertMedia(db, { storage_type: "R2", r2_key: "folder/doctor photo (1).webp" });
+    const canonicalUrl = generateR2MediaUrl("folder/doctor photo (1).webp").url;
+    assert.equal(canonicalUrl, "/api/media/folder/doctor%20photo%20(1).webp");
+    insertDoctor(db, { photo_url: canonicalUrl });
+    const rawUrl = "/api/media/folder/doctor photo (1).webp";
+    const rawSql = `UPDATE media_assets SET lifecycle_status = 'ARCHIVED', version = version + 1 WHERE id = ? AND version = ? AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM doctor_profiles WHERE photo_url IN (?))`;
+    const rawResult = db.prepare(rawSql).run(id, 1, rawUrl);
+    assert.equal(rawResult.changes, 1, "Raw URL does not match canonical — delete succeeds (demonstrates the bug)");
+    db.prepare("UPDATE media_assets SET version = 1 WHERE id = ?").run(id);
+    const canonicalSql = `UPDATE media_assets SET lifecycle_status = 'ARCHIVED', version = version + 1 WHERE id = ? AND version = ? AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM doctor_profiles WHERE photo_url IN (?))`;
+    const canonicalResult = db.prepare(canonicalSql).run(id, 1, canonicalUrl);
+    assert.equal(canonicalResult.changes, 0, "Canonical URL matches Doctor reference and blocks delete");
+    db.close();
+  });
+
+  it("I.107. Legacy DELETE encoded URL reference blocks physical delete", () => {
+    const db = createFullyMigratedDb();
+    insertMedia(db, { storage_type: "R2", r2_key: "folder/doctor photo (1).webp" });
+    const canonicalUrl = generateR2MediaUrl("folder/doctor photo (1).webp").url;
+    insertDoctor(db, { photo_url: canonicalUrl });
+    const refs = db.prepare("SELECT id FROM doctor_profiles WHERE photo_url = ?").all(canonicalUrl);
+    assert.ok(refs.length > 0, "Canonical encoded URL must be found in doctor_profiles");
+    const rawRefs = db.prepare("SELECT id FROM doctor_profiles WHERE photo_url = ?").all("/api/media/folder/doctor photo (1).webp");
+    assert.equal(rawRefs.length, 0, "Raw non-encoded URL must NOT match");
+    db.close();
+  });
+
+  it("I.108. Decimal limit rejected (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("Number.isInteger(n)"), "Production parseLimit must use Number.isInteger");
+    assert.ok(!routeContent.includes("Math.floor(n)"), "Production parseLimit must not floor decimals");
+  });
+
+  it("I.109. Decimal offset rejected (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "route.ts"), "utf8");
+    const parseOffsetIdx = routeContent.indexOf("function parseOffset");
+    const parseOffsetBlock = routeContent.slice(parseOffsetIdx, parseOffsetIdx + 300);
+    assert.ok(parseOffsetBlock.includes("Number.isInteger(n)"), "Production parseOffset must use Number.isInteger");
+    assert.ok(!parseOffsetBlock.includes("Math.floor(n)"), "Production parseOffset must not floor decimals");
+  });
+
+  it("I.110. Inline parseLimit rejects decimals (runtime)", () => {
+    assert.equal(parseLimit(1.5).ok, false);
+    assert.ok(parseLimit(1.5).error.includes("integer"));
+    assert.equal(parseLimit(0.999).ok, false);
+  });
+
+  it("I.111. Inline parseOffset rejects decimals (runtime)", () => {
+    assert.equal(parseOffset(2.7).ok, false);
+    assert.ok(parseOffset(2.7).error.includes("integer"));
+    assert.equal(parseOffset(0.001).ok, false);
+  });
+
+  it("I.112. PATCH body parsing is safe (structural)", () => {
+    const routeContent = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "[id]", "route.ts"), "utf8");
+    assert.ok(routeContent.includes("Malformed or empty request body"), "PATCH must catch malformed JSON");
+    assert.ok(routeContent.includes("Request body must be a JSON object"), "PATCH must reject non-object body");
+    const patchIdx = routeContent.indexOf("export async function PATCH");
+    const nextExportIdx = routeContent.indexOf("export async function DELETE", patchIdx);
+    const patchBlock = routeContent.slice(patchIdx, nextExportIdx);
+    assert.ok(patchBlock.includes("try {") && patchBlock.includes("request.json()"), "PATCH must try/catch request.json()");
+    assert.ok(patchBlock.includes("Array.isArray(parsed)"), "PATCH must reject JSON arrays");
+  });
+
+  it("I.113. DTO generic error response (structural)", () => {
+    const libraryRoute = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "route.ts"), "utf8");
+    assert.ok(libraryRoute.includes("Media Library contains invalid asset metadata"), "GET must return generic DTO error");
+    assert.ok(!libraryRoute.includes("Failed to convert media asset to DTO:"), "GET must not leak internal DTO error details");
+    const idRoute = readFileSync(join(ROOT, "app", "api", "admin", "media", "library", "[id]", "route.ts"), "utf8");
+    assert.ok(idRoute.includes("Media Library contains invalid asset metadata"), "PATCH must return generic DTO error");
+    assert.ok(!idRoute.match(/error: dtoResult\.error/), "PATCH must not leak internal DTO error details");
   });
 });
 
@@ -1063,16 +1192,16 @@ function escapeLikeWildcard(input) {
 function parseLimit(raw) {
   if (raw === null || raw === undefined) return { ok: true, value: 25 };
   const n = Number(raw);
-  if (!Number.isFinite(n) || n < 1) return { ok: false, error: "limit must be a positive integer." };
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) return { ok: false, error: "limit must be a positive integer." };
   if (n > 100) return { ok: false, error: "limit must be at most 100." };
-  return { ok: true, value: Math.floor(n) };
+  return { ok: true, value: n };
 }
 
 function parseOffset(raw) {
   if (raw === null || raw === undefined) return { ok: true, value: 0 };
   const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) return { ok: false, error: "offset must be a non-negative integer." };
-  return { ok: true, value: Math.floor(n) };
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return { ok: false, error: "offset must be a non-negative integer." };
+  return { ok: true, value: n };
 }
 
 function isValidEnum(val, set) {

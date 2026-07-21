@@ -737,7 +737,7 @@ test("delete guard: substring-only does not count (SQLite)", () => {
 test("delete guard uses exact match, not LIKE (structural)", () => {
   assert.match(adminMediaRoute, /photo_url = \?/);
   assert.doesNotMatch(adminMediaRoute, /photo_url LIKE/);
-  assert.match(adminMediaRoute, /exactUrl/);
+  assert.match(adminMediaRoute, /doctorRefUrls/);
 });
 
 test("computeCropPlan: 600x4000 portrait zoom 1 -> export <= 600", () => {

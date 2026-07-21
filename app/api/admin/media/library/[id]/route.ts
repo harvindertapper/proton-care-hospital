@@ -40,7 +40,16 @@ export async function PATCH(
       return json({ error: "Too many requests. Please try again later." }, { status: 429 });
     }
 
-    const body = (await request.json()) as Record<string, unknown>;
+    let body: Record<string, unknown>;
+    try {
+      const parsed = await request.json();
+      if (parsed === null || parsed === undefined || Array.isArray(parsed) || typeof parsed !== "object") {
+        return json({ error: "Request body must be a JSON object." }, { status: 400 });
+      }
+      body = parsed as Record<string, unknown>;
+    } catch {
+      return json({ error: "Malformed or empty request body." }, { status: 400 });
+    }
 
     // Optimistic concurrency: require expectedVersion
     const expectedVersion = body.expectedVersion;
@@ -254,7 +263,8 @@ export async function PATCH(
 
     const dtoResult = toAdminDto(updated as Parameters<typeof toAdminDto>[0]);
     if (!dtoResult.ok) {
-      return json({ error: dtoResult.error }, { status: 500 });
+      console.error(`Media asset ${id} failed DTO conversion:`, dtoResult.error);
+      return json({ error: "Media Library contains invalid asset metadata." }, { status: 500 });
     }
 
     // Audit after successful mutation
@@ -331,20 +341,34 @@ export async function DELETE(
       );
     }
 
-    // ── Build complete reference URL set (Section 3: original + display + thumbnail) ──
+    // ── Build deduplicated reference URL set via canonical resolvers ──
 
     const storageType = row.storage_type as string;
-    const isR2Asset = storageType === "R2";
 
     const doctorRefUrls: string[] = [];
-    if (isR2Asset) {
-      const r2Key = row.r2_key as string;
-      doctorRefUrls.push(`/api/media/${r2Key}`);
+    if (storageType === "R2") {
+      const originalResult = generateR2MediaUrl(row.r2_key as string);
+      if (!originalResult.ok) {
+        return json({ error: `Failed to resolve media URL: ${originalResult.error}` }, { status: 500 });
+      }
+      doctorRefUrls.push(originalResult.url);
+
       const displayR2Key = row.display_r2_key as string | null;
-      if (displayR2Key && displayR2Key !== r2Key) doctorRefUrls.push(`/api/media/${displayR2Key}`);
+      if (displayR2Key) {
+        const displayResult = generateR2MediaUrl(displayR2Key);
+        if (!displayResult.ok) {
+          return json({ error: `Failed to resolve display URL: ${displayResult.error}` }, { status: 500 });
+        }
+        if (!doctorRefUrls.includes(displayResult.url)) doctorRefUrls.push(displayResult.url);
+      }
+
       const thumbnailR2Key = row.thumbnail_r2_key as string | null;
-      if (thumbnailR2Key && thumbnailR2Key !== r2Key && thumbnailR2Key !== displayR2Key) {
-        doctorRefUrls.push(`/api/media/${thumbnailR2Key}`);
+      if (thumbnailR2Key) {
+        const thumbResult = generateR2MediaUrl(thumbnailR2Key);
+        if (!thumbResult.ok) {
+          return json({ error: `Failed to resolve thumbnail URL: ${thumbResult.error}` }, { status: 500 });
+        }
+        if (!doctorRefUrls.includes(thumbResult.url)) doctorRefUrls.push(thumbResult.url);
       }
     } else {
       const publicPath = row.public_path as string;
