@@ -31,6 +31,13 @@ import { departmentBySlug } from "@/app/lib/data";
 import { validateStaffAccountInput } from "@/app/lib/adminAuth";
 import { sendEmail, getStaffOnboardingTemplate } from "@/app/lib/resend";
 import { clean, slugify } from "@/app/lib/utils";
+import {
+  applyAtomicReorder,
+  SECTION_PUBLISHED_GUARD,
+  ITEM_SECTION_GUARD,
+  ITEM_MEDIA_GUARD,
+  validateMediaForPublication,
+} from "@/app/lib/gallery-v2";
 
 type AdminSession = { email: string; role: "SUPER_ADMIN" | "STAFF" };
 
@@ -799,20 +806,24 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (Number.isNaN(parseExpectedVersion(obj.expectedVersion, { minimum: 1 }))) return { ok: false, error: "expectedVersion must be a positive integer." };
   } else if (action === "gallery_section.create") {
     if (typeof obj.name !== "string" || !obj.name.trim()) return { ok: false, error: "Section name is required." };
+    if (obj.sortOrder !== undefined && (typeof obj.sortOrder !== "number" || !Number.isInteger(obj.sortOrder) || obj.sortOrder < 0)) return { ok: false, error: "sortOrder must be a non-negative integer." };
   } else if (action === "gallery_section.update") {
     if (typeof obj.id !== "string" || !obj.id.trim()) return { ok: false, error: "Section ID is required." };
     if (typeof obj.expectedVersion !== "number" || !Number.isInteger(obj.expectedVersion) || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion must be a positive integer." };
+    if (obj.sortOrder !== undefined && (typeof obj.sortOrder !== "number" || !Number.isInteger(obj.sortOrder) || obj.sortOrder < 0)) return { ok: false, error: "sortOrder must be a non-negative integer." };
   } else if (action === "gallery_section.delete") {
     if (typeof obj.id !== "string" || !obj.id.trim()) return { ok: false, error: "Section ID is required." };
     if (typeof obj.expectedVersion !== "number" || !Number.isInteger(obj.expectedVersion) || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion must be a positive integer." };
   } else if (action === "gallery_item.create") {
     if (typeof obj.sectionId !== "string" || !obj.sectionId.trim()) return { ok: false, error: "sectionId is required." };
     if (typeof obj.mediaId !== "string" || !obj.mediaId.trim()) return { ok: false, error: "mediaId is required." };
+    if (obj.sortOrder !== undefined && (typeof obj.sortOrder !== "number" || !Number.isInteger(obj.sortOrder) || obj.sortOrder < 0)) return { ok: false, error: "sortOrder must be a non-negative integer." };
   } else if (action === "gallery_item.update") {
     if (typeof obj.id !== "string" || !obj.id.trim()) return { ok: false, error: "Item ID is required." };
     if (typeof obj.expectedVersion !== "number" || !Number.isInteger(obj.expectedVersion) || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion must be a positive integer." };
     if (obj.sectionId !== undefined) return { ok: false, error: "sectionId is immutable." };
     if (obj.mediaId !== undefined) return { ok: false, error: "mediaId is immutable." };
+    if (obj.sortOrder !== undefined && (typeof obj.sortOrder !== "number" || !Number.isInteger(obj.sortOrder) || obj.sortOrder < 0)) return { ok: false, error: "sortOrder must be a non-negative integer." };
   } else if (action === "gallery_item.delete") {
     if (typeof obj.id !== "string" || !obj.id.trim()) return { ok: false, error: "Item ID is required." };
     if (typeof obj.expectedVersion !== "number" || !Number.isInteger(obj.expectedVersion) || obj.expectedVersion < 1) return { ok: false, error: "expectedVersion must be a positive integer." };
@@ -950,9 +961,10 @@ async function applyGallerySectionCreate(payload: Record<string, unknown>, actor
   const slug = clean(payload.slug, 100);
   const name = clean(payload.name, 200);
   const description = clean(payload.description, 1000);
-  const sortOrder = typeof payload.sortOrder === "number" && Number.isInteger(payload.sortOrder) && payload.sortOrder >= 0
-    ? payload.sortOrder
-    : 0;
+  if (typeof payload.sortOrder !== "number" || !Number.isInteger(payload.sortOrder) || payload.sortOrder < 0) {
+    throw new Error("sortOrder must be a non-negative integer.");
+  }
+  const sortOrder = payload.sortOrder;
 
   if (!slug || !name) throw new Error("Section slug and name are required.");
 
@@ -1015,13 +1027,17 @@ async function applyGallerySectionUpdate(payload: Record<string, unknown>, actor
     binds.push(clean(payload.description, 1000));
   }
   if (payload.sortOrder !== undefined) {
-    const sortOrder = typeof payload.sortOrder === "number" && Number.isInteger(payload.sortOrder) && payload.sortOrder >= 0 ? payload.sortOrder : 0;
+    if (typeof payload.sortOrder !== "number" || !Number.isInteger(payload.sortOrder) || payload.sortOrder < 0) {
+      throw new Error("sortOrder must be a non-negative integer.");
+    }
     updates.push("sort_order = ?");
-    binds.push(sortOrder);
+    binds.push(payload.sortOrder);
   }
-  if (payload.lifecycleStatus !== undefined) {
+
+  const targetLifecycleStatus = payload.lifecycleStatus !== undefined ? clean(payload.lifecycleStatus, 40) : null;
+  if (targetLifecycleStatus !== null) {
     updates.push("lifecycle_status = ?");
-    binds.push(clean(payload.lifecycleStatus, 40));
+    binds.push(targetLifecycleStatus);
   }
 
   if (updates.length === 0) throw new Error("No editable fields provided.");
@@ -1031,11 +1047,17 @@ async function applyGallerySectionUpdate(payload: Record<string, unknown>, actor
   binds.push(actorEmail);
   updates.push("updated_at = CURRENT_TIMESTAMP");
 
+  const whereClauses = ["id = ?", "version = ?", "deleted_at IS NULL"];
+  const whereBinds: unknown[] = [id, expectedVersion];
+
+  if (targetLifecycleStatus === "PUBLISHED") {
+    whereClauses.push(SECTION_PUBLISHED_GUARD);
+  }
+
   const result = await run(
-    `UPDATE gallery_sections SET ${updates.join(", ")} WHERE id = ? AND version = ? AND deleted_at IS NULL`,
+    `UPDATE gallery_sections SET ${updates.join(", ")} WHERE ${whereClauses.join(" AND ")}`,
     ...binds,
-    id,
-    expectedVersion,
+    ...whereBinds,
   );
   if (result.meta?.changes === 0) throw new Error("Version conflict. The section has been modified since you loaded it.");
 
@@ -1089,9 +1111,10 @@ async function applyGalleryItemCreate(payload: Record<string, unknown>, actorEma
   const titleOverride = clean(payload.titleOverride, 200);
   const altTextOverride = clean(payload.altTextOverride, 300);
   const captionOverride = clean(payload.captionOverride, 1000);
-  const sortOrder = typeof payload.sortOrder === "number" && Number.isInteger(payload.sortOrder) && payload.sortOrder >= 0
-    ? payload.sortOrder
-    : 0;
+  if (typeof payload.sortOrder !== "number" || !Number.isInteger(payload.sortOrder) || payload.sortOrder < 0) {
+    throw new Error("sortOrder must be a non-negative integer.");
+  }
+  const sortOrder = payload.sortOrder;
 
   if (!sectionId || !mediaId) throw new Error("sectionId and mediaId are required.");
 
@@ -1138,8 +1161,13 @@ async function applyGalleryItemUpdate(payload: Record<string, unknown>, actorEma
   if (payload.sectionId !== undefined) throw new Error("sectionId is immutable.");
   if (payload.mediaId !== undefined) throw new Error("mediaId is immutable.");
 
-  const rows = await query<{ id: string; version: number; deleted_at: string | null }>(
-    "SELECT id, version, deleted_at FROM gallery_items WHERE id = ? AND deleted_at IS NULL LIMIT 1",
+  const rows = await query<{
+    id: string; version: number; deleted_at: string | null;
+    media_id: string; storage_type: string; r2_key: string; public_path: string | null;
+    display_r2_key: string | null; display_public_path: string | null;
+    thumbnail_r2_key: string | null; thumbnail_public_path: string | null;
+  }>(
+    "SELECT gi.id, gi.version, gi.deleted_at, gi.media_id, m.storage_type, m.r2_key, m.public_path, m.display_r2_key, m.display_public_path, m.thumbnail_r2_key, m.thumbnail_public_path FROM gallery_items gi INNER JOIN media_assets m ON gi.media_id = m.id WHERE gi.id = ? AND gi.deleted_at IS NULL LIMIT 1",
     id,
   );
   const current = rows.results?.[0];
@@ -1171,13 +1199,17 @@ async function applyGalleryItemUpdate(payload: Record<string, unknown>, actorEma
     binds.push(clean(payload.captionOverride, 1000));
   }
   if (payload.sortOrder !== undefined) {
-    const sortOrder = typeof payload.sortOrder === "number" && Number.isInteger(payload.sortOrder) && payload.sortOrder >= 0 ? payload.sortOrder : 0;
+    if (typeof payload.sortOrder !== "number" || !Number.isInteger(payload.sortOrder) || payload.sortOrder < 0) {
+      throw new Error("sortOrder must be a non-negative integer.");
+    }
     updates.push("sort_order = ?");
-    binds.push(sortOrder);
+    binds.push(payload.sortOrder);
   }
-  if (payload.lifecycleStatus !== undefined) {
+
+  const targetLifecycleStatus = payload.lifecycleStatus !== undefined ? clean(payload.lifecycleStatus, 40) : null;
+  if (targetLifecycleStatus !== null) {
     updates.push("lifecycle_status = ?");
-    binds.push(clean(payload.lifecycleStatus, 40));
+    binds.push(targetLifecycleStatus);
   }
 
   if (updates.length === 0) throw new Error("No editable fields provided.");
@@ -1187,11 +1219,27 @@ async function applyGalleryItemUpdate(payload: Record<string, unknown>, actorEma
   binds.push(actorEmail);
   updates.push("updated_at = CURRENT_TIMESTAMP");
 
+  const whereClauses = ["gi.id = ?", "gi.version = ?", "gi.deleted_at IS NULL"];
+  const whereBinds: unknown[] = [id, expectedVersion];
+
+  if (targetLifecycleStatus === "PUBLISHED") {
+    validateMediaForPublication(current.media_id, {
+      storage_type: current.storage_type,
+      r2_key: current.r2_key,
+      public_path: current.public_path,
+      display_r2_key: current.display_r2_key,
+      display_public_path: current.display_public_path,
+      thumbnail_r2_key: current.thumbnail_r2_key,
+      thumbnail_public_path: current.thumbnail_public_path,
+    });
+    whereClauses.push(ITEM_SECTION_GUARD);
+    whereClauses.push(ITEM_MEDIA_GUARD);
+  }
+
   const result = await run(
-    `UPDATE gallery_items SET ${updates.join(", ")} WHERE id = ? AND version = ? AND deleted_at IS NULL`,
+    `UPDATE gallery_items SET ${updates.join(", ")} WHERE ${whereClauses.join(" AND ")}`,
     ...binds,
-    id,
-    expectedVersion,
+    ...whereBinds,
   );
   if (result.meta?.changes === 0) throw new Error("Version conflict. The item has been modified since you loaded it.");
 
@@ -1262,27 +1310,19 @@ async function applyGalleryItemsReorder(payload: Record<string, unknown>, actorE
     throw new Error("itemOrder must include all active items in the section.");
   }
 
-  for (let i = 0; i < itemOrder.length; i++) {
-    const e = itemOrder[i] as Record<string, unknown>;
+  const orderWithVersions = itemOrder.map((e: Record<string, unknown>) => {
     const itemId = e.id as string;
     const expectedVer = typeof e.version === "number" && Number.isInteger(e.version) && e.version >= 1 ? e.version : 0;
     const currentVersion = activeVersionMap.get(itemId);
     if (expectedVer !== currentVersion) {
-      throw new Error(`Version conflict for item ${itemId}: expected ${expectedVer}, found ${currentVersion}.`);
+      throw new Error("Version conflict. The section has been modified since you loaded it.");
     }
+    return { id: itemId, version: expectedVer };
+  });
 
-    const result = await run(
-      `UPDATE gallery_items SET sort_order = ?, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND section_id = ? AND version = ? AND deleted_at IS NULL`,
-      i,
-      actorEmail,
-      itemId,
-      sectionId,
-      expectedVer,
-    );
-    if (result.meta?.changes === 0) {
-      throw new Error(`Version conflict for item ${itemId}: the item was modified during reorder.`);
-    }
+  const changes = await applyAtomicReorder(sectionId, orderWithVersions, actorEmail);
+  if (changes !== itemOrder.length) {
+    throw new Error("Version conflict. The section has been modified since you loaded it.");
   }
 
   await audit(actorEmail, "GALLERY_ITEMS_REORDERED", "GallerySection", sectionId, `Reordered ${itemOrder.length} items via revision approval`);

@@ -1,7 +1,7 @@
-import { json, query, run, requireAdmin, verifyCsrf, audit, checkRateLimit, getClientIp } from "@/app/lib/server";
+import { json, query, requireAdmin, verifyCsrf, audit, checkRateLimit, getClientIp } from "@/app/lib/server";
 import { executeRoleMutation } from "@/app/lib/mutation-result";
 import { clean } from "@/app/lib/utils";
-import { GALLERY_ITEMS_SELECT, type GalleryItemRow } from "@/app/lib/gallery-v2";
+import { GALLERY_ITEMS_SELECT, applyAtomicReorder, type GalleryItemRow } from "@/app/lib/gallery-v2";
 import { parseVersion } from "@/app/lib/gallery-v2";
 
 type Row = Record<string, unknown>;
@@ -9,12 +9,17 @@ type Row = Record<string, unknown>;
 /* ───────────────────────────────────────────────────────────────────────────
    POST /api/admin/gallery/items/reorder
    Atomic full-section reorder: single CASE/WHEN UPDATE with per-item
-   expectedVersion guard for each row. Supports Staff revision flow.
+   version guard for each row, and pre-validation subquery proving:
+     - active count == payload count
+     - every payload ID belongs to section
+     - every expectedVersion matches
+     - no active item omitted
+   Supports Staff revision flow.
    ─────────────────────────────────────────────────────────────────────────── */
 
 export async function POST(request: Request) {
   try {
-    const auth = await requireAdmin({ role: "SUPER_ADMIN" });
+    const auth = await requireAdmin();
     if (!auth.ok) return json({ error: auth.error }, { status: auth.status });
 
     if (!verifyCsrf(request, auth.session)) {
@@ -77,6 +82,7 @@ export async function POST(request: Request) {
       return json({ error: "itemOrder contains duplicate IDs." }, { status: 400 });
     }
 
+    /* ─── Subquery guard: prove active count, ID ownership, version match, no omission ─── */
     const activeItems = await query<GalleryItemRow>(
       `SELECT ${GALLERY_ITEMS_SELECT} FROM gallery_items WHERE section_id = ? AND deleted_at IS NULL`,
       sectionId,
@@ -90,43 +96,36 @@ export async function POST(request: Request) {
       const itemId = e.id as string;
       if (!activeIdSet.has(itemId)) {
         return json(
-          { error: `Item ${itemId} does not exist in this section or has been deleted.`, outcome: "NOT_FOUND" },
-          { status: 404 },
+          { error: "Incomplete itemOrder.", outcome: "CONFLICT" },
+          { status: 409 },
         );
       }
     }
 
     if (activeIdSet.size !== itemOrder.length) {
       return json(
-        { error: "itemOrder must include all active items in the section.", outcome: "CONFLICT" },
+        { error: "Incomplete itemOrder.", outcome: "CONFLICT" },
         { status: 409 },
       );
     }
 
-    const applyReorder = async () => {
-      for (let i = 0; i < itemOrder.length; i++) {
-        const e = itemOrder[i] as Record<string, unknown>;
-        const itemId = e.id as string;
-        const expectedVer = parseVersion(e.version);
-        const currentVersion = activeVersionMap.get(itemId);
-
-        if (expectedVer !== currentVersion) {
-          throw new Error(`Version conflict for item ${itemId}: expected ${expectedVer}, found ${currentVersion}.`);
-        }
-
-        const result = await run(
-          `UPDATE gallery_items SET sort_order = ?, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
-           WHERE id = ? AND section_id = ? AND version = ? AND deleted_at IS NULL`,
-          i,
-          auth.session.email,
-          itemId,
-          sectionId,
-          expectedVer,
+    for (const entry of itemOrder) {
+      const e = entry as Record<string, unknown>;
+      const itemId = e.id as string;
+      const expectedVer = parseVersion(e.version);
+      const currentVersion = activeVersionMap.get(itemId);
+      if (expectedVer !== currentVersion) {
+        return json(
+          { error: "Version conflict. The section has been modified since you loaded it.", outcome: "CONFLICT" },
+          { status: 409 },
         );
+      }
+    }
 
-        if (result.meta?.changes === 0) {
-          throw new Error(`Version conflict for item ${itemId}: the item was modified during reorder.`);
-        }
+    const applyReorder = async () => {
+      const changes = await applyAtomicReorder(sectionId, itemOrder.map((e: Record<string, unknown>) => ({ id: e.id as string, version: e.version as number })), auth.session.email);
+      if (changes !== itemOrder.length) {
+        throw new Error("Version conflict. The section has been modified since you loaded it.");
       }
       return { outcome: "APPLIED" as const };
     };
@@ -135,7 +134,7 @@ export async function POST(request: Request) {
       isStaff: auth.session.role === "STAFF",
       createRevision: async () => {
         const revId = crypto.randomUUID();
-        await run(
+        await query(
           "INSERT INTO content_revisions (id, entity_type, entity_id, title, payload_json, proposed_by) VALUES (?, ?, ?, ?, ?, ?)",
           revId,
           "gallery_items.reorder",
@@ -147,28 +146,29 @@ export async function POST(request: Request) {
           }),
           auth.session.email,
         );
-        await audit(auth.session.email, "REVISION_CREATED", "GallerySection", sectionId, `Reorder items in section ${sectionId} requires super admin review`);
+        await audit(auth.session.email, "REVISION_CREATED", "GallerySection", sectionId, `Reorder items in section ${sectionId} requires review`);
         return { id: revId, reviewRequired: true };
       },
       applyMutation: applyReorder,
     });
 
-    try {
-      await audit(
-        auth.session.email,
-        "GALLERY_ITEMS_REORDERED",
-        "GallerySection",
-        sectionId,
-        `Reordered ${itemOrder.length} items`,
-      );
-    } catch (auditErr) {
-      console.error("Audit failure after GALLERY_ITEMS_REORDERED:", auditErr);
+    if (result.outcome === "APPLIED") {
+      try {
+        await audit(
+          auth.session.email,
+          "GALLERY_ITEMS_REORDERED",
+          "GallerySection",
+          sectionId,
+          `Reordered ${itemOrder.length} items`,
+        );
+      } catch (auditErr) {
+        console.error("Audit failure after GALLERY_ITEMS_REORDERED:", auditErr);
+      }
     }
 
     return json({ success: true, ...result });
   } catch (error) {
     console.error("Gallery reorder error:", error);
-    const msg = error instanceof Error ? error.message : "Failed to reorder gallery items.";
-    return json({ success: false, outcome: "FAILED", error: msg }, { status: 400 });
+    return json({ success: false, outcome: "FAILED", error: "Failed to reorder gallery items." }, { status: 500 });
   }
 }

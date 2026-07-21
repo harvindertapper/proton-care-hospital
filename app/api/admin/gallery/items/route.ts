@@ -169,7 +169,11 @@ export async function POST(request: Request) {
     const titleOverride = clean(body.titleOverride, GALLERY_FIELD_LENGTHS.titleOverride);
     const altTextOverride = clean(body.altTextOverride, GALLERY_FIELD_LENGTHS.altTextOverride);
     const captionOverride = clean(body.captionOverride, GALLERY_FIELD_LENGTHS.captionOverride);
-    const sortOrder = parseSortOrder(body.sortOrder);
+    const sortOrderResult = parseSortOrder(body.sortOrder);
+    if (!sortOrderResult.ok) {
+      return json({ error: sortOrderResult.error }, { status: 400 });
+    }
+    const sortOrder = sortOrderResult.value;
 
     const itemId = `gallery-item-${crypto.randomUUID().slice(0, 8)}`;
 

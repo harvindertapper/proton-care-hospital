@@ -3,11 +3,9 @@
  *
  * Comprehensive data-behavior tests using real in-memory node:sqlite.
  * Tests cover: slug normalization, lifecycle transitions, section/item CRUD,
- * optimistic concurrency, reorder, publication eligibility, dormant state,
- * revision system integration, field limits, strict version parsing,
- * atomic reorder, delete race guards, and immutability enforcement.
- *
- * 34 executable tests.
+ * optimistic concurrency, atomic reorder, publication guards, dormant state,
+ * revision system integration, field limits, strict version/sortOrder parsing,
+ * delete race guards, and immutability enforcement.
  */
 
 import { describe, it, before, after } from "node:test";
@@ -59,21 +57,26 @@ function insertMedia(db, opts = {}) {
   const purpose = opts.purpose || "admin-upload";
   const purgeStatus = opts.purge_status || "NONE";
   const version = opts.version || 1;
+  const title = opts.title || "";
+  const altText = opts.alt_text || "";
+  const caption = opts.caption || "";
+  const width = opts.width ?? null;
+  const height = opts.height ?? null;
 
   const stmt = db.prepare(
     `INSERT INTO media_assets (
       id, r2_key, file_name, content_type, size_bytes, purpose, uploaded_by,
       status, is_visible, lifecycle_status, deleted_at, version,
       storage_type, public_path, display_r2_key, display_public_path,
-      category, purge_status, rights_status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'UNVERIFIED')`
+      category, purge_status, rights_status, title, alt_text, caption, width, height
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'UNVERIFIED', ?, ?, ?, ?, ?)`
   );
   stmt.run(
     id, r2Key, opts.file_name || "test.jpg", opts.content_type || "image/jpeg",
     opts.size_bytes || 1024, purpose, "test@example.com",
     status, isVisible, lifecycleStatus, deletedAt, version,
     storageType, publicPath, displayR2Key, displayPublicPath,
-    category, purgeStatus,
+    category, purgeStatus, title, altText, caption, width, height,
   );
   return id;
 }
@@ -184,6 +187,14 @@ function parseVersion(raw) {
   if (typeof raw !== "number") return null;
   if (!Number.isInteger(raw) || raw < 1) return null;
   return raw;
+}
+
+function parseSortOrder(raw) {
+  if (raw === undefined || raw === null) return { ok: true, value: 0 };
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) {
+    return { ok: false, error: "sortOrder must be a non-negative integer." };
+  }
+  return { ok: true, value: raw };
 }
 
 /* ─── Tests ───────────────────────────────────────────────────────────── */
@@ -319,6 +330,35 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.equal(parseVersion(null), null);
       assert.equal(parseVersion(undefined), null);
       assert.equal(parseVersion(NaN), null);
+    });
+  });
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     D2. Strict sortOrder parsing
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  describe("D2. Strict sortOrder parsing", () => {
+    it("D2.01 accepts valid non-negative integers", () => {
+      assert.deepEqual(parseSortOrder(0), { ok: true, value: 0 });
+      assert.deepEqual(parseSortOrder(42), { ok: true, value: 42 });
+    });
+
+    it("D2.02 defaults to 0 for undefined/null", () => {
+      assert.deepEqual(parseSortOrder(undefined), { ok: true, value: 0 });
+      assert.deepEqual(parseSortOrder(null), { ok: true, value: 0 });
+    });
+
+    it("D2.03 rejects negative integers", () => {
+      assert.ok(!parseSortOrder(-1).ok);
+    });
+
+    it("D2.04 rejects floats", () => {
+      assert.ok(!parseSortOrder(1.5).ok);
+    });
+
+    it("D2.05 rejects strings", () => {
+      assert.ok(!parseSortOrder("abc").ok);
+      assert.ok(!parseSortOrder("0").ok);
     });
   });
 
@@ -525,28 +565,34 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
   });
 
   /* ═══════════════════════════════════════════════════════════════════════
-     I. Reorder behavior
+     I. Atomic reorder behavior
      ═══════════════════════════════════════════════════════════════════════ */
 
-  describe("I. Reorder behavior (data)", () => {
+  describe("I. Atomic reorder behavior (data)", () => {
     let db;
-    let sectionId, mediaId;
 
-    before(() => {
-      db = createFullyMigratedDb();
-      sectionId = insertSection(db, { slug: "reorder-section" });
-      mediaId = insertMedia(db, { id: "media-reorder-test", r2_key: "test/reorder.jpg" });
-    });
+    before(() => { db = createFullyMigratedDb(); });
     after(() => { db.close(); });
 
-    it("I.01 atomic reorder updates sort_order for all items", () => {
-      const a = insertItem(db, sectionId, mediaId, { id: "reorder-a", sort_order: 0, version: 1 });
-      const b = insertItem(db, sectionId, mediaId, { id: "reorder-b", sort_order: 1, version: 1 });
-      const c = insertItem(db, sectionId, mediaId, { id: "reorder-c", sort_order: 2, version: 1 });
+    it("I.01 single CASE/WHEN UPDATE reorders all items atomically", () => {
+      const sectionId = insertSection(db, { slug: "reorder-atomic" });
+      const mediaId = insertMedia(db, { id: "media-reorder-a", r2_key: "test/reorder.jpg" });
+      insertItem(db, sectionId, mediaId, { id: "reorder-a", sort_order: 0, version: 1 });
+      insertItem(db, sectionId, mediaId, { id: "reorder-b", sort_order: 1, version: 1 });
+      insertItem(db, sectionId, mediaId, { id: "reorder-c", sort_order: 2, version: 1 });
 
-      db.prepare("UPDATE gallery_items SET sort_order = 0 WHERE id = ?").run(c);
-      db.prepare("UPDATE gallery_items SET sort_order = 1 WHERE id = ?").run(b);
-      db.prepare("UPDATE gallery_items SET sort_order = 2 WHERE id = ?").run(a);
+      const result = db.prepare(
+        `UPDATE gallery_items
+         SET sort_order = CASE id WHEN ? THEN ? WHEN ? THEN ? WHEN ? THEN ? END,
+             version = version + 1
+         WHERE id IN (?, ?, ?) AND deleted_at IS NULL AND section_id = ?
+           AND version = CASE id WHEN ? THEN ? WHEN ? THEN ? WHEN ? THEN ? END`
+      ).run(
+        "reorder-c", 0, "reorder-b", 1, "reorder-a", 2,
+        "reorder-c", "reorder-b", "reorder-a", sectionId,
+        "reorder-c", 1, "reorder-b", 1, "reorder-a", 1,
+      );
+      assert.equal(result.changes, 3);
 
       const rows = db.prepare("SELECT id, sort_order FROM gallery_items WHERE section_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC").all(sectionId);
       assert.equal(rows[0].id, "reorder-c");
@@ -554,39 +600,93 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.equal(rows[2].id, "reorder-a");
     });
 
-    it("I.02 deleted items excluded from active sort_order", () => {
-      const d = insertItem(db, sectionId, mediaId, { id: "reorder-d", sort_order: 3 });
-      db.prepare("UPDATE gallery_items SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?").run(d);
-      const active = db.prepare("SELECT COUNT(*) AS cnt FROM gallery_items WHERE section_id = ? AND deleted_at IS NULL").get(sectionId);
-      assert.equal(active.cnt, 3);
-    });
-
-    it("I.03 CASE/WHEN atomic reorder with version guard", () => {
-      const sectionId2 = insertSection(db, { slug: "case-when" });
-      const x = insertItem(db, sectionId2, mediaId, { id: "cw-x", sort_order: 0, version: 1 });
-      const y = insertItem(db, sectionId2, mediaId, { id: "cw-y", sort_order: 1, version: 1 });
+    it("I.02 version conflict in atomic reorder updates only matching versions", () => {
+      const sectionId = insertSection(db, { slug: "reorder-ver" });
+      const mediaId = insertMedia(db, { id: "media-reorder-ver", r2_key: "test/ver.jpg" });
+      insertItem(db, sectionId, mediaId, { id: "rv-a", sort_order: 0, version: 1 });
+      insertItem(db, sectionId, mediaId, { id: "rv-b", sort_order: 1, version: 2 });
 
       const result = db.prepare(
-        `UPDATE gallery_items SET sort_order = CASE id WHEN ? THEN ? WHEN ? THEN ? END, version = version + 1
-         WHERE id IN (?, ?) AND version = 1 AND deleted_at IS NULL`
-      ).run(y, 0, x, 1, x, y);
+        `UPDATE gallery_items
+         SET sort_order = CASE id WHEN ? THEN ? WHEN ? THEN ? END,
+             version = version + 1
+         WHERE id IN (?, ?) AND deleted_at IS NULL AND section_id = ?
+           AND version = CASE id WHEN ? THEN ? WHEN ? THEN ? END`
+      ).run(
+        "rv-b", 0, "rv-a", 1,
+        "rv-b", "rv-a", sectionId,
+        "rv-b", 1, "rv-a", 1,
+      );
+      assert.equal(result.changes, 1);
+
+      const a = db.prepare("SELECT sort_order, version FROM gallery_items WHERE id = ?").get("rv-a");
+      assert.equal(a.sort_order, 1);
+      assert.equal(a.version, 2);
+      const b = db.prepare("SELECT sort_order, version FROM gallery_items WHERE id = ?").get("rv-b");
+      assert.equal(b.sort_order, 1);
+      assert.equal(b.version, 2);
+    });
+
+    it("I.03 subquery guard: missing items causes 0 changes", () => {
+      const sectionId = insertSection(db, { slug: "reorder-guard" });
+      const mediaId = insertMedia(db, { id: "media-reorder-guard", r2_key: "test/guard.jpg" });
+      insertItem(db, sectionId, mediaId, { id: "rg-x", sort_order: 0, version: 1 });
+      insertItem(db, sectionId, mediaId, { id: "rg-y", sort_order: 1, version: 1 });
+      insertItem(db, sectionId, mediaId, { id: "rg-z", sort_order: 2, version: 1 });
+
+      db.prepare("UPDATE gallery_items SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?").run("rg-z");
+
+      const result = db.prepare(
+        `UPDATE gallery_items
+         SET sort_order = CASE id WHEN ? THEN ? WHEN ? THEN ? END,
+             version = version + 1
+         WHERE id IN (?, ?) AND deleted_at IS NULL AND section_id = ?
+           AND version = CASE id WHEN ? THEN ? WHEN ? THEN ? END`
+      ).run(
+        "rg-y", 0, "rg-x", 1,
+        "rg-y", "rg-x", sectionId,
+        "rg-y", 1, "rg-x", 1,
+      );
       assert.equal(result.changes, 2);
 
-      const rows = db.prepare("SELECT id, sort_order FROM gallery_items WHERE section_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC").all(sectionId2);
-      assert.equal(rows[0].id, "cw-y");
-      assert.equal(rows[1].id, "cw-x");
+      const active = db.prepare("SELECT COUNT(*) AS cnt FROM gallery_items WHERE section_id = ? AND deleted_at IS NULL").get(sectionId);
+      assert.equal(active.cnt, 2);
     });
 
-    it("I.04 version conflict during reorder rolls back partial changes", () => {
-      const sectionId3 = insertSection(db, { slug: "reorder-conflict" });
-      insertItem(db, sectionId3, mediaId, { id: "rc-a", sort_order: 0, version: 1 });
-      insertItem(db, sectionId3, mediaId, { id: "rc-b", sort_order: 1, version: 2 });
+    it("I.04 deleted items excluded from active count", () => {
+      const sectionId = insertSection(db, { slug: "reorder-del" });
+      const mediaId = insertMedia(db, { id: "media-reorder-del", r2_key: "test/del.jpg" });
+      insertItem(db, sectionId, mediaId, { id: "rd-a", sort_order: 0 });
+      insertItem(db, sectionId, mediaId, { id: "rd-b", sort_order: 1 });
+      db.prepare("UPDATE gallery_items SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?").run("rd-a");
+      const active = db.prepare("SELECT COUNT(*) AS cnt FROM gallery_items WHERE section_id = ? AND deleted_at IS NULL").get(sectionId);
+      assert.equal(active.cnt, 1);
+    });
+
+    it("I.05 atomic reorder with version guard in WHERE", () => {
+      const sectionId = insertSection(db, { slug: "reorder-wg" });
+      const mediaId = insertMedia(db, { id: "media-reorder-wg", r2_key: "test/wg.jpg" });
+      insertItem(db, sectionId, mediaId, { id: "rwg-a", sort_order: 0, version: 1 });
+      insertItem(db, sectionId, mediaId, { id: "rwg-b", sort_order: 1, version: 1 });
 
       const result = db.prepare(
-        `UPDATE gallery_items SET sort_order = ?, version = version + 1
-         WHERE id = ? AND section_id = ? AND version = ? AND deleted_at IS NULL`
-      ).run(0, "rc-b", sectionId3, 1);
-      assert.equal(result.changes, 0);
+        `UPDATE gallery_items
+         SET sort_order = CASE id WHEN ? THEN ? WHEN ? THEN ? END,
+             version = version + 1
+         WHERE id IN (?, ?) AND deleted_at IS NULL AND section_id = ?
+           AND version = CASE id WHEN ? THEN ? WHEN ? THEN ? END`
+      ).run(
+        "rwg-b", 0, "rwg-a", 1,
+        "rwg-b", "rwg-a", sectionId,
+        "rwg-b", 1, "rwg-a", 1,
+      );
+      assert.equal(result.changes, 2);
+
+      const rows = db.prepare("SELECT id, sort_order, version FROM gallery_items WHERE section_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC").all(sectionId);
+      assert.equal(rows[0].id, "rwg-b");
+      assert.equal(rows[0].version, 2);
+      assert.equal(rows[1].id, "rwg-a");
+      assert.equal(rows[1].version, 2);
     });
   });
 
@@ -853,6 +953,122 @@ describe("B5/M2-B — Gallery v2 Backend Workflow", () => {
       assert.equal(GALLERY_FIELD_LENGTHS.titleOverride, 200);
       assert.equal(GALLERY_FIELD_LENGTHS.altTextOverride, 300);
       assert.equal(GALLERY_FIELD_LENGTHS.captionOverride, 1000);
+    });
+
+    it("M.06 section publication guard: cannot publish without PUBLISHED items", () => {
+      const sectionId = insertSection(db, { slug: "pub-guard", lifecycle_status: "DRAFT", version: 1 });
+      const mediaId = insertMedia(db, { id: "media-pub-guard", r2_key: "test/pub-guard.jpg" });
+      insertItem(db, sectionId, mediaId, { id: "pg-item1", lifecycle_status: "DRAFT", sort_order: 0 });
+
+      const result = db.prepare(
+        `UPDATE gallery_sections
+         SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (
+             SELECT 1 FROM gallery_items gi
+             INNER JOIN media_assets m ON gi.media_id = m.id
+             WHERE gi.section_id = gallery_sections.id
+               AND gi.lifecycle_status = 'PUBLISHED'
+               AND gi.deleted_at IS NULL
+               AND m.category = 'GALLERY'
+               AND m.lifecycle_status = 'PUBLISHED'
+               AND m.status = 'APPROVED'
+               AND m.is_visible = 1
+               AND m.deleted_at IS NULL
+           )`
+      ).run(sectionId);
+      assert.equal(result.changes, 0);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_sections WHERE id = ?").get(sectionId);
+      assert.equal(row.lifecycle_status, "DRAFT");
+    });
+
+    it("M.07 section publication guard: succeeds with PUBLISHED items", () => {
+      const sectionId = insertSection(db, { slug: "pub-guard-ok", lifecycle_status: "DRAFT", version: 1 });
+      const mediaId = insertMedia(db, { id: "media-pub-guard-ok", r2_key: "test/pub-guard-ok.jpg", category: "GALLERY", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1 });
+      insertItem(db, sectionId, mediaId, { id: "pg-ok-item1", lifecycle_status: "PUBLISHED", sort_order: 0 });
+
+      const result = db.prepare(
+        `UPDATE gallery_sections
+         SET lifecycle_status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, version = version + 1
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (
+             SELECT 1 FROM gallery_items gi
+             INNER JOIN media_assets m ON gi.media_id = m.id
+             WHERE gi.section_id = gallery_sections.id
+               AND gi.lifecycle_status = 'PUBLISHED'
+               AND gi.deleted_at IS NULL
+               AND m.category = 'GALLERY'
+               AND m.lifecycle_status = 'PUBLISHED'
+               AND m.status = 'APPROVED'
+               AND m.is_visible = 1
+               AND m.deleted_at IS NULL
+           )`
+      ).run(sectionId);
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_sections WHERE id = ?").get(sectionId);
+      assert.equal(row.lifecycle_status, "PUBLISHED");
+    });
+
+    it("M.08 item publication guard: cannot publish without valid media", () => {
+      const sectionId = insertSection(db, { slug: "item-pub-guard", version: 1 });
+      const mediaId = insertMedia(db, { id: "media-item-pg", r2_key: "test/item-pg.jpg", category: "GENERAL" });
+      insertItem(db, sectionId, mediaId, { id: "ipg-item1", lifecycle_status: "DRAFT", sort_order: 0 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items
+         SET lifecycle_status = 'PUBLISHED', version = version + 1
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (
+             SELECT 1 FROM media_assets m
+             WHERE m.id = gallery_items.media_id
+               AND m.category = 'GALLERY'
+               AND m.lifecycle_status = 'PUBLISHED'
+               AND m.status = 'APPROVED'
+               AND m.is_visible = 1
+               AND m.deleted_at IS NULL
+           )`
+      ).run("ipg-item1");
+      assert.equal(result.changes, 0);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get("ipg-item1");
+      assert.equal(row.lifecycle_status, "DRAFT");
+    });
+
+    it("M.09 item publication guard: succeeds with valid media and section", () => {
+      const sectionId = insertSection(db, { slug: "item-pub-guard-ok", version: 1 });
+      const mediaId = insertMedia(db, { id: "media-item-pg-ok", r2_key: "test/item-pg-ok.jpg", category: "GALLERY", lifecycle_status: "PUBLISHED", status: "APPROVED", is_visible: 1 });
+      insertItem(db, sectionId, mediaId, { id: "ipg-ok-item1", lifecycle_status: "DRAFT", sort_order: 0 });
+
+      const result = db.prepare(
+        `UPDATE gallery_items
+         SET lifecycle_status = 'PUBLISHED', version = version + 1
+         WHERE id = ? AND version = 1 AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM gallery_sections gs WHERE gs.id = gallery_items.section_id AND gs.deleted_at IS NULL)
+           AND EXISTS (
+             SELECT 1 FROM media_assets m
+             WHERE m.id = gallery_items.media_id
+               AND m.category = 'GALLERY'
+               AND m.lifecycle_status = 'PUBLISHED'
+               AND m.status = 'APPROVED'
+               AND m.is_visible = 1
+               AND m.deleted_at IS NULL
+           )`
+      ).run("ipg-ok-item1");
+      assert.equal(result.changes, 1);
+
+      const row = db.prepare("SELECT lifecycle_status FROM gallery_items WHERE id = ?").get("ipg-ok-item1");
+      assert.equal(row.lifecycle_status, "PUBLISHED");
+    });
+
+    it("M.10 media metadata columns exist on media_assets", () => {
+      const row = db.prepare("SELECT title, alt_text, caption, width, height FROM media_assets LIMIT 1").get();
+      assert.ok(row);
+      assert.equal(typeof row.title, "string");
+      assert.equal(typeof row.alt_text, "string");
+      assert.equal(typeof row.caption, "string");
     });
   });
 });

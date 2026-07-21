@@ -3,10 +3,11 @@
  *
  * Pure runtime-safe TypeScript — no Node-only, React, or test imports.
  * Handles slug normalization, lifecycle validation, pagination parsing,
- * DTO mapping, and query helpers for gallery sections and items.
+ * DTO mapping, query helpers, atomic reorder, and publication guards
+ * for gallery sections and items.
  */
 
-import { query } from "./server";
+import { query, run } from "./server";
 import { slugify, clean } from "./utils";
 import {
   resolveMediaUrls,
@@ -138,9 +139,9 @@ export type AdminGalleryItemDto = {
   updatedAt: string;
   publishedAt: string | null;
   deletedAt: string | null;
-  originalUrl: string | null;
-  displayUrl: string | null;
-  thumbnailUrl: string | null;
+  originalUrl: string;
+  displayUrl: string;
+  thumbnailUrl: string;
 };
 
 export type PublicGallerySectionDto = {
@@ -157,9 +158,11 @@ export type PublicGalleryItemDto = {
   title: string;
   altText: string;
   caption: string;
-  originalUrl: string | null;
-  displayUrl: string | null;
-  thumbnailUrl: string | null;
+  width: number | null;
+  height: number | null;
+  originalUrl: string;
+  displayUrl: string;
+  thumbnailUrl: string;
 };
 
 /* ───────────────────────────────────────────────────────────────────────────
@@ -190,9 +193,12 @@ export function parseGalleryOffset(raw: unknown): { ok: true; value: number } | 
   return { ok: true, value: n };
 }
 
-export function parseSortOrder(raw: unknown): number {
-  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 0) return raw;
-  return 0;
+export function parseSortOrder(raw: unknown): { ok: true; value: number } | { ok: false; error: string } {
+  if (raw === undefined || raw === null) return { ok: true, value: 0 };
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) {
+    return { ok: false, error: "sortOrder must be a non-negative integer." };
+  }
+  return { ok: true, value: raw };
 }
 
 export function parseVersion(raw: unknown): number | null {
@@ -237,10 +243,15 @@ export type ItemRowWithMedia = GalleryItemRow & {
   display_public_path: string | null;
   thumbnail_r2_key: string | null;
   thumbnail_public_path: string | null;
+  title: string;
+  alt_text: string;
+  caption: string;
+  width: number | null;
+  height: number | null;
 };
 
-export function toItemAdminDto(row: ItemRowWithMedia): AdminGalleryItemDto {
-  const mediaRow = {
+function mediaRowFromItem(row: ItemRowWithMedia) {
+  return {
     storage_type: row.storage_type,
     r2_key: row.r2_key,
     public_path: row.public_path,
@@ -249,8 +260,13 @@ export function toItemAdminDto(row: ItemRowWithMedia): AdminGalleryItemDto {
     thumbnail_r2_key: row.thumbnail_r2_key,
     thumbnail_public_path: row.thumbnail_public_path,
   };
+}
 
-  const urlResult = resolveMediaUrls(mediaRow);
+export function toItemAdminDto(row: ItemRowWithMedia): AdminGalleryItemDto {
+  const urlResult = resolveMediaUrls(mediaRowFromItem(row));
+  if (!urlResult.ok) {
+    throw new Error(`Failed to resolve media URLs for item ${row.id} (media ${row.media_id}): ${urlResult.error}`);
+  }
 
   return {
     id: row.id,
@@ -269,34 +285,29 @@ export function toItemAdminDto(row: ItemRowWithMedia): AdminGalleryItemDto {
     updatedAt: row.updated_at,
     publishedAt: row.published_at,
     deletedAt: row.deleted_at,
-    originalUrl: urlResult.ok ? urlResult.urls.originalUrl : null,
-    displayUrl: urlResult.ok ? urlResult.urls.displayUrl : null,
-    thumbnailUrl: urlResult.ok ? urlResult.urls.thumbnailUrl : null,
+    originalUrl: urlResult.urls.originalUrl!,
+    displayUrl: urlResult.urls.displayUrl!,
+    thumbnailUrl: urlResult.urls.thumbnailUrl!,
   };
 }
 
 export function toItemPublicDto(row: ItemRowWithMedia): PublicGalleryItemDto {
-  const mediaRow = {
-    storage_type: row.storage_type,
-    r2_key: row.r2_key,
-    public_path: row.public_path,
-    display_r2_key: row.display_r2_key,
-    display_public_path: row.display_public_path,
-    thumbnail_r2_key: row.thumbnail_r2_key,
-    thumbnail_public_path: row.thumbnail_public_path,
-  };
-
-  const urlResult = resolveMediaUrls(mediaRow);
+  const urlResult = resolveMediaUrls(mediaRowFromItem(row));
+  if (!urlResult.ok) {
+    throw new Error(`Failed to resolve media URLs for item ${row.id} (media ${row.media_id}): ${urlResult.error}`);
+  }
 
   return {
     slug: row.slot_key || row.id,
     slotKey: row.slot_key,
-    title: row.title_override,
-    altText: row.alt_text_override,
-    caption: row.caption_override,
-    originalUrl: urlResult.ok ? urlResult.urls.originalUrl : null,
-    displayUrl: urlResult.ok ? urlResult.urls.displayUrl : null,
-    thumbnailUrl: urlResult.ok ? urlResult.urls.thumbnailUrl : null,
+    title: row.title_override || row.title || "",
+    altText: row.alt_text_override || row.alt_text || "",
+    caption: row.caption_override || row.caption || "",
+    width: row.width ?? null,
+    height: row.height ?? null,
+    originalUrl: urlResult.urls.originalUrl!,
+    displayUrl: urlResult.urls.displayUrl!,
+    thumbnailUrl: urlResult.urls.thumbnailUrl!,
   };
 }
 
@@ -326,6 +337,11 @@ const ITEM_WITH_MEDIA_COLUMNS = [
   "m.display_public_path",
   "m.thumbnail_r2_key",
   "m.thumbnail_public_path",
+  "m.title",
+  "m.alt_text",
+  "m.caption",
+  "m.width",
+  "m.height",
 ].join(", ");
 
 export const ITEM_WITH_MEDIA_SELECT = ITEM_WITH_MEDIA_COLUMNS;
@@ -416,4 +432,130 @@ export function publishedAtSql(
     return "published_at = NULL";
   }
   return null;
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Publication guard SQL fragments
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Section publication guard: requires at least one active PUBLISHED gallery item
+ * with a PUBLISHED/APPROVED/visible GALLERY-category media asset.
+ * Appended to WHERE when transitioning lifecycle_status → PUBLISHED.
+ */
+export const SECTION_PUBLISHED_GUARD = `EXISTS (
+  SELECT 1 FROM gallery_items gi
+  INNER JOIN media_assets m ON gi.media_id = m.id
+  WHERE gi.section_id = gallery_sections.id
+    AND gi.lifecycle_status = 'PUBLISHED'
+    AND gi.deleted_at IS NULL
+    AND m.category = 'GALLERY'
+    AND m.lifecycle_status = 'PUBLISHED'
+    AND m.status = 'APPROVED'
+    AND m.is_visible = 1
+    AND m.deleted_at IS NULL
+)`;
+
+/**
+ * Item publication guard (section): parent section must exist and not be deleted.
+ * Item publication guard (media): media must be GALLERY, PUBLISHED, APPROVED, visible, not deleted.
+ * Appended to WHERE when transitioning lifecycle_status → PUBLISHED.
+ */
+export const ITEM_SECTION_GUARD = `EXISTS (
+  SELECT 1 FROM gallery_sections gs
+  WHERE gs.id = gallery_items.section_id
+    AND gs.deleted_at IS NULL
+)`;
+
+export const ITEM_MEDIA_GUARD = `EXISTS (
+  SELECT 1 FROM media_assets m
+  WHERE m.id = gallery_items.media_id
+    AND m.category = 'GALLERY'
+    AND m.lifecycle_status = 'PUBLISHED'
+    AND m.status = 'APPROVED'
+    AND m.is_visible = 1
+    AND m.deleted_at IS NULL
+)`;
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Atomic reorder helper
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Single-statement atomic reorder using CASE id WHEN ... THEN ... END.
+ * Every item's version is checked in the same WHERE clause.
+ * Pre-conditions (caller must verify BEFORE calling):
+ *   - Section exists and is not deleted
+ *   - Every payload ID belongs to this section and is active
+ *   - Every expectedVersion matches the live version
+ *   - payload count === active item count (no item omitted)
+ *
+ * Returns the number of rows actually changed. Caller must verify
+ * changes === itemOrder.length to detect concurrent modification.
+ */
+export async function applyAtomicReorder(
+  sectionId: string,
+  itemOrder: Array<{ id: string; version: number }>,
+  actorEmail: string,
+): Promise<number> {
+  if (itemOrder.length === 0) return 0;
+
+  const ids = itemOrder.map((e) => e.id);
+
+  const sortCaseParts = itemOrder.map(() => "WHEN ? THEN ?");
+  const sortCaseBinds = itemOrder.flatMap((e, i) => [e.id, i]);
+
+  const versionCaseParts = itemOrder.map(() => "WHEN ? THEN ?");
+  const versionCaseBinds = itemOrder.flatMap((e) => [e.id, e.version]);
+
+  const inPlaceholders = ids.map(() => "?").join(", ");
+
+  const sql = `
+    UPDATE gallery_items
+    SET sort_order = CASE id ${sortCaseParts.join(" ")} END,
+        version = version + 1,
+        updated_by = ?,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id IN (${inPlaceholders})
+      AND deleted_at IS NULL
+      AND section_id = ?
+      AND version = CASE id ${versionCaseParts.join(" ")} END
+  `;
+
+  const binds = [
+    ...sortCaseBinds,
+    actorEmail,
+    ...ids,
+    sectionId,
+    ...versionCaseBinds,
+  ];
+
+  const result = await run(sql, ...binds);
+  return result.meta?.changes ?? 0;
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Publication guard validation (application-level for media URLs)
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Validates that a media asset's storage locator resolves correctly.
+ * Throws with a descriptive message if resolution fails.
+ */
+export function validateMediaForPublication(
+  mediaId: string,
+  row: {
+    storage_type: string;
+    r2_key: string;
+    public_path: string | null;
+    display_r2_key: string | null;
+    display_public_path: string | null;
+    thumbnail_r2_key: string | null;
+    thumbnail_public_path: string | null;
+  },
+): void {
+  const result = resolveMediaUrls(row);
+  if (!result.ok) {
+    throw new Error(`Media ${mediaId} is not eligible for publication: ${result.error}`);
+  }
 }

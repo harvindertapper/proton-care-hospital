@@ -14,7 +14,10 @@ import {
    Marker-first: returns { enabled: false } when gallery_v2_initialized ≠ '1'.
    When enabled, returns only PUBLISHED sections with PUBLISHED items from
    GALLERY-category media that are APPROVED and visible.
-   Falls back to metadata if URL resolution fails.
+   Public item DTO includes media title, alt_text, caption, width, height
+   (fallback to media metadata when override is blank).
+   500 on URL resolution failure (log safe IDs + reason).
+   No null URLs, no silent omission.
    ─────────────────────────────────────────────────────────────────────────── */
 
 export async function GET(_request: Request) {

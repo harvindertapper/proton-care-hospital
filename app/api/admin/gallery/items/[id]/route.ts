@@ -1,11 +1,16 @@
 import { json, query, run, requireAdmin, verifyCsrf, audit, checkRateLimit, getClientIp } from "@/app/lib/server";
+import { executeRoleMutation } from "@/app/lib/mutation-result";
 import { clean } from "@/app/lib/utils";
 import {
   ITEM_WITH_MEDIA_SELECT,
   parseVersion,
+  parseSortOrder,
   isSlotKeyAvailable,
   toItemAdminDto,
   publishedAtSql,
+  ITEM_SECTION_GUARD,
+  ITEM_MEDIA_GUARD,
+  validateMediaForPublication,
   GALLERY_FIELD_LENGTHS,
   type ItemRowWithMedia,
 } from "@/app/lib/gallery-v2";
@@ -16,6 +21,12 @@ type Row = Record<string, unknown>;
 /* ───────────────────────────────────────────────────────────────────────────
    PATCH /api/admin/gallery/items/[id]
    sectionId and mediaId are immutable — return 400 if either is attempted.
+   Staff → create revision (PENDING_APPROVAL); SUPER_ADMIN → direct mutation.
+   Item publication guard: when transitioning to PUBLISHED, the same-statement
+   UPDATE WHERE includes EXISTS for parent section (exists, not deleted) and
+   media (GALLERY, PUBLISHED, APPROVED, visible, not deleted).
+   Validates media storage locator via resolveMediaUrls().
+   Strict sortOrder: reject invalid with 400 (never silently convert to 0).
    ─────────────────────────────────────────────────────────────────────────── */
 
 export async function PATCH(
@@ -23,7 +34,7 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const auth = await requireAdmin({ role: "SUPER_ADMIN" });
+    const auth = await requireAdmin();
     if (!auth.ok) return json({ error: auth.error }, { status: auth.status });
 
     if (!verifyCsrf(request, auth.session)) {
@@ -112,27 +123,28 @@ export async function PATCH(
     }
 
     if (body.sortOrder !== undefined) {
-      const sortOrder = typeof body.sortOrder === "number" && Number.isInteger(body.sortOrder) && body.sortOrder >= 0
-        ? body.sortOrder
-        : 0;
+      const sortOrderResult = parseSortOrder(body.sortOrder);
+      if (!sortOrderResult.ok) {
+        return json({ error: sortOrderResult.error }, { status: 400 });
+      }
       updates.push("sort_order = ?");
-      binds.push(sortOrder);
+      binds.push(sortOrderResult.value);
     }
 
-    if (body.lifecycleStatus !== undefined) {
-      const ls = clean(body.lifecycleStatus, 40);
-      if (!isValidLifecycleStatus(ls)) {
+    const targetLifecycleStatus = body.lifecycleStatus !== undefined ? clean(body.lifecycleStatus, 40) : null;
+    if (targetLifecycleStatus !== null) {
+      if (!isValidLifecycleStatus(targetLifecycleStatus)) {
         return json({ error: "Invalid lifecycleStatus." }, { status: 400 });
       }
       updates.push("lifecycle_status = ?");
-      binds.push(ls);
+      binds.push(targetLifecycleStatus);
     }
 
     if (updates.length === 0) {
       return json({ error: "No editable fields provided." }, { status: 400 });
     }
 
-    const effectiveStatus = (body.lifecycleStatus as string) || current.lifecycle_status;
+    const effectiveStatus = targetLifecycleStatus || current.lifecycle_status;
     const pubSql = publishedAtSql(current.lifecycle_status, effectiveStatus, current.published_at);
     if (pubSql) {
       updates.push(pubSql);
@@ -143,8 +155,25 @@ export async function PATCH(
     binds.push(auth.session.email);
     updates.push("updated_at = CURRENT_TIMESTAMP");
 
-    const updateSql = `UPDATE gallery_items SET ${updates.join(", ")} WHERE id = ? AND version = ? AND deleted_at IS NULL`;
-    const result = await run(updateSql, ...binds, id, expectedVersion);
+    const whereClauses = ["gi.id = ?", "gi.version = ?", "gi.deleted_at IS NULL"];
+    const whereBinds: unknown[] = [id, expectedVersion];
+
+    if (targetLifecycleStatus === "PUBLISHED") {
+      validateMediaForPublication(current.media_id, {
+        storage_type: current.storage_type,
+        r2_key: current.r2_key,
+        public_path: current.public_path,
+        display_r2_key: current.display_r2_key,
+        display_public_path: current.display_public_path,
+        thumbnail_r2_key: current.thumbnail_r2_key,
+        thumbnail_public_path: current.thumbnail_public_path,
+      });
+      whereClauses.push(ITEM_SECTION_GUARD);
+      whereClauses.push(ITEM_MEDIA_GUARD);
+    }
+
+    const updateSql = `UPDATE gallery_items SET ${updates.join(", ")} WHERE ${whereClauses.join(" AND ")}`;
+    const result = await run(updateSql, ...binds, ...whereBinds);
 
     if (result.meta?.changes === 0) {
       const recheck = await query<Row>(
@@ -155,8 +184,14 @@ export async function PATCH(
       if (!recheckRow || recheckRow.deleted_at) {
         return json({ error: "Gallery item not found.", outcome: "NOT_FOUND" }, { status: 404 });
       }
+      if (recheckRow.version !== expectedVersion) {
+        return json(
+          { error: "Version conflict. The item has been modified since you loaded it.", outcome: "CONFLICT" },
+          { status: 409 },
+        );
+      }
       return json(
-        { error: "Version conflict. The item has been modified since you loaded it.", outcome: "CONFLICT" },
+        { error: "Item is not eligible for publication.", outcome: "CONFLICT" },
         { status: 409 },
       );
     }
@@ -194,6 +229,7 @@ export async function PATCH(
 /* ───────────────────────────────────────────────────────────────────────────
    DELETE /api/admin/gallery/items/[id]
    Logical deletion only (set deleted_at).
+   Staff → create revision; SUPER_ADMIN → direct mutation.
    ─────────────────────────────────────────────────────────────────────────── */
 
 export async function DELETE(
@@ -201,7 +237,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const auth = await requireAdmin({ role: "SUPER_ADMIN" });
+    const auth = await requireAdmin();
     if (!auth.ok) return json({ error: auth.error }, { status: auth.status });
 
     if (!verifyCsrf(request, auth.session)) {
@@ -244,33 +280,53 @@ export async function DELETE(
       );
     }
 
-    const result = await run(
-      `UPDATE gallery_items SET deleted_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND version = ? AND deleted_at IS NULL`,
-      auth.session.email,
-      id,
-      expectedVersion,
-    );
-
-    if (result.meta?.changes === 0) {
-      return json(
-        { error: "Version conflict. The item has been modified since you loaded it.", outcome: "CONFLICT" },
-        { status: 409 },
-      );
-    }
-
-    try {
-      await audit(
+    const applyDelete = async () => {
+      const result = await run(
+        `UPDATE gallery_items SET deleted_at = CURRENT_TIMESTAMP, version = version + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND version = ? AND deleted_at IS NULL`,
         auth.session.email,
-        "GALLERY_ITEM_DELETED",
-        "GalleryItem",
         id,
-        `Deleted gallery item with slot_key=${row.slot_key}`,
+        expectedVersion,
       );
-    } catch (auditErr) {
-      console.error("Audit failure after GALLERY_ITEM_DELETED:", auditErr);
-    }
 
-    return json({ success: true, outcome: "APPLIED" });
+      if (result.meta?.changes === 0) {
+        throw new Error("Version conflict. The item has been modified since you loaded it.");
+      }
+
+      try {
+        await audit(
+          auth.session.email,
+          "GALLERY_ITEM_DELETED",
+          "GalleryItem",
+          id,
+          `Deleted gallery item with slot_key=${row.slot_key}`,
+        );
+      } catch (auditErr) {
+        console.error("Audit failure after GALLERY_ITEM_DELETED:", auditErr);
+      }
+
+      return { outcome: "APPLIED" as const };
+    };
+
+    const result = await executeRoleMutation({
+      isStaff: auth.session.role === "STAFF",
+      createRevision: async () => {
+        const revId = crypto.randomUUID();
+        await query(
+          "INSERT INTO content_revisions (id, entity_type, entity_id, title, payload_json, proposed_by) VALUES (?, ?, ?, ?, ?, ?)",
+          revId,
+          "gallery_item.delete",
+          id,
+          `Delete gallery item ${id}`,
+          JSON.stringify({ action: "gallery_item.delete", payload: { id, expectedVersion } }),
+          auth.session.email,
+        );
+        await audit(auth.session.email, "REVISION_CREATED", "GalleryItem", id, `Delete gallery item requires review`);
+        return { id: revId, reviewRequired: true };
+      },
+      applyMutation: applyDelete,
+    });
+
+    return json({ success: true, ...result });
   } catch (error) {
     console.error("Gallery item DELETE error:", error);
     return json({ error: "Failed to delete gallery item." }, { status: 500 });

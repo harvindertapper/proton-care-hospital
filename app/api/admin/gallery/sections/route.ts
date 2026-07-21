@@ -131,7 +131,11 @@ export async function POST(request: Request) {
 
     const description = clean(body.description, GALLERY_FIELD_LENGTHS.description);
 
-    const sortOrder = parseSortOrder(body.sortOrder);
+    const sortOrderResult = parseSortOrder(body.sortOrder);
+    if (!sortOrderResult.ok) {
+      return json({ error: sortOrderResult.error }, { status: 400 });
+    }
+    const sortOrder = sortOrderResult.value;
 
     const slugAvailable = await isSectionSlugAvailable(slug);
     if (!slugAvailable) {
