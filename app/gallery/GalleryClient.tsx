@@ -14,6 +14,27 @@ type ApiGalleryAsset = {
   r2_key: string;
 };
 
+type GalleryV2Section = {
+  slug: string;
+  name: string;
+  description: string;
+  sortOrder: number;
+  items: GalleryV2Item[];
+};
+
+type GalleryV2Item = {
+  slug: string;
+  slotKey: string | null;
+  title: string;
+  altText: string;
+  caption: string;
+  width: number | null;
+  height: number | null;
+  originalUrl: string;
+  displayUrl: string;
+  thumbnailUrl: string;
+};
+
 const presetAssets: GalleryAsset[] = [
   {
     url: "/assets/hospital/front-exterior-hero.webp",
@@ -57,9 +78,35 @@ export default function GalleryClient() {
   const [loading, setLoading] = useState(true);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [triggerEl, setTriggerEl] = useState<HTMLElement | null>(null);
+  const [sections, setSections] = useState<GalleryV2Section[]>([]);
+  const [useV2, setUseV2] = useState(false);
 
   useEffect(() => {
     async function fetchGallery() {
+      try {
+        const v2Res = await fetch("/api/gallery/v2");
+        const v2Data = (await v2Res.json()) as { success?: boolean; enabled?: boolean; sections?: GalleryV2Section[] };
+        if (v2Data.success && v2Data.enabled && v2Data.sections && v2Data.sections.length > 0) {
+          setSections(v2Data.sections);
+          setUseV2(true);
+          const allAssets: GalleryAsset[] = [];
+          for (const section of v2Data.sections) {
+            for (const item of section.items) {
+              allAssets.push({
+                url: item.displayUrl || item.originalUrl,
+                title: item.title,
+                note: item.caption,
+              });
+            }
+          }
+          setAssets(allAssets);
+          setLoading(false);
+          return;
+        }
+      } catch {
+        // v2 failed, fall through to legacy
+      }
+
       try {
         const res = await fetch("/api/gallery");
         const data = (await res.json()) as { success?: boolean; assets?: ApiGalleryAsset[] };
@@ -140,6 +187,70 @@ export default function GalleryClient() {
             ))}
           </div>
         ) : (
+          useV2 && sections.length > 0 ? (
+            sections.map((section) => {
+              const sectionGlobalOffset = assets.findIndex((a) =>
+                section.items.some((item) => (item.displayUrl || item.originalUrl) === a.url)
+              );
+              const offset = sectionGlobalOffset >= 0 ? sectionGlobalOffset : 0;
+              return (
+                <div key={section.slug} className="mb-10">
+                  <h3 className="text-xl font-bold text-slate-800 mb-1">{section.name}</h3>
+                  {section.description && <p className="text-slate-500 text-sm mb-4">{section.description}</p>}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+                    {section.items.map((item, idx) => {
+                      const globalIdx = offset + idx;
+                      const itemUrl = item.displayUrl || item.originalUrl;
+                      return (
+                        <article
+                          key={item.slug + idx}
+                          className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between group"
+                        >
+                          <div
+                            id={`thumb-v2-${section.slug}-${idx}`}
+                            tabIndex={0}
+                            role="button"
+                            aria-label={`Open lightbox zoom view for ${item.title}`}
+                            onClick={() => {
+                              setTriggerEl(document.getElementById(`thumb-v2-${section.slug}-${idx}`));
+                              setActiveIndex(globalIdx);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setTriggerEl(document.getElementById(`thumb-v2-${section.slug}-${idx}`));
+                                setActiveIndex(globalIdx);
+                              }
+                            }}
+                            className="relative overflow-hidden rounded-xl h-56 w-full bg-slate-100 mb-4 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+                          >
+                            <Image
+                              src={itemUrl}
+                              alt={item.altText || item.title}
+                              width={item.width || 400}
+                              height={item.height || 300}
+                              priority={globalIdx < 3}
+                              className="object-cover w-full h-full rounded-xl transition-transform duration-500 group-hover:scale-105"
+                              unoptimized
+                            />
+                            <div className="absolute inset-0 bg-slate-900/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
+                              <div className="bg-white/95 p-3 rounded-full shadow-lg text-slate-800 transform scale-90 group-hover:scale-100 transition-transform duration-300">
+                                <ZoomIn size={20} />
+                              </div>
+                            </div>
+                          </div>
+                          <div>
+                            <h3 className="font-semibold text-slate-800 text-lg mb-1">{item.title}</h3>
+                            <p className="text-slate-500 text-sm line-clamp-2">{item.caption}</p>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })
+          ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
             {assets.map((asset, idx) => (
               <article
@@ -186,6 +297,7 @@ export default function GalleryClient() {
               </article>
             ))}
           </div>
+          )
         )}
       </div>
 

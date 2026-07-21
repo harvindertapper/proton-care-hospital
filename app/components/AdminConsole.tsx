@@ -18,6 +18,8 @@ import type { Department, Doctor } from "@/app/lib/data";
 import { slugify } from "@/app/lib/utils";
 import { resolveDoctorManagerRows } from "@/app/lib/doctor-admin.ts";
 import { computeCropPlan } from "@/app/lib/media-policy.ts";
+import { MediaLibraryPanel } from "@/app/components/admin/MediaLibraryPanel";
+import { GalleryManagerPanel } from "@/app/components/admin/GalleryManagerPanel";
 
 type AdminSession = {
   email: string;
@@ -50,7 +52,7 @@ const tabs = [
   "Appointments",
   "Department Timings",
   "Doctors",
-  "Media",
+  "Media & Gallery",
   "Approvals",
   "Blogs",
   "Careers",
@@ -606,6 +608,7 @@ export function AdminConsole({
   });
 
   const [auditSearch, setAuditSearch] = useState("");
+  const [mediaGalleryView, setMediaGalleryView] = useState<"media" | "gallery">("media");
 
   function openTriage(row: Record<string, string | number | null>) {
     setSelectedAppointment(row);
@@ -1098,7 +1101,36 @@ export function AdminConsole({
           />
         ) : null}
 
-        {active === "Media" ? <MediaManager busy={busy} rows={adminData.media} sessionRole={session.role} onUpload={uploadMedia} onDelete={deleteMedia} /> : null}
+        {active === "Media & Gallery" ? (
+          <div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+              <button
+                className={`button ${mediaGalleryView === "media" ? "primary" : "secondary"} small`}
+                onClick={() => setMediaGalleryView("media")}
+              >
+                Media Library
+              </button>
+              <button
+                className={`button ${mediaGalleryView === "gallery" ? "primary" : "secondary"} small`}
+                onClick={() => setMediaGalleryView("gallery")}
+              >
+                Gallery Manager
+              </button>
+            </div>
+            {mediaGalleryView === "media" ? (
+              <MediaLibraryPanel
+                csrf={session.csrf}
+                sessionRole={session.role}
+                onUpload={() => {
+                  setMediaGalleryView("media");
+                  refreshData(true);
+                }}
+              />
+            ) : (
+              <GalleryManagerPanel csrf={session.csrf} sessionRole={session.role} />
+            )}
+          </div>
+        ) : null}
 
         {active === "Approvals" ? (
           <div style={{ display: "flex", gap: 24, alignItems: "flex-start" }}>
