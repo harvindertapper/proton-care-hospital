@@ -61,7 +61,7 @@ async function dashboardData(session: AdminSession) {
     query("SELECT * FROM blog_posts WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM career_jobs WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM patient_videos WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 100"),
-    query("SELECT * FROM media_assets ORDER BY created_at DESC LIMIT 100"),
+    query("SELECT * FROM media_assets WHERE storage_type = 'R2' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 120"),
     query(
       "SELECT id, created_at, expires_at FROM sessions WHERE lower(email) = lower(?) AND revoked = 0 AND expires_at > ?",

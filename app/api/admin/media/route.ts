@@ -100,9 +100,17 @@ export async function POST(request: Request) {
     lifecycleStatus = "HIDDEN";
   }
 
+  // Map purpose to M1 category
+  const category = purpose === "gallery" ? "GALLERY" : purpose === "doctor-photo" ? "DOCTOR" : "GENERAL";
+
   try {
     const result = await run(
-      `INSERT INTO media_assets (id, r2_key, file_name, content_type, size_bytes, purpose, uploaded_by, consent_note, status, is_visible, lifecycle_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO media_assets (
+        id, r2_key, file_name, content_type, size_bytes, purpose, uploaded_by, consent_note,
+        status, is_visible, lifecycle_status,
+        storage_type, display_r2_key, display_content_type, display_size_bytes,
+        category, updated_at, rights_status, purge_status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'R2', ?, ?, ?, ?, CURRENT_TIMESTAMP, 'UNVERIFIED', 'NONE')`,
       id,
       key,
       file.name,
@@ -114,6 +122,10 @@ export async function POST(request: Request) {
       status,
       isVisible,
       lifecycleStatus,
+      key,
+      detected,
+      bytes.length,
+      category,
     );
     const changes = Number(result.meta?.changes || 0);
     if (changes < 1) {
@@ -142,31 +154,66 @@ export async function DELETE(request: Request) {
   if (!admin.ok) return json({ error: admin.error, ...(admin.code ? { code: admin.code } : {}) }, { status: admin.status });
   if (!verifyCsrf(request, admin.session)) return json({ error: "Invalid CSRF token." }, { status: 403 });
 
-  const bucket = getR2();
-  if (!bucket) return json({ error: "R2 media binding is not configured." }, { status: 503 });
-
   const url = new URL(request.url);
   const id = url.searchParams.get("id") || "";
   if (!id) return json({ error: "Media asset ID is required." }, { status: 400 });
 
-  const refCheck = await query<{ r2_key: string; purpose: string }>(
-    "SELECT r2_key, purpose FROM media_assets WHERE id = ? LIMIT 1",
+  // Load asset with storage family
+  const refCheck = await query<{ r2_key: string; purpose: string; storage_type: string }>(
+    "SELECT r2_key, purpose, storage_type FROM media_assets WHERE id = ? LIMIT 1",
     id,
   );
   const asset = refCheck.results?.[0];
   if (!asset) return json({ success: false, outcome: "NOT_FOUND", error: "Media asset not found." }, { status: 404 });
 
-  const exactUrl = `/api/media/${asset.r2_key}`;
-  const photoRefs = await query<{ id: string }>(
-    "SELECT id FROM doctor_profiles WHERE photo_url = ? LIMIT 1",
-    exactUrl,
+  const isPublic = asset.storage_type === "PUBLIC";
+
+  // PUBLIC assets cannot be physically deleted through this endpoint
+  if (isPublic) {
+    return json(
+      { success: false, outcome: "CONFLICT", error: "This PUBLIC asset cannot be physically deleted. Archive it through the Media Library." },
+      { status: 409 },
+    );
+  }
+
+  // Gallery item reference check (blocks before any R2 operation)
+  const galleryRef = await query<{ id: string }>(
+    "SELECT id FROM gallery_items WHERE media_id = ? LIMIT 1",
+    id,
   );
-  if (photoRefs.results && photoRefs.results.length > 0) {
+  if (galleryRef.results && galleryRef.results.length > 0) {
     return json(
       { success: false, outcome: "CONFLICT", error: "Media is still in use. Replace or remove its references before deleting it." },
       { status: 409 },
     );
   }
+
+  // Doctor reference check: check all URL variants that could be stored in photo_url
+  const doctorRefKeys = [asset.r2_key];
+  const displayR2Key = await query<{ display_r2_key: string | null }>(
+    "SELECT display_r2_key FROM media_assets WHERE id = ? LIMIT 1",
+    id,
+  );
+  const dKey = displayR2Key.results?.[0]?.display_r2_key;
+  if (dKey && dKey !== asset.r2_key) doctorRefKeys.push(dKey);
+
+  for (const key of doctorRefKeys) {
+    const exactUrl = `/api/media/${key}`;
+    const photoRefs = await query<{ id: string }>(
+      "SELECT id FROM doctor_profiles WHERE photo_url = ? LIMIT 1",
+      exactUrl,
+    );
+    if (photoRefs.results && photoRefs.results.length > 0) {
+      return json(
+        { success: false, outcome: "CONFLICT", error: "Media is still in use. Replace or remove its references before deleting it." },
+        { status: 409 },
+      );
+    }
+  }
+
+  // R2 assets: preserve existing compensation behavior
+  const bucket = getR2();
+  if (!bucket) return json({ error: "R2 media binding is not configured." }, { status: 503 });
 
   try {
     const result = await executeMediaDeletion<{ r2_key: string }>({

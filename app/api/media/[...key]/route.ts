@@ -1,17 +1,48 @@
 import { getR2, query } from "@/app/lib/server";
 
+function validateKeySegments(segments: string[]): { ok: true; objectKey: string } | { ok: false; error: string } {
+  if (segments.length === 0) {
+    return { ok: false, error: "Empty key." };
+  }
+
+  for (const seg of segments) {
+    if (seg === "" || seg === "." || seg === "..") {
+      return { ok: false, error: `Invalid path segment: ${seg}` };
+    }
+    if (seg.startsWith("/")) {
+      return { ok: false, error: "Segments must not start with /." };
+    }
+    if (seg.includes("\\")) {
+      return { ok: false, error: "Segments must not contain backslashes." };
+    }
+  }
+
+  const objectKey = segments.join("/");
+
+  // Reject public: compatibility keys
+  if (objectKey.startsWith("public:")) {
+    return { ok: false, error: "public: locator keys are not valid R2 keys." };
+  }
+
+  // Reject absolute/protocol URLs
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(objectKey)) {
+    return { ok: false, error: "Key must not be an absolute URL." };
+  }
+
+  return { ok: true, objectKey };
+}
+
 export async function GET(_request: Request, { params }: { params: Promise<{ key: string[] }> }) {
   const { key } = await params;
 
-  if (key.some((segment) => segment === ".." || segment.startsWith("/") || segment === "")) {
-    return new Response("Invalid key", { status: 400 });
+  // 1. Validate key segments before any database or R2 operation
+  const validation = validateKeySegments(key);
+  if (!validation.ok) {
+    return new Response("Not found", { status: 404 });
   }
+  const { objectKey } = validation;
 
-  const bucket = getR2();
-  if (!bucket) return new Response("Media storage is not configured.", { status: 503 });
-
-  const objectKey = key.join("/");
-
+  // 2. Query and authorize metadata — must be R2, not public:, active, not deleted
   const metaResult = await query<{
     id: string;
     r2_key: string;
@@ -20,38 +51,29 @@ export async function GET(_request: Request, { params }: { params: Promise<{ key
     status: string;
     is_visible: number;
     deleted_at: string | null;
+    storage_type: string;
   }>(
-    `SELECT id, r2_key, purpose, lifecycle_status, status, is_visible, deleted_at
+    `SELECT id, r2_key, purpose, lifecycle_status, status, is_visible, deleted_at, storage_type
      FROM media_assets
-     WHERE r2_key = ?
+     WHERE storage_type = 'R2'
+       AND r2_key = ?
+       AND r2_key NOT LIKE 'public:%'
+       AND deleted_at IS NULL
+       AND lifecycle_status = 'PUBLISHED'
+       AND status = 'APPROVED'
+       AND is_visible = 1
      LIMIT 1`,
     objectKey,
   );
 
   const meta = metaResult.results?.[0];
   if (!meta) return new Response("Not found", { status: 404 });
-  if (meta.deleted_at) return new Response("Not found", { status: 404 });
-  if (meta.lifecycle_status !== "PUBLISHED") return new Response("Not found", { status: 404 });
-  if (meta.status !== "APPROVED" || meta.is_visible !== 1) return new Response("Not found", { status: 404 });
 
+  // 3. Authorize by purpose
   if (meta.purpose === "gallery") {
     // Gallery: authorized
-  } else if (meta.purpose === "doctor-photo") {
-    const doctorRef = await query<{ slug: string }>(
-      `SELECT slug FROM doctor_profiles
-       WHERE photo_url = ?
-         AND lifecycle_status = 'PUBLISHED'
-         AND status = 'APPROVED'
-         AND is_visible = 1
-         AND is_deleted = 0
-         AND deleted_at IS NULL
-       LIMIT 1`,
-      `/api/media/${objectKey}`,
-    );
-    if (!doctorRef.results || doctorRef.results.length === 0) {
-      return new Response("Not found", { status: 404 });
-    }
-  } else if (meta.purpose === "admin-upload") {
+  } else if (meta.purpose === "doctor-photo" || meta.purpose === "admin-upload") {
+    // Doctor photo or admin-upload: must be referenced by an eligible doctor
     const doctorRef = await query<{ slug: string }>(
       `SELECT slug FROM doctor_profiles
        WHERE photo_url = ?
@@ -70,9 +92,15 @@ export async function GET(_request: Request, { params }: { params: Promise<{ key
     return new Response("Not found", { status: 404 });
   }
 
+  // 4. Obtain R2 binding only after metadata authorization passes
+  const bucket = getR2();
+  if (!bucket) return new Response("Media storage is not configured.", { status: 503 });
+
+  // 5. Fetch from R2
   const object = await bucket.get(objectKey);
   if (!object) return new Response("Not found", { status: 404 });
 
+  // 6. Return safe response headers
   return new Response(object.body, {
     headers: {
       "content-type": object.httpMetadata?.contentType || "application/octet-stream",

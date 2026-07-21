@@ -184,7 +184,11 @@ test("12. Staff Gallery upload rejected before R2/D1", () => {
 test("13. Doctor photo cannot become a Gallery item by purpose leakage", () => {
   assert.match(adminMediaRoute, /purpose === "doctor-photo"[\s\S]*?status = "APPROVED"/);
   assert.match(adminMediaRoute, /purpose === "doctor-photo"[\s\S]*?lifecycleStatus = "PUBLISHED"/);
-  assert.doesNotMatch(adminMediaRoute, /doctor-photo.*gallery|gallery.*doctor-photo/);
+  // M2-A: category mapping intentionally maps purpose to category;
+  // doctor-photo → DOCTOR, gallery → GALLERY, admin-upload → GENERAL
+  assert.match(adminMediaRoute, /purpose === "gallery" \? "GALLERY"/);
+  assert.match(adminMediaRoute, /purpose === "doctor-photo" \? "DOCTOR"/);
+  assert.match(adminMediaRoute, /"GENERAL"/);
 });
 
 test("14. General Admin upload gets explicit hidden values", () => {
@@ -342,9 +346,14 @@ test("38. Unknown key returns 404 before R2 get (structural)", () => {
 });
 
 test("39. Hidden/unpublished/deleted media returns 404 before R2 get", () => {
-  assert.match(mediaGateway, /if \(meta\.deleted_at\) return new Response\("Not found"/);
-  assert.match(mediaGateway, /if \(meta\.lifecycle_status !== "PUBLISHED"\) return new Response\("Not found"/);
-  assert.match(mediaGateway, /if \(meta\.status !== "APPROVED" \|\| meta\.is_visible !== 1\) return new Response\("Not found"/);
+  // M2-A: authorization consolidated into SQL WHERE clause — lifecycle_status, status,
+  // is_visible, deleted_at are all enforced in the query, eliminating separate if-checks.
+  assert.match(mediaGateway, /lifecycle_status = 'PUBLISHED'/);
+  assert.match(mediaGateway, /status = 'APPROVED'/);
+  assert.match(mediaGateway, /is_visible = 1/);
+  assert.match(mediaGateway, /deleted_at IS NULL/);
+  assert.match(mediaGateway, /storage_type = 'R2'/);
+  assert.match(mediaGateway, /if \(!meta\) return new Response\("Not found"/);
 });
 
 test("40. Published Gallery media is served", () => {
@@ -536,7 +545,10 @@ test("server.ts adds lifecycle_status and deleted_at migration statements", () =
 test("media gateway queries lifecycle_status, status, is_visible, deleted_at before R2", () => {
   assert.match(mediaGateway, /SELECT id, r2_key, purpose, lifecycle_status, status, is_visible, deleted_at/);
   assert.match(mediaGateway, /FROM media_assets/);
-  assert.match(mediaGateway, /WHERE r2_key = \?/);
+  // M2-A: storage_type and public: checks consolidated into WHERE clause
+  assert.match(mediaGateway, /storage_type = 'R2'/);
+  assert.match(mediaGateway, /AND r2_key = \?/);
+  assert.match(mediaGateway, /NOT LIKE 'public:%'/);
 });
 
 test("admin media route stores detected contentType, not browser-supplied type", () => {
