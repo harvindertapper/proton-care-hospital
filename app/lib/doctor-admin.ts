@@ -1,5 +1,6 @@
 import { MutationNotFoundError, MutationConflictError } from "./mutation-result.ts";
 import type { DoctorManagerRow } from "./doctor-admin-types.ts";
+import { generateR2MediaUrl, validatePublicPath } from "./media-resolver.ts";
 
 export type LifecycleStatus = "DRAFT" | "IN_REVIEW" | "PUBLISHED" | "HIDDEN" | "ARCHIVED";
 
@@ -127,7 +128,8 @@ export async function validateDoctorMediaRelation(
   if (!photoMediaId) return { ok: true };
 
   const rows = await repo.query(
-    `SELECT id, category, lifecycle_status, status, is_visible, deleted_at
+    `SELECT id, category, lifecycle_status, status, is_visible, deleted_at,
+            storage_type, r2_key, public_path, display_r2_key, display_public_path
      FROM media_assets
      WHERE id = ?
      LIMIT 1`,
@@ -158,6 +160,39 @@ export async function validateDoctorMediaRelation(
         error:
           "Publish and approve the selected Doctor photo before using it on a visible profile.",
       };
+    }
+  }
+
+  const storageType = String(media.storage_type);
+  if (storageType !== "R2" && storageType !== "PUBLIC") {
+    return { ok: false, error: "Selected Doctor photo does not have a valid storage type." };
+  }
+
+  if (storageType === "R2") {
+    const r2Key = String(media.r2_key || "");
+    const keyResult = generateR2MediaUrl(r2Key);
+    if (!keyResult.ok) {
+      return { ok: false, error: "Selected Doctor photo does not have a valid public media location." };
+    }
+    const displayKey = media.display_r2_key ? String(media.display_r2_key) : null;
+    if (displayKey) {
+      const displayResult = generateR2MediaUrl(displayKey);
+      if (!displayResult.ok) {
+        return { ok: false, error: "Selected Doctor photo does not have a valid public media location." };
+      }
+    }
+  }
+
+  if (storageType === "PUBLIC") {
+    const publicPath = media.public_path ? String(media.public_path) : null;
+    const displayPath = media.display_public_path ? String(media.display_public_path) : null;
+    const path = displayPath || publicPath;
+    if (!path) {
+      return { ok: false, error: "Selected Doctor photo does not have a valid public media location." };
+    }
+    const pathResult = validatePublicPath(path);
+    if (!pathResult.ok) {
+      return { ok: false, error: "Selected Doctor photo does not have a valid public media location." };
     }
   }
 

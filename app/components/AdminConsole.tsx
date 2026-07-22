@@ -1096,6 +1096,7 @@ export function AdminConsole({
             departments={departments}
             staticDoctors={staticDoctors}
             busy={busy}
+            csrf={session.csrf}
             onSave={(payload) => mutate({ action: "doctor.save", payload }, "Doctor profile saved.")}
             onArchive={(slug, expectedVersion) => mutate({ action: "doctor.delete", slug, expectedVersion }, "Doctor archived.")}
             onRestore={(slug, expectedVersion) => mutate({ action: "doctor.restore", payload: { slug, expectedVersion } }, "Doctor restored as hidden. Review and publish it explicitly.")}
@@ -2166,6 +2167,7 @@ function DoctorManager({
   departments,
   staticDoctors: _staticDoctors,
   busy,
+  csrf,
   onSave,
   onArchive,
   onRestore,
@@ -2176,17 +2178,13 @@ function DoctorManager({
   departments: Department[];
   staticDoctors: Doctor[];
   busy: boolean;
+  csrf: string;
   onSave: (payload: Record<string, unknown>) => void;
   onArchive?: (slug: string, expectedVersion: number) => void;
   onRestore?: (slug: string, expectedVersion: number) => void;
   onUpload?: (formData: FormData) => Promise<{ url: string; mediaId: string }>;
 }) {
   const source = resolveDoctorManagerRows(rows);
-  const csrf = useMemo(() => {
-    if (typeof document === "undefined") return "";
-    const metaCsrf = document.querySelector('meta[name="csrf-token"]');
-    return metaCsrf ? metaCsrf.getAttribute("content") || "" : "";
-  }, []);
   const [showDoctorPicker, setShowDoctorPicker] = useState(false);
 
   const first = source && source.length > 0 ? source[0] : null;
@@ -2207,6 +2205,7 @@ function DoctorManager({
   function choose(slug: string) {
     const row = source ? source.find((item) => item && item.slug === slug) : null;
     if (!row) return;
+    setUploadReadiness(null);
     setForm({
       slug: String(row.slug || ""),
       name: String(row.name || ""),
@@ -2223,6 +2222,7 @@ function DoctorManager({
   }
 
   const photoSource = form.photoMediaId ? "media_library" : form.photoUrl ? "legacy_url" : "none";
+  const [uploadReadiness, setUploadReadiness] = useState<string | null>(null);
 
   return (
     <div className="admin-panel-grid">
@@ -2295,7 +2295,7 @@ function DoctorManager({
               </button>
             )}
             {form.photoMediaId && (
-              <button type="button" className="button secondary small" style={{ color: "#dc2626" }} onClick={() => setForm({ ...form, photoMediaId: "" })}>
+              <button type="button" className="button secondary small" style={{ color: "#dc2626" }} onClick={() => { setForm({ ...form, photoMediaId: "" }); setUploadReadiness(null); }}>
                 Clear Media Relation
               </button>
             )}
@@ -2305,7 +2305,15 @@ function DoctorManager({
             <input value={form.photoUrl} onChange={(event) => setForm({ ...form, photoUrl: event.target.value })} style={{ fontSize: 12 }} />
           </label>
           {onUpload && (
-            <ImageCropUploader onUpload={onUpload} onComplete={(url, mediaId) => setForm({ ...form, photoUrl: url, photoMediaId: mediaId })} />
+            <ImageCropUploader onUpload={onUpload} onComplete={(url, mediaId) => {
+              setForm({ ...form, photoUrl: url, photoMediaId: mediaId });
+              setUploadReadiness("Uploaded. Media must be published and approved before it can be used on a visible Doctor profile.");
+            }} />
+          )}
+          {uploadReadiness && form.photoMediaId && (
+            <div style={{ fontSize: 12, color: "#a16207", background: "#fef9c3", padding: "6px 10px", borderRadius: 6, marginTop: 8 }}>
+              {uploadReadiness}
+            </div>
           )}
         </div>
 
@@ -2384,6 +2392,7 @@ function DoctorManager({
           onClose={() => setShowDoctorPicker(false)}
           onSelect={(asset) => {
             setForm({ ...form, photoMediaId: asset.id, photoUrl: asset.displayUrl || asset.originalUrl || "" });
+            setUploadReadiness(null);
             setShowDoctorPicker(false);
           }}
         />

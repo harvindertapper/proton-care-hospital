@@ -1,4 +1,5 @@
 import type { Doctor } from "./data.ts";
+import { generateR2MediaUrl, validatePublicPath } from "./media-resolver.ts";
 
 export type DoctorQuery = (
   sql: string,
@@ -13,7 +14,8 @@ export const DOCTOR_LIST_SQL = `SELECT
   ma.public_path AS ma_public_path, ma.display_public_path AS ma_display_public_path,
   ma.thumbnail_public_path AS ma_thumbnail_public_path,
   ma.lifecycle_status AS ma_lifecycle_status, ma.status AS ma_status,
-  ma.is_visible AS ma_is_visible, ma.deleted_at AS ma_deleted_at
+  ma.is_visible AS ma_is_visible, ma.deleted_at AS ma_deleted_at,
+  ma.category AS ma_category
 FROM doctor_profiles dp
 LEFT JOIN media_assets ma ON dp.photo_media_id = ma.id
 WHERE dp.lifecycle_status = 'PUBLISHED' AND dp.status = 'APPROVED' AND dp.is_visible = 1 AND dp.is_deleted = 0 AND dp.deleted_at IS NULL
@@ -27,7 +29,8 @@ export const DOCTOR_BY_SLUG_SQL = `SELECT
   ma.public_path AS ma_public_path, ma.display_public_path AS ma_display_public_path,
   ma.thumbnail_public_path AS ma_thumbnail_public_path,
   ma.lifecycle_status AS ma_lifecycle_status, ma.status AS ma_status,
-  ma.is_visible AS ma_is_visible, ma.deleted_at AS ma_deleted_at
+  ma.is_visible AS ma_is_visible, ma.deleted_at AS ma_deleted_at,
+  ma.category AS ma_category
 FROM doctor_profiles dp
 LEFT JOIN media_assets ma ON dp.photo_media_id = ma.id
 WHERE dp.slug = ? AND dp.lifecycle_status = 'PUBLISHED' AND dp.status = 'APPROVED' AND dp.is_visible = 1 AND dp.is_deleted = 0 AND dp.deleted_at IS NULL
@@ -35,6 +38,7 @@ LIMIT 1`;
 
 function isMediaEligible(row: Record<string, unknown>): boolean {
   if (!row.ma_id) return false;
+  if (String(row.ma_category) !== "DOCTOR") return false;
   if (row.ma_deleted_at) return false;
   if (String(row.ma_lifecycle_status) !== "PUBLISHED") return false;
   if (String(row.ma_status) !== "APPROVED") return false;
@@ -43,36 +47,27 @@ function isMediaEligible(row: Record<string, unknown>): boolean {
   return true;
 }
 
-function generateR2MediaUrlInline(r2Key: string): string | null {
-  if (!r2Key || r2Key.startsWith("public:") || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(r2Key) || r2Key.includes("\\")) {
-    return null;
-  }
-  const segments = r2Key.split("/");
-  const encoded: string[] = [];
-  for (const seg of segments) {
-    if (seg === "" || seg === "." || seg === "..") return null;
-    encoded.push(encodeURIComponent(seg));
-  }
-  return `/api/media/${encoded.join("/")}`;
-}
-
 function resolvePhotoFromMedia(row: Record<string, unknown>): string | undefined {
   const storageType = String(row.ma_storage_type);
   if (storageType === "R2") {
     const r2Key = String(row.ma_r2_key || "");
-    const url = generateR2MediaUrlInline(r2Key);
-    if (!url) return undefined;
+    const result = generateR2MediaUrl(r2Key);
+    if (!result.ok) return undefined;
     const displayKey = row.ma_display_r2_key ? String(row.ma_display_r2_key) : null;
     if (displayKey) {
-      const displayUrl = generateR2MediaUrlInline(displayKey);
-      if (displayUrl) return displayUrl;
+      const displayResult = generateR2MediaUrl(displayKey);
+      if (displayResult.ok) return displayResult.url;
     }
-    return url;
+    return result.url;
   }
   if (storageType === "PUBLIC") {
     const publicPath = row.ma_public_path ? String(row.ma_public_path) : null;
     const displayPath = row.ma_display_public_path ? String(row.ma_display_public_path) : null;
-    return displayPath || publicPath || undefined;
+    const path = displayPath || publicPath;
+    if (!path) return undefined;
+    const validation = validatePublicPath(path);
+    if (!validation.ok) return undefined;
+    return validation.path;
   }
   return undefined;
 }

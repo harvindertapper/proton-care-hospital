@@ -543,7 +543,7 @@ test("server.ts adds lifecycle_status and deleted_at migration statements", () =
 });
 
 test("media gateway queries lifecycle_status, status, is_visible, deleted_at before R2", () => {
-  assert.match(mediaGateway, /SELECT id, r2_key, purpose, lifecycle_status, status, is_visible, deleted_at/);
+  assert.match(mediaGateway, /SELECT id, r2_key, purpose, category, lifecycle_status, status, is_visible, deleted_at/);
   assert.match(mediaGateway, /FROM media_assets/);
   // M2-A: storage_type and public: checks consolidated into WHERE clause
   assert.match(mediaGateway, /storage_type = 'R2'/);

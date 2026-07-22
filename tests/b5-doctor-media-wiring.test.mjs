@@ -94,7 +94,7 @@ test("PUB.03 Doctor with NULL photo_media_id falls back to legacy photo_url", as
 test("PUB.04 Doctor with valid photo_media_id uses media resolution", async () => {
   const row = doctorRowWithMedia({
     photo_media_id: "m1",
-    ma_id: "m1", ma_r2_key: "doctor-photo/m1.webp", ma_storage_type: "R2",
+    ma_id: "m1", ma_r2_key: "doctor-photo/m1.webp", ma_storage_type: "R2", ma_category: "DOCTOR",
     ma_lifecycle_status: "PUBLISHED", ma_status: "APPROVED", ma_is_visible: 1,
     ma_deleted_at: null, photo_url: "/old/photo.webp",
   });
@@ -159,7 +159,7 @@ test("PUB.11 Doctor with PUBLIC storage type resolves via public_path", async ()
   const row = doctorRowWithMedia({
     photo_media_id: "m1",
     ma_id: "m1", ma_storage_type: "PUBLIC", ma_public_path: "/assets/photos/m1.webp",
-    ma_display_public_path: "/assets/photos/m1-display.webp", ma_r2_key: "",
+    ma_display_public_path: "/assets/photos/m1-display.webp", ma_r2_key: "", ma_category: "DOCTOR",
     ma_lifecycle_status: "PUBLISHED", ma_status: "APPROVED", ma_is_visible: 1,
     ma_deleted_at: null, photo_url: "/old/photo.webp",
   });
@@ -171,7 +171,8 @@ test("PUB.12 Doctor with display_r2_key resolves to display URL", async () => {
   const row = doctorRowWithMedia({
     photo_media_id: "m1",
     ma_id: "m1", ma_r2_key: "doctor-photo/m1.webp", ma_display_r2_key: "doctor-photo/m1-display.webp",
-    ma_storage_type: "R2", ma_lifecycle_status: "PUBLISHED", ma_status: "APPROVED",
+    ma_storage_type: "R2", ma_category: "DOCTOR",
+    ma_lifecycle_status: "PUBLISHED", ma_status: "APPROVED",
     ma_is_visible: 1, ma_deleted_at: null, photo_url: "/old/photo.webp",
   });
   const result = await resolvePublicDoctors(okQuery([row]));
@@ -701,4 +702,606 @@ test("SQL.13 Atomic NOT EXISTS guard allows archive when no photo_media_id refer
   } finally {
     db.close();
   }
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Section 13 — B5/M4-B1.1 Behavior-Focused Tests
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+import { dbDoctorToPublic } from "../app/lib/doctor-public.ts";
+import { generateR2MediaUrl, validatePublicPath } from "../app/lib/media-resolver.ts";
+
+/* ───────────────────────────────────────────────────────────────────────────
+   13-A. PUBLIC CATEGORY — Category enforcement in doctor-public.ts (1-8)
+   ─────────────────────────────────────────────────────────────────────────── */
+
+function makeMediaRow(overrides = {}) {
+  return {
+    photo_media_id: "m1",
+    ma_id: "m1", ma_r2_key: "doctor-photo/m1.webp", ma_display_r2_key: null,
+    ma_thumbnail_r2_key: null, ma_storage_type: "R2",
+    ma_public_path: null, ma_display_public_path: null, ma_thumbnail_public_path: null,
+    ma_lifecycle_status: "PUBLISHED", ma_status: "APPROVED",
+    ma_is_visible: 1, ma_deleted_at: null, ma_category: "DOCTOR",
+    slug: "dr-test", name: "Dr Test", speciality: "Cardiology",
+    qualification: "MD", department_slug: "cardiology",
+    photo_url: "/legacy.webp",
+    ...overrides,
+  };
+}
+
+test("SEC13.01 Doctor with GALLERY category media falls back to undefined photo", () => {
+  const row = makeMediaRow({ ma_category: "GALLERY" });
+  const doc = dbDoctorToPublic(row);
+  assert.equal(doc.photo, undefined, "Non-DOCTOR category must not resolve photo");
+});
+
+test("SEC13.02 Doctor with null ma_category falls back to undefined photo", () => {
+  const row = makeMediaRow({ ma_category: null });
+  const doc = dbDoctorToPublic(row);
+  assert.equal(doc.photo, undefined, "Null category must not resolve photo");
+});
+
+test("SEC13.03 Doctor with empty string ma_category falls back to undefined photo", () => {
+  const row = makeMediaRow({ ma_category: "" });
+  const doc = dbDoctorToPublic(row);
+  assert.equal(doc.photo, undefined, "Empty category must not resolve photo");
+});
+
+test("SEC13.04 Doctor with BLOG category media falls back to undefined photo", () => {
+  const row = makeMediaRow({ ma_category: "BLOG" });
+  const doc = dbDoctorToPublic(row);
+  assert.equal(doc.photo, undefined, "BLOG category must not resolve photo");
+});
+
+test("SEC13.05 Doctor with VIDEO category media falls back to undefined photo", () => {
+  const row = makeMediaRow({ ma_category: "VIDEO" });
+  const doc = dbDoctorToPublic(row);
+  assert.equal(doc.photo, undefined, "VIDEO category must not resolve photo");
+});
+
+test("SEC13.06 Doctor with DOCTOR category and PUBLISHED lifecycle resolves photo", () => {
+  const row = makeMediaRow();
+  const doc = dbDoctorToPublic(row);
+  assert.equal(doc.photo, "/api/media/doctor-photo/m1.webp", "DOCTOR category must resolve photo");
+});
+
+test("SEC13.07 Doctor with DOCTOR category but DRAFT lifecycle returns undefined", () => {
+  const row = makeMediaRow({ ma_lifecycle_status: "DRAFT" });
+  const doc = dbDoctorToPublic(row);
+  assert.equal(doc.photo, undefined, "DRAFT lifecycle must not resolve photo");
+});
+
+test("SEC13.08 Doctor with DOCTOR category but is_visible=0 returns undefined", () => {
+  const row = makeMediaRow({ ma_is_visible: 0 });
+  const doc = dbDoctorToPublic(row);
+  assert.equal(doc.photo, undefined, "Hidden media must not resolve photo");
+});
+
+test("SEC13.09 DOCTOR_LIST_SQL selects ma_category", () => {
+  assert.match(DOCTOR_LIST_SQL, /ma\.category AS ma_category/, "Must SELECT ma_category");
+});
+
+test("SEC13.10 DOCTOR_BY_SLUG_SQL selects ma_category", () => {
+  assert.match(DOCTOR_BY_SLUG_SQL, /ma\.category AS ma_category/, "Must SELECT ma_category");
+});
+
+test("SEC13.11 Doctor with null photo_media_id still falls back to legacy photo_url regardless of category", () => {
+  const row = makeMediaRow({ photo_media_id: null, ma_id: null, ma_category: "DOCTOR" });
+  const doc = dbDoctorToPublic(row);
+  assert.equal(doc.photo, "/legacy.webp", "Legacy photo_url used when no media ID");
+});
+
+test("SEC13.12 Doctor with photo_media_id but ma_id=null (no media row) returns undefined", () => {
+  const row = makeMediaRow({ ma_id: null });
+  const doc = dbDoctorToPublic(row);
+  assert.equal(doc.photo, undefined, "No media row means undefined photo");
+});
+
+/* ───────────────────────────────────────────────────────────────────────────
+   13-B. STORAGE VALIDATION — validateDoctorMediaRelation storage (9-20)
+   ─────────────────────────────────────────────────────────────────────────── */
+
+function makeMediaAssetForValidation(overrides = {}) {
+  return {
+    id: "m1", category: "DOCTOR", lifecycle_status: "PUBLISHED",
+    status: "APPROVED", is_visible: 1, deleted_at: null,
+    storage_type: "R2", r2_key: "doctor-photo/m1.webp",
+    public_path: null, display_r2_key: null, display_public_path: null,
+    ...overrides,
+  };
+}
+
+function makeValidationRepo(mediaRow) {
+  return {
+    query: async (sql, ..._binds) => {
+      if (sql.includes("FROM media_assets")) {
+        return { results: mediaRow ? [mediaRow] : [] };
+      }
+      return { results: [] };
+    },
+    run: async () => ({ success: true, meta: { changes: 1 } }),
+    audit: async () => {},
+  };
+}
+
+test("SEC13.13 validateDoctorMediaRelation accepts valid R2 media", async () => {
+  const repo = makeValidationRepo(makeMediaAssetForValidation());
+  const result = await validateDoctorMediaRelation(repo, "m1", true);
+  assert.equal(result.ok, true, "Valid R2 media must pass validation");
+});
+
+test("SEC13.14 validateDoctorMediaRelation accepts valid PUBLIC media", async () => {
+  const media = makeMediaAssetForValidation({
+    storage_type: "PUBLIC", r2_key: "",
+    public_path: "/assets/photos/m1.webp", display_public_path: "/assets/photos/m1-display.webp",
+  });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", true);
+  assert.equal(result.ok, true, "Valid PUBLIC media must pass validation");
+});
+
+test("SEC13.15 validateDoctorMediaRelation rejects R2 with empty r2_key", async () => {
+  const media = makeMediaAssetForValidation({ r2_key: "" });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", true);
+  assert.equal(result.ok, false, "Empty R2 key must fail validation");
+});
+
+test("SEC13.16 validateDoctorMediaRelation rejects R2 with invalid display_r2_key (public: prefix)", async () => {
+  const media = makeMediaAssetForValidation({ display_r2_key: "public:something" });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", true);
+  assert.equal(result.ok, false, "Invalid display_r2_key must fail validation");
+});
+
+test("SEC13.17 validateDoctorMediaRelation rejects PUBLIC with no public_path and no display_public_path", async () => {
+  const media = makeMediaAssetForValidation({
+    storage_type: "PUBLIC", r2_key: "",
+    public_path: null, display_public_path: null,
+  });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", true);
+  assert.equal(result.ok, false, "PUBLIC with no paths must fail validation");
+});
+
+test("SEC13.18 validateDoctorMediaRelation rejects PUBLIC with traversal in path", async () => {
+  const media = makeMediaAssetForValidation({
+    storage_type: "PUBLIC", r2_key: "",
+    public_path: "/assets/photos/../../../etc/passwd", display_public_path: null,
+  });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", true);
+  assert.equal(result.ok, false, "Traversal path must fail validation");
+});
+
+test("SEC13.19 validateDoctorMediaRelation rejects unknown storage type", async () => {
+  const media = makeMediaAssetForValidation({ storage_type: "S3" });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", true);
+  assert.equal(result.ok, false, "Unknown storage type must fail validation");
+});
+
+test("SEC13.20 validateDoctorMediaRelation rejects non-DOCTOR category", async () => {
+  const media = makeMediaAssetForValidation({ category: "GALLERY" });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", true);
+  assert.equal(result.ok, false, "Non-DOCTOR category must fail validation");
+});
+
+test("SEC13.21 validateDoctorMediaRelation rejects deleted media", async () => {
+  const media = makeMediaAssetForValidation({ deleted_at: "2026-07-01" });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", true);
+  assert.equal(result.ok, false, "Deleted media must fail validation");
+});
+
+test("SEC13.22 validateDoctorMediaRelation rejects non-existent media ID", async () => {
+  const repo = makeValidationRepo(null);
+  const result = await validateDoctorMediaRelation(repo, "nonexistent", true);
+  assert.equal(result.ok, false, "Non-existent media must fail validation");
+});
+
+test("SEC13.23 validateDoctorMediaRelation allows DRAFT media for hidden doctor", async () => {
+  const media = makeMediaAssetForValidation({ lifecycle_status: "DRAFT", is_visible: 0 });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", false);
+  assert.equal(result.ok, true, "Hidden doctor can use non-published media");
+});
+
+test("SEC13.24 validateDoctorMediaRelation rejects DRAFT media for visible doctor", async () => {
+  const media = makeMediaAssetForValidation({ lifecycle_status: "DRAFT" });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", true);
+  assert.equal(result.ok, false, "Visible doctor cannot use DRAFT media");
+});
+
+test("SEC13.25 validateDoctorMediaRelation accepts null photoMediaId without query", async () => {
+  let queried = false;
+  const repo = {
+    query: async () => { queried = true; return { results: [] }; },
+    run: async () => ({ success: true, meta: { changes: 1 } }),
+    audit: async () => {},
+  };
+  const result = await validateDoctorMediaRelation(repo, null, true);
+  assert.equal(result.ok, true, "Null media ID must pass without querying");
+  assert.equal(queried, false, "Null media ID must not query media_assets");
+});
+
+/* ───────────────────────────────────────────────────────────────────────────
+   13-C. SHARED RESOLVER — media-resolver.ts functions (21-30)
+   ─────────────────────────────────────────────────────────────────────────── */
+
+test("SEC13.26 generateR2MediaUrl encodes each path segment independently", () => {
+  const result = generateR2MediaUrl("doctor-photo/my photo.webp");
+  assert.equal(result.ok, true, "Must accept space-containing key");
+  assert.equal(result.url, "/api/media/doctor-photo/my%20photo.webp", "Must encode space per segment");
+});
+
+test("SEC13.27 generateR2MediaUrl rejects empty string", () => {
+  const result = generateR2MediaUrl("");
+  assert.equal(result.ok, false, "Empty key must be rejected");
+});
+
+test("SEC13.28 generateR2MediaUrl rejects public: prefix", () => {
+  const result = generateR2MediaUrl("public:something");
+  assert.equal(result.ok, false, "public: prefix must be rejected");
+});
+
+test("SEC13.29 generateR2MediaUrl rejects protocol URL", () => {
+  const result = generateR2MediaUrl("https://example.com/file.webp");
+  assert.equal(result.ok, false, "Absolute URL must be rejected");
+});
+
+test("SEC13.30 generateR2MediaUrl rejects backslash", () => {
+  const result = generateR2MediaUrl("doctor-photo\\file.webp");
+  assert.equal(result.ok, false, "Backslash must be rejected");
+});
+
+test("SEC13.31 generateR2MediaUrl rejects dot segment", () => {
+  const result = generateR2MediaUrl("doctor-photo/./file.webp");
+  assert.equal(result.ok, false, "Dot segment must be rejected");
+});
+
+test("SEC13.32 generateR2MediaUrl rejects dotdot segment", () => {
+  const result = generateR2MediaUrl("doctor-photo/../file.webp");
+  assert.equal(result.ok, false, "Dotdot segment must be rejected");
+});
+
+test("SEC13.33 validatePublicPath accepts valid /assets/ path", () => {
+  const result = validatePublicPath("/assets/photos/m1.webp");
+  assert.equal(result.ok, true, "Valid /assets/ path must be accepted");
+  assert.equal(result.path, "/assets/photos/m1.webp", "Must return original path");
+});
+
+test("SEC13.34 validatePublicPath rejects path not starting with /assets/", () => {
+  const result = validatePublicPath("/images/photo.webp");
+  assert.equal(result.ok, false, "Non-/assets/ path must be rejected");
+});
+
+test("SEC13.35 validatePublicPath rejects empty string", () => {
+  const result = validatePublicPath("");
+  assert.equal(result.ok, false, "Empty path must be rejected");
+});
+
+test("SEC13.36 validatePublicPath rejects non-string input", () => {
+  const result = validatePublicPath(123);
+  assert.equal(result.ok, false, "Non-string input must be rejected");
+});
+
+test("SEC13.37 validatePublicPath rejects encoded traversal (%2e)", () => {
+  const result = validatePublicPath("/assets/%2e%2e/etc/passwd");
+  assert.equal(result.ok, false, "Encoded traversal must be rejected");
+});
+
+test("SEC13.38 validatePublicPath rejects protocol-relative URL", () => {
+  const result = validatePublicPath("//evil.com/assets/x.webp");
+  assert.equal(result.ok, false, "Protocol-relative URL must be rejected");
+});
+
+test("SEC13.39 validatePublicPath rejects backslash", () => {
+  const result = validatePublicPath("/assets/photos\\file.webp");
+  assert.equal(result.ok, false, "Backslash must be rejected");
+});
+
+test("SEC13.40 validatePublicPath rejects URL with protocol", () => {
+  const result = validatePublicPath("http://example.com/assets/x.webp");
+  assert.equal(result.ok, false, "URL with protocol must be rejected");
+});
+
+test("SEC13.41 validatePublicPath rejects path with query string", () => {
+  const result = validatePublicPath("/assets/photo.webp?token=abc");
+  assert.equal(result.ok, false, "Path with query string must be rejected");
+});
+
+test("SEC13.42 validatePublicPath rejects path with fragment", () => {
+  const result = validatePublicPath("/assets/photo.webp#section");
+  assert.equal(result.ok, false, "Path with fragment must be rejected");
+});
+
+test("SEC13.43 media-resolver.ts has zero runtime imports", async () => {
+  const content = await readFile(path.join(rootDir, "app", "lib", "media-resolver.ts"), "utf8");
+  const importLines = content.split("\n").filter((l) => l.startsWith("import "));
+  assert.equal(importLines.length, 0, "media-resolver.ts must have no import statements");
+});
+
+/* ───────────────────────────────────────────────────────────────────────────
+   13-D. GATEWAY — Gateway category authorization (26-36)
+   ─────────────────────────────────────────────────────────────────────────── */
+
+test("SEC13.44 Gateway source queries category from media_assets", () => {
+  assert.match(mediaGateway, /category/, "Must reference category in gateway");
+});
+
+test("SEC13.45 Gateway requires meta.category === 'DOCTOR' for doctor-photo purpose", () => {
+  assert.match(mediaGateway, /meta\.category !== "DOCTOR"/, "Must check meta.category for doctor-photo");
+});
+
+test("SEC13.46 Gateway checks doctor_profiles.is_deleted = 0 in media ref query", () => {
+  assert.match(mediaGateway, /dp\.is_deleted = 0/, "Must filter by is_deleted = 0");
+});
+
+test("SEC13.47 Gateway checks doctor_profiles.deleted_at IS NULL in media ref query", () => {
+  assert.match(mediaGateway, /dp\.deleted_at IS NULL/, "Must filter by deleted_at IS NULL");
+});
+
+test("SEC13.48 Gateway uses dp.is_visible = 1 for media ref authorization", () => {
+  assert.match(mediaGateway, /dp\.is_visible = 1/, "Must filter by is_visible = 1");
+});
+
+test("SEC13.49 Gateway checks ma.category = 'DOCTOR' in photo_media_id JOIN query", () => {
+  assert.match(mediaGateway, /ma\.category = 'DOCTOR'/, "Must check ma.category in JOIN query");
+});
+
+test("SEC13.50 Gateway checks dp.status = 'APPROVED' in media ref query", () => {
+  assert.match(mediaGateway, /dp\.status = 'APPROVED'/, "Must filter by status = APPROVED");
+});
+
+test("SEC13.51 Gateway checks dp.lifecycle_status = 'PUBLISHED' in media ref query", () => {
+  assert.match(mediaGateway, /dp\.lifecycle_status = 'PUBLISHED'/, "Must filter by lifecycle_status PUBLISHED");
+});
+
+test("SEC13.52 Gateway rejects non-gallery, non-doctor-photo, non-admin-upload purposes", () => {
+  assert.match(mediaGateway, /else\s*\{[\s\S]*return new Response\("Not found"/, "Must deny unknown purposes");
+});
+
+test("SEC13.53 Gateway validates key segments before database operations", () => {
+  const idx = mediaGateway.indexOf("validateKeySegments(key)");
+  assert.ok(idx > -1, "Must validate key segments early");
+  const metaIdx = mediaGateway.indexOf("query<");
+  assert.ok(idx < metaIdx, "Validation must occur before database query");
+});
+
+test("SEC13.54 Gateway queries storage_type='R2' in metadata SELECT", () => {
+  assert.match(mediaGateway, /storage_type = 'R2'/, "Must filter by R2 storage type");
+});
+
+/* ───────────────────────────────────────────────────────────────────────────
+   13-E. PICKER — MediaPickerDialog selection guards (37-50)
+   ─────────────────────────────────────────────────────────────────────────── */
+
+const pickerSource = await readFile(
+  path.join(rootDir, "app", "components", "admin", "MediaPickerDialog.tsx"),
+  "utf8",
+);
+
+test("SEC13.55 Picker has getIneligibilityReason function", () => {
+  assert.match(pickerSource, /getIneligibilityReason/, "Must define getIneligibilityReason");
+});
+
+test("SEC13.56 Picker getIneligibilityReason checks category", () => {
+  assert.match(pickerSource, /asset\.category !== category/, "Must check category mismatch");
+});
+
+test("SEC13.57 Picker getIneligibilityReason checks lifecycleStatus", () => {
+  assert.match(pickerSource, /asset\.lifecycleStatus !== "PUBLISHED"/, "Must check lifecycle status");
+});
+
+test("SEC13.58 Picker getIneligibilityReason checks status", () => {
+  assert.match(pickerSource, /asset\.status !== "APPROVED"/, "Must check approval status");
+});
+
+test("SEC13.59 Picker getIneligibilityReason checks isVisible", () => {
+  assert.match(pickerSource, /asset\.isVisible !== 1/, "Must check visibility");
+});
+
+test("SEC13.60 Picker getIneligibilityReason checks deletedAt", () => {
+  assert.match(pickerSource, /asset\.deletedAt/, "Must check deletedAt");
+});
+
+test("SEC13.61 Picker handleSelect calls getIneligibilityReason before onSelect", () => {
+  assert.match(pickerSource, /getIneligibilityReason\(asset\)[\s\S]*if \(reason\) return/, "Must guard selection with ineligibility check");
+});
+
+test("SEC13.62 Picker ineligible cards have aria-disabled attribute", () => {
+  assert.match(pickerSource, /aria-disabled=\{!eligible/, "Must set aria-disabled for ineligible");
+});
+
+test("SEC13.63 Picker ineligible cards have cursor: not-allowed", () => {
+  assert.match(pickerSource, /cursor: eligible \? "pointer" : "not-allowed"/, "Must use not-allowed cursor");
+});
+
+test("SEC13.64 Picker ineligible cards have opacity: 0.6", () => {
+  assert.match(pickerSource, /opacity: eligible \? 1 : 0\.6/, "Must reduce opacity for ineligible");
+});
+
+test("SEC13.65 Picker shows NOT SELECTABLE badge for ineligible assets", () => {
+  assert.match(pickerSource, /NOT SELECTABLE/, "Must display NOT SELECTABLE badge");
+});
+
+test("SEC13.66 Picker shows PUBLICATION ELIGIBLE badge for eligible assets", () => {
+  assert.match(pickerSource, /PUBLICATION ELIGIBLE/, "Must display PUBLICATION ELIGIBLE badge");
+});
+
+test("SEC13.67 Picker select button is disabled for ineligible assets", () => {
+  assert.match(pickerSource, /disabled=\{!eligible\}/, "Must disable select button for ineligible");
+});
+
+test("SEC13.68 Picker includes category in aria-label with ineligibility reason", () => {
+  assert.match(pickerSource, /Not selectable:.*ineligReason/, "Must include reason in aria-label");
+});
+
+/* ───────────────────────────────────────────────────────────────────────────
+   13-F. UPLOAD/CSRF — Upload readiness and CSRF source (51-58)
+   ─────────────────────────────────────────────────────────────────────────── */
+
+const adminConsoleSource = await readFile(
+  path.join(rootDir, "app", "components", "AdminConsole.tsx"),
+  "utf8",
+);
+
+test("SEC13.69 AdminConsole passes csrf prop to DoctorManager", () => {
+  assert.match(adminConsoleSource, /csrf=\{session\.csrf\}/, "Must pass csrf as prop to DoctorManager");
+});
+
+test("SEC13.70 AdminConsole uploadMedia returns url and mediaId tuple", () => {
+  assert.match(adminConsoleSource, /return \{ url: String\(uploadRes\.url/, "Must return url from upload");
+  assert.match(adminConsoleSource, /mediaId: String\(uploadRes\.id/, "Must return mediaId from upload");
+});
+
+test("SEC13.71 postAdmin sends x-csrf-token header", () => {
+  assert.match(adminConsoleSource, /"x-csrf-token": csrf/, "Must send CSRF in x-csrf-token header");
+});
+
+test("SEC13.72 uploadAdminMedia sends x-csrf-token header", () => {
+  assert.match(adminConsoleSource, /headers:.*"x-csrf-token": csrf/, "Must send CSRF for media upload");
+});
+
+test("SEC13.73 deleteAdminMedia sends x-csrf-token header", () => {
+  assert.match(adminConsoleSource, /DELETE[\s\S]*"x-csrf-token": csrf/, "Must send CSRF for media deletion");
+});
+
+/* ───────────────────────────────────────────────────────────────────────────
+   13-G. REGRESSIONS — Integration and structural (59-70)
+   ─────────────────────────────────────────────────────────────────────────── */
+
+test("SEC13.74 doctor-public.ts imports from media-resolver.ts not media-schema.ts", async () => {
+  const src = await readFile(path.join(rootDir, "app", "lib", "doctor-public.ts"), "utf8");
+  assert.match(src, /from "\.\/media-resolver\.ts"/, "Must import from media-resolver.ts");
+  assert.ok(!src.includes("media-schema"), "Must not reference media-schema");
+});
+
+test("SEC13.75 doctor-admin.ts imports from media-resolver.ts not media-schema.ts", async () => {
+  const src = await readFile(path.join(rootDir, "app", "lib", "doctor-admin.ts"), "utf8");
+  assert.match(src, /from "\.\/media-resolver\.ts"/, "Must import from media-resolver.ts");
+  assert.ok(!src.includes("media-schema"), "Must not reference media-schema");
+});
+
+test("SEC13.76 media-library.ts re-exports from media-resolver.ts", async () => {
+  const src = await readFile(path.join(rootDir, "app", "lib", "media-library.ts"), "utf8");
+  assert.match(src, /from "\.\/media-resolver\.ts"/, "Must import from media-resolver.ts");
+});
+
+test("SEC13.77 validateDoctorMediaRelation returns MediaRelationValidation type", async () => {
+  assert.match(
+    (await readFile(path.join(rootDir, "app", "lib", "doctor-admin.ts"), "utf8")),
+    /Promise<MediaRelationValidation>/,
+    "Must return typed result",
+  );
+});
+
+test("SEC13.78 R2 media URL in resolvePhotoFromMedia uses generateR2MediaUrl", async () => {
+  const src = await readFile(path.join(rootDir, "app", "lib", "doctor-public.ts"), "utf8");
+  assert.match(src, /generateR2MediaUrl\(r2Key\)/, "Must use generateR2MediaUrl for R2 keys");
+});
+
+test("SEC13.79 PUBLIC media path in resolvePhotoFromMedia uses validatePublicPath", async () => {
+  const src = await readFile(path.join(rootDir, "app", "lib", "doctor-public.ts"), "utf8");
+  assert.match(src, /validatePublicPath\(path\)/, "Must use validatePublicPath for PUBLIC paths");
+});
+
+test("SEC13.80 R2 key validation in validateDoctorMediaRelation uses generateR2MediaUrl", async () => {
+  const src = await readFile(path.join(rootDir, "app", "lib", "doctor-admin.ts"), "utf8");
+  assert.match(src, /generateR2MediaUrl\(r2Key\)/, "Must validate R2 key with generateR2MediaUrl");
+});
+
+test("SEC13.81 PUBLIC path validation in validateDoctorMediaRelation uses validatePublicPath", async () => {
+  const src = await readFile(path.join(rootDir, "app", "lib", "doctor-admin.ts"), "utf8");
+  assert.match(src, /validatePublicPath\(path\)/, "Must validate PUBLIC path with validatePublicPath");
+});
+
+test("SEC13.82 isMediaEligible checks ma_category === DOCTOR as first eligibility check after ma_id", async () => {
+  const src = await readFile(path.join(rootDir, "app", "lib", "doctor-public.ts"), "utf8");
+  const catIdx = src.indexOf('String(row.ma_category) !== "DOCTOR"');
+  const idIdx = src.indexOf("!row.ma_id");
+  assert.ok(catIdx > idIdx, "Category check must come after ma_id check");
+});
+
+test("SEC13.83 Gateway SELECT includes category column in metadata query", () => {
+  assert.match(mediaGateway, /category,/, "Must include category in SELECT list");
+});
+
+test("SEC13.84 validateDoctorMediaRelation checks storage_type before resolving URLs", async () => {
+  const src = await readFile(path.join(rootDir, "app", "lib", "doctor-admin.ts"), "utf8");
+  const storageCheck = src.indexOf('if (storageType === "R2")');
+  const r2Check = src.indexOf("generateR2MediaUrl(r2Key)");
+  assert.ok(storageCheck < r2Check, "Storage type must be checked before R2 key validation");
+});
+
+test("SEC13.85 resolvePublicDoctors catches errors and returns empty array", async () => {
+  const result = await resolvePublicDoctors(throwingQuery());
+  assert.deepEqual(result, [], "Must return empty array on D1 failure");
+});
+
+test("SEC13.86 resolveDoctorBySlug catches errors and returns null", async () => {
+  const result = await resolveDoctorBySlug(throwingQuery(), "dr-test");
+  assert.equal(result, null, "Must return null on D1 failure");
+});
+
+test("SEC13.87 validateDoctorMediaRelation is an async function returning Promise", async () => {
+  const src = await readFile(path.join(rootDir, "app", "lib", "doctor-admin.ts"), "utf8");
+  assert.match(src, /export async function validateDoctorMediaRelation/, "Must be async function");
+});
+
+test("SEC13.88 Picker category prop defaults to GALLERY when not provided", () => {
+  assert.match(pickerSource, /category = "GALLERY"/, "Must default category to GALLERY");
+});
+
+test("SEC13.89 Picker uses category prop in fetchMediaLibrary call", () => {
+  assert.match(pickerSource, /category,/, "Must pass category to fetchMediaLibrary");
+});
+
+test("SEC13.90 validateDoctorMediaRelation rejects HIDDEN lifecycle media for visible doctor", async () => {
+  const media = makeMediaAssetForValidation({ lifecycle_status: "HIDDEN" });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", true);
+  assert.equal(result.ok, false, "HIDDEN media must fail for visible doctor");
+});
+
+test("SEC13.91 validateDoctorMediaRelation rejects unapproved media for visible doctor", async () => {
+  const media = makeMediaAssetForValidation({ status: "PENDING" });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", true);
+  assert.equal(result.ok, false, "PENDING status must fail for visible doctor");
+});
+
+test("SEC13.92 validateDoctorMediaRelation accepts hidden media for hidden doctor", async () => {
+  const media = makeMediaAssetForValidation({ lifecycle_status: "HIDDEN", is_visible: 0 });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", false);
+  assert.equal(result.ok, true, "Hidden doctor can use HIDDEN media");
+});
+
+test("SEC13.93 validateDoctorMediaRelation accepts DRAFT media for hidden doctor", async () => {
+  const media = makeMediaAssetForValidation({ lifecycle_status: "DRAFT", status: "DRAFT", is_visible: 0 });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", false);
+  assert.equal(result.ok, true, "Hidden doctor can use DRAFT media");
+});
+
+test("SEC13.94 validateDoctorMediaRelation rejects PUBLIC path with encoded backslash", async () => {
+  const media = makeMediaAssetForValidation({
+    storage_type: "PUBLIC", r2_key: "",
+    public_path: "/assets/%5cetc/passwd", display_public_path: null,
+  });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", true);
+  assert.equal(result.ok, false, "Encoded backslash must fail validation");
+});
+
+test("SEC13.95 validateDoctorMediaRelation rejects R2 key with dot segment", async () => {
+  const media = makeMediaAssetForValidation({ r2_key: "doctor-photo/./file.webp" });
+  const repo = makeValidationRepo(media);
+  const result = await validateDoctorMediaRelation(repo, "m1", true);
+  assert.equal(result.ok, false, "Dot segment in R2 key must fail validation");
 });

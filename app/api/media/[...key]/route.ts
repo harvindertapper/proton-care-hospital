@@ -47,13 +47,14 @@ export async function GET(_request: Request, { params }: { params: Promise<{ key
     id: string;
     r2_key: string;
     purpose: string;
+    category: string;
     lifecycle_status: string;
     status: string;
     is_visible: number;
     deleted_at: string | null;
     storage_type: string;
   }>(
-    `SELECT id, r2_key, purpose, lifecycle_status, status, is_visible, deleted_at, storage_type
+    `SELECT id, r2_key, purpose, category, lifecycle_status, status, is_visible, deleted_at, storage_type
      FROM media_assets
      WHERE storage_type = 'R2'
        AND r2_key = ?
@@ -73,7 +74,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ key
   if (meta.purpose === "gallery") {
     // Gallery: authorized
   } else if (meta.purpose === "doctor-photo" || meta.purpose === "admin-upload") {
-    // Doctor photo or admin-upload: must be referenced by an eligible doctor
+    // Doctor photo or admin-upload: must be DOCTOR category and referenced by an eligible doctor
+    if (meta.category !== "DOCTOR") {
+      return new Response("Not found", { status: 404 });
+    }
     // Check 1: Legacy photo_url match
     const doctorRef = await query<{ slug: string }>(
       `SELECT slug FROM doctor_profiles
@@ -94,6 +98,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ key
         `SELECT dp.slug FROM doctor_profiles dp
          INNER JOIN media_assets ma ON ma.id = dp.photo_media_id
          WHERE ma.r2_key = ?
+           AND ma.category = 'DOCTOR'
            AND dp.lifecycle_status = 'PUBLISHED'
            AND dp.status = 'APPROVED'
            AND dp.is_visible = 1

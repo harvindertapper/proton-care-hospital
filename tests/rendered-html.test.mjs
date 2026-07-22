@@ -22,7 +22,8 @@ await writeFile(new URL("./status-route-real-mocked.ts", import.meta.url), mocke
 // Setup dynamic mock for media-library
 const mediaLibraryContent = await readFile(new URL("../app/lib/media-library.ts", import.meta.url), "utf8");
 const mockedMediaLibraryContent = mediaLibraryContent
-  .replace('from "./media-schema";', 'from "../app/lib/media-schema.ts";');
+  .replace('from "./media-schema";', 'from "../app/lib/media-schema.ts";')
+  .replaceAll('from "./media-resolver.ts";', 'from "../app/lib/media-resolver.ts";');
 await writeFile(new URL("./media-library-mocked.ts", import.meta.url), mockedMediaLibraryContent, "utf8");
 
 // Setup dynamic mock for gallery-v2

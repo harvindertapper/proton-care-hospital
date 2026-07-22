@@ -146,6 +146,8 @@ export default function MediaPickerDialog({ csrf, onClose, onSelect, category = 
   };
 
   const handleSelect = (asset: MediaAssetDto) => {
+    const reason = getIneligibilityReason(asset);
+    if (reason) return;
     setSelectedId(asset.id);
     onSelect(asset);
   };
@@ -193,7 +195,17 @@ export default function MediaPickerDialog({ csrf, onClose, onSelect, category = 
     asset.category === category &&
     asset.lifecycleStatus === "PUBLISHED" &&
     asset.status === "APPROVED" &&
-    asset.isVisible === 1;
+    asset.isVisible === 1 &&
+    !asset.deletedAt;
+
+  const getIneligibilityReason = (asset: MediaAssetDto): string | null => {
+    if (asset.category !== category) return `Category is ${asset.category}, not ${category}.`;
+    if (asset.lifecycleStatus !== "PUBLISHED") return `Lifecycle status is ${asset.lifecycleStatus}, not PUBLISHED.`;
+    if (asset.status !== "APPROVED") return `Status is ${asset.status}, not APPROVED.`;
+    if (asset.isVisible !== 1) return "Asset is not visible.";
+    if (asset.deletedAt) return "Asset is archived.";
+    return null;
+  };
 
   return (
     <div
@@ -392,6 +404,7 @@ export default function MediaPickerDialog({ csrf, onClose, onSelect, category = 
               {assets.map((asset) => {
                 const isSelected = selectedId === asset.id;
                 const eligible = isEligible(asset);
+                const ineligReason = eligible ? null : getIneligibilityReason(asset);
                 const lcStyle = lifecycleBadgeStyle(asset.lifecycleStatus);
                 return (
                   <div
@@ -399,16 +412,18 @@ export default function MediaPickerDialog({ csrf, onClose, onSelect, category = 
                     role="listitem"
                     className="media-picker-card"
                     tabIndex={0}
+                    aria-disabled={!eligible || undefined}
+                    aria-label={`${asset.title || asset.fileName} — ${asset.lifecycleStatus}, ${asset.status}, ${asset.isVisible ? "visible" : "hidden"}, ${asset.storageType}${ineligReason ? ` — Not selectable: ${ineligReason}` : ""}`}
                     onClick={() => handleSelect(asset)}
                     onKeyDown={(e) => handleCardKeyDown(e, asset)}
-                    aria-label={`${asset.title || asset.fileName} — ${asset.lifecycleStatus}, ${asset.status}, ${asset.isVisible ? "visible" : "hidden"}, ${asset.storageType}`}
                     style={{
                       background: "#fff",
                       border: isSelected ? "2px solid #0d9488" : "1px solid #e2e8f0",
                       borderRadius: 8,
                       padding: 8,
-                      cursor: "pointer",
+                      cursor: eligible ? "pointer" : "not-allowed",
                       transition: "box-shadow 0.15s",
+                      opacity: eligible ? 1 : 0.6,
                     }}
                   >
                     <img
@@ -461,6 +476,23 @@ export default function MediaPickerDialog({ csrf, onClose, onSelect, category = 
                           }}
                         >
                           PUBLICATION ELIGIBLE
+                        </span>
+                      )}
+                      {!eligible && ineligReason && (
+                        <span
+                          style={{
+                            display: "inline-block",
+                            padding: "1px 6px",
+                            borderRadius: 4,
+                            fontSize: 10,
+                            fontWeight: 700,
+                            background: "#fef2f2",
+                            color: "#991b1b",
+                            marginTop: 4,
+                          }}
+                          title={ineligReason}
+                        >
+                          NOT SELECTABLE
                         </span>
                       )}
                       <div
@@ -527,14 +559,15 @@ export default function MediaPickerDialog({ csrf, onClose, onSelect, category = 
                     </div>
                     <button
                       className="button primary small"
+                      disabled={!eligible}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleSelect(asset);
                       }}
-                      aria-label={`Select ${asset.title || asset.fileName}`}
+                      aria-label={eligible ? `Select ${asset.title || asset.fileName}` : `Not selectable: ${ineligReason}`}
                       style={{ width: "100%", marginTop: 8 }}
                     >
-                      {selectLabel}
+                      {eligible ? selectLabel : "Not Selectable"}
                     </button>
                   </div>
                 );

@@ -58,7 +58,8 @@ await writeFile(new URL("./data-route-real-mocked-db.ts", import.meta.url), mock
 // 3. Setup dynamic mock for media-library and gallery-v2
 const mediaLibraryContent = await readFile(new URL("../app/lib/media-library.ts", import.meta.url), "utf8");
 const mockedMediaLibraryContent = mediaLibraryContent
-  .replace('from "./media-schema";', 'from "../app/lib/media-schema.ts";');
+  .replace('from "./media-schema";', 'from "../app/lib/media-schema.ts";')
+  .replaceAll('from "./media-resolver.ts";', 'from "../app/lib/media-resolver.ts";');
 await writeFile(new URL("./media-library-reorder-mocked.ts", import.meta.url), mockedMediaLibraryContent, "utf8");
 
 const galleryV2Content = await readFile(new URL("../app/lib/gallery-v2.ts", import.meta.url), "utf8");
