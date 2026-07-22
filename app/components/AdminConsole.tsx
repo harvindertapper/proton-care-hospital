@@ -1285,7 +1285,7 @@ export function AdminConsole({
             busy={busy}
             csrf={session.csrf}
             onSave={(payload) => mutate({ action: "blog.save", payload }, "Blog saved or sent for approval.")}
-            onVisibility={(slug, isVisible) => mutate({ action: "blog.visibility", payload: { slug, isVisible } }, isVisible ? "Blog shown publicly." : "Blog hidden from public site.")}
+            onVisibility={(slug, blogId, action, expectedVersion) => mutate({ action: "blog.visibility", payload: { blogId, action, expectedVersion } }, action === "publish" ? "Blog published publicly." : "Blog hidden from public site.")}
             onDelete={(slug) => mutate({ action: "blog.delete", slug }, "Blog deleted successfully.")}
             rows={adminData.blogs}
           />
@@ -2413,20 +2413,37 @@ function BlogForm({
   busy: boolean;
   csrf: string;
   onSave: (payload: Record<string, unknown>) => void;
-  onVisibility?: (slug: string, isVisible: number) => void;
+  onVisibility?: (slug: string, blogId: string, action: string, expectedVersion: number) => void;
   onDelete?: (slug: string) => void;
   rows: AdminData["blogs"];
 }) {
   const [form, setForm] = useState({ title: "", slug: "", excerpt: "", body: "", coverMediaId: "", blogId: "", expectedVersion: 0 });
   const [showCoverPicker, setShowCoverPicker] = useState(false);
+  const [coverDirty, setCoverDirty] = useState(false);
   const isEditing = rows.some(b => b.slug === form.slug && form.slug);
   return (
     <div className="admin-panel-grid">
-      <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave({ ...form, slug: form.slug || slugify(form.title), coverMediaId: form.coverMediaId || null, expectedVersion: isEditing ? form.expectedVersion : 0 }); }}>
+      <form className="admin-form" onSubmit={(event) => {
+        event.preventDefault();
+        const payload: Record<string, unknown> = {
+          title: form.title,
+          slug: form.slug || slugify(form.title),
+          excerpt: form.excerpt,
+          body: form.body,
+          expectedVersion: isEditing ? form.expectedVersion : 0,
+        };
+        if (isEditing && form.blogId) {
+          payload.blogId = form.blogId;
+        }
+        if (isEditing && coverDirty) {
+          payload.coverMediaId = form.coverMediaId || null;
+        }
+        onSave(payload);
+      }}>
         {isEditing && (
           <div style={{ background: "#e0f2fe", color: "#0369a1", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <span>Editing blog post: <strong>{form.title}</strong></span>
-            <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({ title: "", slug: "", excerpt: "", body: "", coverMediaId: "", blogId: "", expectedVersion: 0 })}>
+            <span>Editing blog post: <strong>{form.title}</strong> (v{form.expectedVersion})</span>
+            <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => { setForm({ title: "", slug: "", excerpt: "", body: "", coverMediaId: "", blogId: "", expectedVersion: 0 }); setCoverDirty(false); }}>
               Create New
             </button>
           </div>
@@ -2440,7 +2457,7 @@ function BlogForm({
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "var(--navy)" }}>Blog Cover Image</div>
           {form.coverMediaId ? (
             <div style={{ fontSize: 12, color: "#16a34a", background: "#f0fdf4", padding: "6px 10px", borderRadius: 6, marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
-              <img src={`/api/media/${rows.find(b => b.slug === form.slug)?.cover_media_id ? `blog-cover/${form.coverMediaId}` : form.coverMediaId}`} alt={form.title || "Blog cover"} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 4 }} />
+              <img src={`/api/media/${form.coverMediaId}`} alt={form.title || "Blog cover"} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 4 }} />
               <span>Cover set</span>
             </div>
           ) : (
@@ -2453,8 +2470,8 @@ function BlogForm({
               Select from Media Library
             </button>
             {form.coverMediaId && (
-              <button type="button" className="button secondary small" style={{ color: "#dc2626" }} onClick={() => setForm({ ...form, coverMediaId: "" })}>
-                Clear Cover
+              <button type="button" className="button secondary small" style={{ color: "#dc2626" }} onClick={() => { setForm({ ...form, coverMediaId: "" }); setCoverDirty(true); }}>
+                Remove Cover
               </button>
             )}
           </div>
@@ -2488,6 +2505,7 @@ function BlogForm({
           onClose={() => setShowCoverPicker(false)}
           onSelect={(asset) => {
             setForm({ ...form, coverMediaId: asset.id });
+            setCoverDirty(true);
             setShowCoverPicker(false);
           }}
         />
@@ -2495,22 +2513,25 @@ function BlogForm({
       <DataTable
         rows={rows}
         columns={["title", "status", "is_visible", "created_at"]}
-        onRowClick={(row) => setForm({
-          title: String(row.title || ""),
-          slug: String(row.slug || ""),
-          excerpt: String(row.excerpt || ""),
-          body: String(row.body || ""),
-          coverMediaId: String(row.cover_media_id || ""),
-          blogId: String(row.id || ""),
-          expectedVersion: Number(row.version || 0),
-        })}
-        actions={onVisibility ? (row) => (
+        onRowClick={(row) => {
+          setForm({
+            title: String(row.title || ""),
+            slug: String(row.slug || ""),
+            excerpt: String(row.excerpt || ""),
+            body: String(row.body || ""),
+            coverMediaId: String(row.cover_media_id || ""),
+            blogId: String(row.id || ""),
+            expectedVersion: Number(row.version || 0),
+          });
+          setCoverDirty(false);
+        }}
+        actions={onVisibility && isEditing ? (row) => (
           <div className="table-actions">
             <button
               disabled={busy || row.status !== "APPROVED"}
-              onClick={() => onVisibility(String(row.slug), row.is_visible ? 0 : 1)}
+              onClick={() => onVisibility(String(row.slug), String(row.id || ""), row.is_visible ? "hide" : "publish", Number(row.version || 0))}
             >
-              {row.is_visible ? "Hide" : "Show"}
+              {row.is_visible ? "Hide" : "Publish"}
             </button>
           </div>
         ) : undefined}

@@ -20,6 +20,8 @@ export type PublicBlog = {
   created_at?: string;
   coverMediaUrl?: string | null;
   coverAltText?: string | null;
+  coverWidth?: number | null;
+  coverHeight?: number | null;
 };
 
 export type PublicJob = {
@@ -85,9 +87,16 @@ export async function getPublishedBlogs() {
               ma.r2_key AS cover_r2_key,
               ma.public_path AS cover_public_path,
               ma.display_public_path AS cover_display_public_path,
-              ma.alt_text AS cover_alt_text
+              ma.alt_text AS cover_alt_text,
+              ma.width AS cover_width,
+              ma.height AS cover_height
        FROM blog_posts bp
-       LEFT JOIN media_assets ma ON bp.cover_media_id = ma.id AND ma.deleted_at IS NULL
+       LEFT JOIN media_assets ma ON bp.cover_media_id = ma.id
+         AND ma.deleted_at IS NULL
+         AND ma.category = 'BLOG'
+         AND ma.lifecycle_status = 'PUBLISHED'
+         AND ma.status = 'APPROVED'
+         AND ma.is_visible = 1
        WHERE bp.status = 'APPROVED' AND bp.is_visible = 1 AND bp.is_deleted = 0
          AND bp.lifecycle_status = 'PUBLISHED'
        ORDER BY bp.created_at DESC`,
@@ -104,6 +113,8 @@ export async function getPublishedBlogs() {
         created_at: row.created_at as string,
         coverMediaUrl: resolveBlogCoverUrl(row),
         coverAltText: (row.cover_alt_text as string) || null,
+        coverWidth: row.cover_width != null ? Number(row.cover_width) : null,
+        coverHeight: row.cover_height != null ? Number(row.cover_height) : null,
       }));
     }
   } catch {
@@ -170,9 +181,16 @@ export async function getBlogBySlug(slug: string): Promise<PublicBlog | null> {
               ma.r2_key AS cover_r2_key,
               ma.public_path AS cover_public_path,
               ma.display_public_path AS cover_display_public_path,
-              ma.alt_text AS cover_alt_text
+              ma.alt_text AS cover_alt_text,
+              ma.width AS cover_width,
+              ma.height AS cover_height
        FROM blog_posts bp
-       LEFT JOIN media_assets ma ON bp.cover_media_id = ma.id AND ma.deleted_at IS NULL
+       LEFT JOIN media_assets ma ON bp.cover_media_id = ma.id
+         AND ma.deleted_at IS NULL
+         AND ma.category = 'BLOG'
+         AND ma.lifecycle_status = 'PUBLISHED'
+         AND ma.status = 'APPROVED'
+         AND ma.is_visible = 1
        WHERE bp.slug = ? AND bp.status = 'APPROVED' AND bp.is_visible = 1 AND bp.is_deleted = 0
          AND bp.lifecycle_status = 'PUBLISHED'`,
       slug
@@ -190,6 +208,8 @@ export async function getBlogBySlug(slug: string): Promise<PublicBlog | null> {
         created_at: row.created_at as string,
         coverMediaUrl: resolveBlogCoverUrl(row),
         coverAltText: (row.cover_alt_text as string) || null,
+        coverWidth: row.cover_width != null ? Number(row.cover_width) : null,
+        coverHeight: row.cover_height != null ? Number(row.cover_height) : null,
       };
     }
   } catch {

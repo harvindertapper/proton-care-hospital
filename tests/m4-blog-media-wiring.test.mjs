@@ -260,14 +260,12 @@ test("LOAD.18 loadBlog returns version", async () => {
   db.close();
 });
 
-test("LOAD.19 loadBlog detects deleted blog", async () => {
+test("LOAD.19 loadBlog returns null for deleted blog", async () => {
   const db = openFullDb();
   insertBlog(db, { id: "b1", slug: "test-blog", title: "Test", excerpt: "E", body: "B", isDeleted: 1, deletedAt: "2026-01-01" });
   const repo = makeRepo(db);
   const result = await loadBlog(repo, "test-blog");
-  assert.ok(result);
-  assert.equal(result.is_deleted, 1);
-  assert.ok(result.deleted_at);
+  assert.equal(result, null, "loadBlog returns null for deleted blog");
   db.close();
 });
 
@@ -623,7 +621,9 @@ test("TYPE.49 getPublishedBlogs SQL includes LEFT JOIN media_assets", async () =
 
 test("TYPE.50 getBlogBySlug SQL includes LEFT JOIN media_assets", async () => {
   const src = fs.readFileSync(path.join(rootDir, "app", "lib", "public-data.ts"), "utf8");
-  assert.ok(src.includes("LEFT JOIN media_assets ma ON bp.cover_media_id = ma.id AND ma.deleted_at IS NULL"), "Slug query must LEFT JOIN");
+  assert.ok(src.includes("LEFT JOIN media_assets ma ON bp.cover_media_id = ma.id"), "Slug query must LEFT JOIN");
+  assert.ok(src.includes("ma.deleted_at IS NULL"), "Slug query must check ma.deleted_at IS NULL");
+  assert.ok(src.includes("ma.category = 'BLOG'"), "Slug query must check ma.category = BLOG");
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -685,14 +685,15 @@ test("FORM.59 BlogForm renders MediaPickerDialog with category BLOG", async () =
   assert.ok(src.includes('category="BLOG"'), "MediaPickerDialog must use BLOG category");
 });
 
-test("FORM.60 BlogForm includes coverMediaId in save payload", async () => {
+test("FORM.60 BlogForm conditionally includes coverMediaId in save payload", async () => {
   const src = fs.readFileSync(path.join(rootDir, "app", "components", "AdminConsole.tsx"), "utf8");
-  assert.ok(src.includes("coverMediaId: form.coverMediaId || null"), "save payload must include coverMediaId");
+  assert.ok(src.includes("coverMediaId = form.coverMediaId || null"), "save payload must include coverMediaId when coverDirty");
+  assert.ok(src.includes("coverDirty"), "BlogForm must track coverDirty state");
 });
 
-test("FORM.61 BlogForm has Clear Cover button", async () => {
+test("FORM.61 BlogForm has Remove Cover button", async () => {
   const src = fs.readFileSync(path.join(rootDir, "app", "components", "AdminConsole.tsx"), "utf8");
-  assert.ok(src.includes("Clear Cover"), "BlogForm must have Clear Cover button");
+  assert.ok(src.includes("Remove Cover"), "BlogForm must have Remove Cover button");
 });
 
 test("FORM.62 BlogForm has Select from Media Library button", async () => {
@@ -702,8 +703,10 @@ test("FORM.62 BlogForm has Select from Media Library button", async () => {
 
 test("FORM.63 BlogForm onRowClick includes coverMediaId", async () => {
   const src = fs.readFileSync(path.join(rootDir, "app", "components", "AdminConsole.tsx"), "utf8");
-  const match = src.match(/onRowClick=\{\(row\) => setForm\(\{[^}]*coverMediaId[^}]*\}/s);
-  assert.ok(match, "BlogForm onRowClick must populate coverMediaId");
+  const blogFormIdx = src.indexOf("function BlogForm");
+  const block = src.substring(blogFormIdx, blogFormIdx + 4000);
+  assert.ok(block.includes("coverMediaId"), "BlogForm onRowClick must populate coverMediaId");
+  assert.ok(block.includes("setCoverDirty"), "BlogForm must reset coverDirty on row click");
 });
 
 test("FORM.64 BlogForm shows cover status indicator", async () => {

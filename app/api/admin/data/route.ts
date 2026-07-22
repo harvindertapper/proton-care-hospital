@@ -30,9 +30,12 @@ import {
 } from "@/app/lib/doctor-admin";
 import {
   loadBlog,
+  loadBlogById,
   validateBlogMediaRelation,
   createBlog,
   updateBlog,
+  publishBlog,
+  hideBlog,
   type BlogRepo,
 } from "@/app/lib/blog-admin";
 import { departmentBySlug } from "@/app/lib/data";
@@ -243,57 +246,67 @@ async function applyBlog(payload: Record<string, unknown>, actorEmail: string) {
   const body = clean(payload.body, 8000);
   if (!title || !slug || !excerpt || !body) throw new Error("Invalid blog payload.");
 
-  const coverMediaIdExplicitlyProvided = payload.coverMediaId !== undefined && payload.coverMediaId !== null;
-  const coverMediaId = coverMediaIdExplicitlyProvided
-    ? (typeof payload.coverMediaId === "string" && payload.coverMediaId.trim()
-      ? clean(payload.coverMediaId, 140) || null
-      : null)
-    : undefined;
-  const isVisible = payload.isVisible !== undefined ? Number(payload.isVisible) === 1 : true;
+  const blogId = typeof payload.blogId === "string" ? clean(payload.blogId, 140) || "" : "";
+
+  const coverMediaIdHasKey = Object.prototype.hasOwnProperty.call(payload, "coverMediaId");
+  let coverMediaIdExplicitlyProvided = false;
+  let coverMediaId: string | null = null;
+  if (coverMediaIdHasKey) {
+    coverMediaIdExplicitlyProvided = true;
+    if (typeof payload.coverMediaId === "string" && payload.coverMediaId.trim()) {
+      coverMediaId = clean(payload.coverMediaId, 140) || null;
+    } else {
+      coverMediaId = null;
+    }
+  }
 
   const blogRepo: BlogRepo = { query, run, audit };
-  const existing = await loadBlog(blogRepo, slug);
 
   const expectedVersion = typeof payload.expectedVersion === "number"
-    ? parseExpectedVersion(payload.expectedVersion, { minimum: 1 })
+    ? parseExpectedVersion(payload.expectedVersion, { minimum: 0 })
     : NaN;
 
-  if (existing) {
-    if (existing.is_deleted) {
-      throw new MutationNotFoundError("Blog post");
-    }
-    if (Number.isNaN(expectedVersion)) {
+  if (blogId) {
+    const existing = await loadBlogById(blogRepo, blogId);
+    if (!existing) throw new MutationNotFoundError("Blog post");
+    if (existing.is_deleted) throw new MutationNotFoundError("Blog post");
+    if (Number.isNaN(expectedVersion) || expectedVersion < 1) {
       throw new Error("expectedVersion is required for existing blog posts.");
     }
     if (existing.version !== expectedVersion) {
       throw new MutationConflictError("Blog post was modified by another session. Refresh and try again.");
     }
-  } else {
-    if (!Number.isNaN(expectedVersion) && expectedVersion > 0) {
-      throw new MutationConflictError("Blog post was created by another session. Refresh and try again.");
+
+    if (coverMediaIdExplicitlyProvided && coverMediaId) {
+      const existingVisible = existing.is_visible === 1;
+      const mediaCheck = await validateBlogMediaRelation(blogRepo, coverMediaId, existingVisible);
+      if (!mediaCheck.ok) throw new Error(mediaCheck.error);
     }
-  }
 
-  const effectiveCoverMediaId = coverMediaIdExplicitlyProvided ? coverMediaId : null;
-  if (effectiveCoverMediaId) {
-    const targetVisible = existing ? (isVisible || existing.is_visible === 1) : isVisible;
-    const mediaCheck = await validateBlogMediaRelation(blogRepo, effectiveCoverMediaId, targetVisible);
-    if (!mediaCheck.ok) throw new Error(mediaCheck.error);
-  }
-
-  if (existing) {
-    return updateBlog(blogRepo, slug, expectedVersion, {
+    return updateBlog(blogRepo, blogId, expectedVersion, {
       title, excerpt, body,
-      coverMediaId: coverMediaId ?? null,
+      coverMediaId: coverMediaId,
       coverMediaIdExplicitlyProvided,
-      isVisible,
     }, actorEmail);
+  }
+
+  const existingBySlug = await loadBlog(blogRepo, slug);
+  if (existingBySlug) {
+    throw new MutationConflictError("A blog with this slug already exists. Use blogId to update.");
+  }
+
+  if (!Number.isNaN(expectedVersion) && expectedVersion > 0) {
+    throw new MutationConflictError("Blog post was created by another session. Refresh and try again.");
+  }
+
+  if (coverMediaIdExplicitlyProvided && coverMediaId) {
+    const mediaCheck = await validateBlogMediaRelation(blogRepo, coverMediaId, false);
+    if (!mediaCheck.ok) throw new Error(mediaCheck.error);
   }
 
   return createBlog(blogRepo, slug, {
     title, excerpt, body,
-    coverMediaId: coverMediaId ?? null,
-    isVisible,
+    coverMediaId: coverMediaId,
   }, actorEmail);
 }
 
@@ -392,14 +405,27 @@ async function applyFeedbackVisibility(
 }
 
 async function applyBlogVisibility(payload: Record<string, unknown>, actorEmail: string) {
-  const slug = clean(payload.slug, 120);
-  const isVisible = Number(payload.isVisible) === 1 ? 1 : 0;
-  if (!slug) throw new Error("Blog slug is required.");
-  const existing = await query("SELECT id FROM blog_posts WHERE slug = ? AND is_deleted = 0 LIMIT 1", slug);
-  const result = await run("UPDATE blog_posts SET is_visible = ?, status = ? WHERE slug = ? AND is_deleted = 0", isVisible, isVisible ? "APPROVED" : "HIDDEN", slug);
-  requireAppliedMutation(result, Boolean(existing.results?.length), "Blog post");
-  await audit(actorEmail, "BLOG_VISIBILITY", "BlogPost", slug, `visible=${isVisible}`);
-  return { outcome: "APPLIED" as const };
+  const blogId = typeof payload.blogId === "string" ? clean(payload.blogId, 140) || "" : "";
+  if (!blogId) throw new Error("Blog ID is required.");
+
+  const expectedVersion = typeof payload.expectedVersion === "number"
+    ? parseExpectedVersion(payload.expectedVersion, { minimum: 1 })
+    : NaN;
+  if (Number.isNaN(expectedVersion)) {
+    throw new Error("expectedVersion is required for blog visibility changes.");
+  }
+
+  const targetAction = clean(payload.action, 40).toUpperCase();
+  if (targetAction !== "publish" && targetAction !== "hide") {
+    throw new Error("action must be 'publish' or 'hide'.");
+  }
+
+  const blogRepo: BlogRepo = { query, run, audit };
+
+  if (targetAction === "publish") {
+    return publishBlog(blogRepo, blogId, expectedVersion, actorEmail);
+  }
+  return hideBlog(blogRepo, blogId, expectedVersion, actorEmail);
 }
 
 async function applyCareerVisibility(payload: Record<string, unknown>, actorEmail: string) {
@@ -848,6 +874,9 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Blog title is required." };
     if (typeof obj.body !== "string" || !obj.body.trim()) return { ok: false, error: "Blog body is required." };
     if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Blog slug is required." };
+    if (obj.blogId !== undefined && obj.blogId !== null && obj.blogId !== "") {
+      if (typeof obj.blogId !== "string" || obj.blogId.length > 140) return { ok: false, error: "blogId must be a string of at most 140 characters." };
+    }
     if (obj.coverMediaId !== undefined && obj.coverMediaId !== null && obj.coverMediaId !== "") {
       if (typeof obj.coverMediaId !== "string" || obj.coverMediaId.length > 140) return { ok: false, error: "coverMediaId must be a string of at most 140 characters." };
     }
@@ -855,6 +884,14 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
       if (typeof obj.expectedVersion !== "number" || Number.isNaN(parseExpectedVersion(obj.expectedVersion))) {
         return { ok: false, error: "expectedVersion must be a non-negative integer." };
       }
+    }
+  } else if (action === "blog.visibility") {
+    if (typeof obj.blogId !== "string" || !obj.blogId.trim()) return { ok: false, error: "blogId is required." };
+    if (typeof obj.expectedVersion !== "number" || Number.isNaN(parseExpectedVersion(obj.expectedVersion, { minimum: 1 }))) {
+      return { ok: false, error: "expectedVersion must be a positive integer." };
+    }
+    if (typeof obj.action !== "string" || !["publish", "hide"].includes(clean(obj.action, 40).toLowerCase())) {
+      return { ok: false, error: "action must be 'publish' or 'hide'." };
     }
   } else if (action === "career.save") {
     if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Job title is required." };
@@ -994,7 +1031,7 @@ async function applyDeleteBlog(payload: Record<string, unknown>, actorEmail: str
   const slug = clean(payload.slug, 120);
   if (!slug) throw new Error("Blog slug is required.");
   const existing = await query("SELECT id FROM blog_posts WHERE slug = ? AND is_deleted = 0 LIMIT 1", slug);
-  const result = await run("UPDATE blog_posts SET is_deleted = 1 WHERE slug = ? AND is_deleted = 0", slug);
+  const result = await run("UPDATE blog_posts SET is_deleted = 1, deleted_at = CURRENT_TIMESTAMP WHERE slug = ? AND is_deleted = 0", slug);
   requireAppliedMutation(result, Boolean(existing.results?.length), "Blog post");
   await audit(actorEmail, "BLOG_DELETED", "BlogPost", slug, `Soft deleted blog post with slug: ${slug}`);
   return { outcome: "APPLIED" as const };

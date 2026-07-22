@@ -74,15 +74,17 @@ export async function GET(_request: Request, { params }: { params: Promise<{ key
   if (meta.purpose === "gallery") {
     // Gallery: authorized
   } else if (meta.purpose === "blog-cover") {
-    // Blog cover: must be BLOG category and referenced by an active blog post
+    // Blog cover: must be BLOG category and referenced by an eligible blog post
     if (meta.category !== "BLOG") {
       return new Response("Not found", { status: 404 });
     }
     const blogRef = await query<{ slug: string }>(
       `SELECT slug FROM blog_posts
        WHERE cover_media_id = (SELECT id FROM media_assets WHERE r2_key = ? AND deleted_at IS NULL LIMIT 1)
+         AND status = 'APPROVED'
          AND is_visible = 1
          AND is_deleted = 0
+         AND deleted_at IS NULL
          AND lifecycle_status = 'PUBLISHED'
        LIMIT 1`,
       objectKey,
@@ -93,14 +95,16 @@ export async function GET(_request: Request, { params }: { params: Promise<{ key
   } else if (meta.purpose === "doctor-photo" || meta.purpose === "admin-upload") {
     // Doctor photo or admin-upload: must be DOCTOR or BLOG category and referenced by an eligible entity
     if (meta.category === "BLOG") {
-      // Blog cover: check if referenced by an active blog post
+      // Blog cover: check if referenced by an eligible blog post
       const blogMediaRef = await query<{ slug: string }>(
         `SELECT bp.slug FROM blog_posts bp
          INNER JOIN media_assets ma ON bp.cover_media_id = ma.id
          WHERE ma.r2_key = ?
            AND ma.category = 'BLOG'
+           AND bp.status = 'APPROVED'
            AND bp.is_visible = 1
            AND bp.is_deleted = 0
+           AND bp.deleted_at IS NULL
            AND bp.lifecycle_status = 'PUBLISHED'
          LIMIT 1`,
         objectKey,

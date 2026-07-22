@@ -33,8 +33,8 @@ export default async function BlogPage() {
                     <img
                       src={blog.coverMediaUrl}
                       alt={blog.coverAltText || blog.title}
-                      width={800}
-                      height={180}
+                      width={blog.coverWidth && blog.coverWidth > 0 ? blog.coverWidth : 800}
+                      height={blog.coverHeight && blog.coverHeight > 0 ? blog.coverHeight : 180}
                       style={{ width: "100%", height: 180, objectFit: "cover", borderRadius: 8, marginBottom: 16 }}
                     />
                   ) : (

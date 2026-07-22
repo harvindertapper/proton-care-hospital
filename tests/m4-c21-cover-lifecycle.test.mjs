@@ -11,6 +11,7 @@ const ROOT = path.resolve(path.dirname(__filename), "..");
 import {
   validateBlogMediaRelation,
   loadBlog,
+  loadBlogById,
   createBlog,
   updateBlog,
 } from "../app/lib/blog-admin.ts";
@@ -181,31 +182,34 @@ test("CONC.09 — updateBlog exists and is exported from blog-admin.ts", () => {
   assert.match(src, /export async function updateBlog/, "updateBlog is exported");
 });
 
-test("CONC.10 — createBlog INSERTs with version=1", () => {
+test("CONC.10 — createBlog INSERTs with version=1 and NEEDS_REVIEW/DRAFT defaults", () => {
   const src = fs.readFileSync(path.join(ROOT, "app", "lib", "blog-admin.ts"), "utf-8");
   const createStart = src.indexOf("export async function createBlog");
   const createEnd = src.indexOf("export async function updateBlog");
   const createBlock = src.substring(createStart, createEnd);
-  assert.ok(createBlock.includes("'PUBLISHED', 1)"), "createBlog sets lifecycle_status=PUBLISHED and version=1");
+  assert.ok(createBlock.includes("NEEDS_REVIEW"), "createBlog sets status=NEEDS_REVIEW");
+  assert.ok(createBlock.includes("'DRAFT'"), "createBlog sets lifecycle_status=DRAFT");
+  assert.ok(createBlock.includes("1)"), "createBlog sets version=1");
   assert.match(createBlock, /INSERT INTO blog_posts/, "createBlog uses INSERT");
 });
 
-test("CONC.11 — updateBlog uses WHERE version = ? guard", () => {
+test("CONC.11 — updateBlog uses WHERE id = ? AND version = ? guard", () => {
   const src = fs.readFileSync(path.join(ROOT, "app", "lib", "blog-admin.ts"), "utf-8");
   const updateBlock = src.substring(src.indexOf("export async function updateBlog"));
-  assert.match(updateBlock, /WHERE slug = \? AND version = \?/, "updateBlog uses version guard");
+  assert.match(updateBlock, /WHERE id = \? AND version = \? AND is_deleted = 0/, "updateBlog uses id+version guard");
   assert.match(updateBlock, /version = version \+ 1/, "updateBlog increments version");
 });
 
 test("CONC.12 — updateBlog throws MutationConflictError on version mismatch", async () => {
   const db = openFullDb();
-  insertBlog(db, { slug: "conc-test", version: 2 });
+  const blogId = "blog-id-conc-test";
+  insertBlog(db, { id: blogId, slug: "conc-test", version: 2 });
   const repo = makeRepo(db);
 
   try {
-    await updateBlog(repo, "conc-test", 1, {
+    await updateBlog(repo, blogId, 1, {
       title: "Updated", excerpt: "Updated", body: "Updated",
-      coverMediaId: null, coverMediaIdExplicitlyProvided: false, isVisible: true,
+      coverMediaId: null, coverMediaIdExplicitlyProvided: false,
     }, "test@test.com");
     assert.fail("Should have thrown");
   } catch (err) {
@@ -215,33 +219,35 @@ test("CONC.12 — updateBlog throws MutationConflictError on version mismatch", 
 
 test("CONC.13 — updateBlog succeeds on correct version", async () => {
   const db = openFullDb();
-  insertBlog(db, { slug: "conc-ok", version: 1 });
+  const blogId = "blog-id-conc-ok";
+  insertBlog(db, { id: blogId, slug: "conc-ok", version: 1 });
   const repo = makeRepo(db);
 
-  const result = await updateBlog(repo, "conc-ok", 1, {
+  const result = await updateBlog(repo, blogId, 1, {
     title: "Updated Title", excerpt: "Updated", body: "Updated body",
-    coverMediaId: null, coverMediaIdExplicitlyProvided: false, isVisible: true,
+    coverMediaId: null, coverMediaIdExplicitlyProvided: false,
   }, "test@test.com");
   assert.equal(result.outcome, "APPLIED", "updateBlog returns APPLIED");
 
-  const rows = db.prepare("SELECT title, version FROM blog_posts WHERE slug = 'conc-ok'").all();
+  const rows = db.prepare("SELECT title, version FROM blog_posts WHERE id = 'blog-id-conc-ok'").all();
   assert.equal(rows[0].title, "Updated Title", "title was updated");
   assert.equal(rows[0].version, 2, "version was incremented");
 });
 
-test("CONC.14 — createBlog creates with version=1 in database", async () => {
+test("CONC.14 — createBlog creates with version=1 and stable UUID in database", async () => {
   const db = openFullDb();
   const repo = makeRepo(db);
 
-  await createBlog(repo, "new-blog", {
+  const result = await createBlog(repo, "new-blog", {
     title: "New Blog", excerpt: "New", body: "Body",
-    coverMediaId: null, isVisible: true,
+    coverMediaId: null,
   }, "test@test.com");
 
   const rows = db.prepare("SELECT version, id FROM blog_posts WHERE slug = 'new-blog'").all();
   assert.equal(rows.length, 1, "blog was created");
   assert.equal(rows[0].version, 1, "version is 1");
-  assert.equal(rows[0].id, "blog-new-blog", "id follows blog-${slug} pattern");
+  assert.equal(rows[0].id, result.blogId, "id is a stable UUID returned by createBlog");
+  assert.ok(rows[0].id.length > 0, "id is non-empty");
 });
 
 test("CONC.15 — createBlog throws MutationConflictError on duplicate slug", async () => {
@@ -287,30 +293,32 @@ test("CONC.18 — applyBlog imports createBlog and updateBlog", () => {
 test("TRI.19 — coverMediaId omission preserves existing cover on update", async () => {
   const db = openFullDb();
   const media = insertMedia(db);
-  insertBlog(db, { slug: "tri-preserve", coverMediaId: media.id, version: 1 });
+  const blogId = "blog-id-tri-preserve";
+  insertBlog(db, { id: blogId, slug: "tri-preserve", coverMediaId: media.id, version: 1 });
   const repo = makeRepo(db);
 
-  await updateBlog(repo, "tri-preserve", 1, {
+  await updateBlog(repo, blogId, 1, {
     title: "Updated", excerpt: "Updated", body: "Updated",
-    coverMediaId: null, coverMediaIdExplicitlyProvided: false, isVisible: true,
+    coverMediaId: null, coverMediaIdExplicitlyProvided: false,
   }, "test@test.com");
 
-  const rows = db.prepare("SELECT cover_media_id FROM blog_posts WHERE slug = 'tri-preserve'").all();
+  const rows = db.prepare("SELECT cover_media_id FROM blog_posts WHERE id = 'blog-id-tri-preserve'").all();
   assert.equal(rows[0].cover_media_id, media.id, "cover_media_id is preserved when not explicitly provided");
 });
 
 test("TRI.20 — coverMediaId null explicitly clears existing cover on update", async () => {
   const db = openFullDb();
   const media = insertMedia(db);
-  insertBlog(db, { slug: "tri-clear", coverMediaId: media.id, version: 1 });
+  const blogId = "blog-id-tri-clear";
+  insertBlog(db, { id: blogId, slug: "tri-clear", coverMediaId: media.id, version: 1 });
   const repo = makeRepo(db);
 
-  await updateBlog(repo, "tri-clear", 1, {
+  await updateBlog(repo, blogId, 1, {
     title: "Updated", excerpt: "Updated", body: "Updated",
-    coverMediaId: null, coverMediaIdExplicitlyProvided: true, isVisible: true,
+    coverMediaId: null, coverMediaIdExplicitlyProvided: true,
   }, "test@test.com");
 
-  const rows = db.prepare("SELECT cover_media_id FROM blog_posts WHERE slug = 'tri-clear'").all();
+  const rows = db.prepare("SELECT cover_media_id FROM blog_posts WHERE id = 'blog-id-tri-clear'").all();
   assert.equal(rows[0].cover_media_id, null, "cover_media_id is cleared when explicitly set to null");
 });
 
@@ -318,15 +326,16 @@ test("TRI.21 — coverMediaId value sets new cover on update", async () => {
   const db = openFullDb();
   const media1 = insertMedia(db);
   const media2 = insertMedia(db);
-  insertBlog(db, { slug: "tri-set", coverMediaId: media1.id, version: 1 });
+  const blogId = "blog-id-tri-set";
+  insertBlog(db, { id: blogId, slug: "tri-set", coverMediaId: media1.id, version: 1 });
   const repo = makeRepo(db);
 
-  await updateBlog(repo, "tri-set", 1, {
+  await updateBlog(repo, blogId, 1, {
     title: "Updated", excerpt: "Updated", body: "Updated",
-    coverMediaId: media2.id, coverMediaIdExplicitlyProvided: true, isVisible: true,
+    coverMediaId: media2.id, coverMediaIdExplicitlyProvided: true,
   }, "test@test.com");
 
-  const rows = db.prepare("SELECT cover_media_id FROM blog_posts WHERE slug = 'tri-set'").all();
+  const rows = db.prepare("SELECT cover_media_id FROM blog_posts WHERE id = 'blog-id-tri-set'").all();
   assert.equal(rows[0].cover_media_id, media2.id, "cover_media_id is updated to new value");
 });
 
@@ -367,10 +376,10 @@ test("TRI.24 — applyBlog preserves cover when coverMediaId not in payload", ()
    IV. Target state — visibility validation uses post-save state
    ═════════════════════════════════════════════════════════════════════════════ */
 
-test("TGT.25 — applyBlog uses target visibility for media validation", () => {
+test("TGT.25 — applyBlog uses existing blog's is_visible for media validation", () => {
   const src = fs.readFileSync(path.join(ROOT, "app", "api", "admin", "data", "route.ts"), "utf-8");
   const applyBlogBlock = src.substring(src.indexOf("async function applyBlog"), src.indexOf("async function applyCareer"));
-  assert.match(applyBlogBlock, /targetVisible/, "uses targetVisible for media validation");
+  assert.match(applyBlogBlock, /existingVisible/, "uses existingVisible for media validation");
 });
 
 test("TGT.26 — validateBlogMediaRelation enforces PUBLISHED when isBlogVisible=true", async () => {
@@ -525,12 +534,14 @@ test("GW.46 — gateway blog-cover checks blog is_visible and is_deleted", () =>
   assert.match(block, /lifecycle_status = 'PUBLISHED'/, "checks lifecycle_status");
 });
 
-test("GW.47 — gateway doctor-photo BLOG path checks lifecycle_status", () => {
+test("GW.47 — gateway doctor-photo BLOG path checks eligibility", () => {
   const src = fs.readFileSync(path.join(ROOT, "app", "api", "media", "[...key]", "route.ts"), "utf-8");
   const docPhotoIdx = src.indexOf('purpose === "doctor-photo"');
   const blogCheckIdx = src.indexOf('category === "BLOG"', docPhotoIdx);
   assert.ok(blogCheckIdx > docPhotoIdx, "BLOG check exists in doctor-photo path");
-  const block = src.substring(docPhotoIdx, blogCheckIdx + 500);
+  const block = src.substring(docPhotoIdx, blogCheckIdx + 800);
+  assert.ok(block.includes("blog_posts bp"), "doctor-photo BLOG path joins blog_posts");
+  assert.ok(block.includes("is_visible = 1"), "doctor-photo BLOG path checks is_visible");
   assert.ok(block.includes("lifecycle_status = 'PUBLISHED'"), "doctor-photo BLOG path checks lifecycle_status");
 });
 
@@ -612,26 +623,26 @@ test("UX.58 — BlogForm onRowClick populates version and blogId", () => {
   assert.ok(src.includes("expectedVersion: Number(row.version"), "expectedVersion mapped from row.version");
 });
 
-test("UX.59 — BlogForm cover shows image preview, not truncated UUID", () => {
+test("UX.59 — BlogForm cover shows image preview using canonical media URL", () => {
   const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
   const blogFormIdx = src.indexOf("function BlogForm");
-  const block = src.substring(blogFormIdx, blogFormIdx + 3000);
+  const block = src.substring(blogFormIdx, blogFormIdx + 4000);
   assert.match(block, /<img/, "renders img element");
-  assert.doesNotMatch(block, /coverMediaId\.slice\(0, 16\)/, "no truncated UUID");
   assert.match(block, /Cover set/, "user-friendly label");
+  assert.match(block, /\/api\/media\/\$\{form\.coverMediaId\}/, "uses canonical media URL for preview");
 });
 
-test("UX.60 — BlogForm cover img uses alt attribute", () => {
+test("UX.60 — BlogForm cover img uses alt attribute with title fallback", () => {
   const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
   const blogFormIdx = src.indexOf("function BlogForm");
-  const block = src.substring(blogFormIdx, blogFormIdx + 3000);
-  assert.match(block, /alt=\{form\.title/, "alt uses title");
+  const block = src.substring(blogFormIdx, blogFormIdx + 4000);
+  assert.match(block, /alt=\{form\.title \|\| "Blog cover"\}/, "alt uses title with fallback");
 });
 
 test("UX.61 — BlogForm cover img has dimensions", () => {
   const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
   const blogFormIdx = src.indexOf("function BlogForm");
-  const block = src.substring(blogFormIdx, blogFormIdx + 3000);
+  const block = src.substring(blogFormIdx, blogFormIdx + 4000);
   assert.match(block, /width: 48/, "has width");
   assert.match(block, /height: 48/, "has height");
 });
@@ -668,10 +679,10 @@ test("REN.65 — blog list img uses coverAltText || title", () => {
   assert.match(src, /alt=\{blog\.coverAltText \|\| blog\.title\}/, "uses coverAltText fallback");
 });
 
-test("REN.66 — blog list img has explicit width and height", () => {
+test("REN.66 — blog list img uses stored dimensions with fallback", () => {
   const src = fs.readFileSync(path.join(ROOT, "app", "blog", "page.tsx"), "utf-8");
-  assert.match(src, /width=\{800\}/, "width=800");
-  assert.match(src, /height=\{180\}/, "height=180");
+  assert.ok(src.includes("blog.coverWidth && blog.coverWidth > 0 ? blog.coverWidth : 800"), "uses stored width with fallback");
+  assert.ok(src.includes("blog.coverHeight && blog.coverHeight > 0 ? blog.coverHeight : 180"), "uses stored height with fallback");
 });
 
 test("REN.67 — blog detail img uses coverAltText || title", () => {
@@ -679,10 +690,10 @@ test("REN.67 — blog detail img uses coverAltText || title", () => {
   assert.match(src, /alt=\{blog\.coverAltText \|\| blog\.title\}/, "uses coverAltText fallback");
 });
 
-test("REN.68 — blog detail img has explicit width and height", () => {
+test("REN.68 — blog detail img uses stored dimensions with fallback", () => {
   const src = fs.readFileSync(path.join(ROOT, "app", "blog", "[slug]", "page.tsx"), "utf-8");
-  assert.match(src, /width=\{800\}/, "width=800");
-  assert.match(src, /height=\{400\}/, "height=400");
+  assert.ok(src.includes("blog.coverWidth && blog.coverWidth > 0 ? blog.coverWidth : 800"), "uses stored width with fallback");
+  assert.ok(src.includes("blog.coverHeight && blog.coverHeight > 0 ? blog.coverHeight : 400"), "uses stored height with fallback");
 });
 
 test("REN.69 — blog list renders img only when coverMediaUrl", () => {
@@ -850,4 +861,85 @@ test("REG.89 — blog-admin exports type definitions", () => {
 test("REG.90 — MediaPickerDialog handles BLOG category with categoryLabel", () => {
   const src = fs.readFileSync(path.join(ROOT, "app", "components", "admin", "MediaPickerDialog.tsx"), "utf-8");
   assert.match(src, /categoryLabel/, "accepts categoryLabel prop");
+});
+
+test("ID.91 — loadBlogById exists and is exported from blog-admin.ts", () => {
+  const src = fs.readFileSync(path.join(ROOT, "app", "lib", "blog-admin.ts"), "utf-8");
+  assert.match(src, /export async function loadBlogById/, "loadBlogById is exported");
+});
+
+test("ID.92 — loadBlogById queries by id, not slug", () => {
+  const src = fs.readFileSync(path.join(ROOT, "app", "lib", "blog-admin.ts"), "utf-8");
+  const fnStart = src.indexOf("export async function loadBlogById");
+  const fnEnd = src.indexOf("export async function validateBlogMediaRelation");
+  const fnBlock = src.substring(fnStart, fnEnd);
+  assert.match(fnBlock, /WHERE id = \? LIMIT 1/, "queries by id");
+  assert.doesNotMatch(fnBlock, /WHERE slug = \?/, "does not query by slug");
+});
+
+test("ID.93 — loadBlogById returns all lifecycle fields", async () => {
+  const db = openFullDb();
+  const blogId = "blog-id-lifecycle-test";
+  insertBlog(db, { id: blogId, slug: "lifecycle-test", status: "APPROVED", lifecycleStatus: "PUBLISHED", version: 3 });
+  const repo = makeRepo(db);
+  const blog = await loadBlogById(repo, blogId);
+  assert.ok(blog, "blog loaded");
+  assert.equal(blog.status, "APPROVED", "has status");
+  assert.equal(blog.lifecycle_status, "PUBLISHED", "has lifecycle_status");
+  assert.equal(blog.version, 3, "has version");
+  assert.equal(blog.id, blogId, "has id");
+});
+
+test("ID.94 — validateCoverForPublication rejects non-PUBLISHED media", async () => {
+  const db = openFullDb();
+  const media = insertMedia(db, { lifecycleStatus: "DRAFT", status: "HIDDEN", isVisible: false });
+  const repo = makeRepo(db);
+  const result = await validateBlogMediaRelation(repo, media.id, true);
+  assert.equal(result.ok, false, "DRAFT media rejected");
+});
+
+test("ID.95 — applyBlog uses blogId for existing post identity", () => {
+  const src = fs.readFileSync(path.join(ROOT, "app", "api", "admin", "data", "route.ts"), "utf-8");
+  const applyBlogBlock = src.substring(src.indexOf("async function applyBlog"), src.indexOf("async function applyCareer"));
+  assert.match(applyBlogBlock, /loadBlogById\(blogRepo, blogId\)/, "uses loadBlogById with blogId");
+  assert.match(applyBlogBlock, /existing\.version !== expectedVersion/, "version check against existing");
+});
+
+test("GW.96 — gateway blog-cover branch checks status = 'APPROVED'", () => {
+  const src = fs.readFileSync(path.join(ROOT, "app", "api", "media", "[...key]", "route.ts"), "utf-8");
+  const blogCoverIdx = src.indexOf('purpose === "blog-cover"');
+  const nextBranch = src.indexOf("} else if", blogCoverIdx + 1);
+  const block = src.substring(blogCoverIdx, nextBranch);
+  assert.match(block, /status = 'APPROVED'/, "checks status=APPROVED for blog-cover");
+});
+
+test("GW.97 — gateway checks deleted_at IS NULL for blog-cover", () => {
+  const src = fs.readFileSync(path.join(ROOT, "app", "api", "media", "[...key]", "route.ts"), "utf-8");
+  const blogCoverIdx = src.indexOf('purpose === "blog-cover"');
+  const nextBranch = src.indexOf("} else if", blogCoverIdx + 1);
+  const block = src.substring(blogCoverIdx, nextBranch);
+  assert.match(block, /deleted_at IS NULL/, "checks deleted_at IS NULL for blog");
+});
+
+test("GW.98 — gateway BLOG compatibility path checks status = 'APPROVED'", () => {
+  const src = fs.readFileSync(path.join(ROOT, "app", "api", "media", "[...key]", "route.ts"), "utf-8");
+  const docPhotoIdx = src.indexOf('purpose === "doctor-photo"');
+  const blogCheckIdx = src.indexOf('category === "BLOG"', docPhotoIdx);
+  const block = src.substring(docPhotoIdx, blogCheckIdx + 800);
+  assert.ok(block.includes("status = 'APPROVED'"), "BLOG compatibility path checks status=APPROVED");
+});
+
+test("UX.99 — BlogForm editing banner shows version number", () => {
+  const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
+  const blogFormIdx = src.indexOf("function BlogForm");
+  const block = src.substring(blogFormIdx, blogFormIdx + 2000);
+  assert.match(block, /Editing blog post.*\(v\{form\.expectedVersion\}\)/s, "shows version in editing banner");
+});
+
+test("UX.100 — BlogForm send blogId and coverDirty guard on save", () => {
+  const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
+  const blogFormIdx = src.indexOf("function BlogForm");
+  const block = src.substring(blogFormIdx, blogFormIdx + 2000);
+  assert.match(block, /if \(isEditing && form\.blogId\)/, "sends blogId only when editing");
+  assert.match(block, /if \(isEditing && coverDirty\)/, "sends coverMediaId only when coverDirty");
 });

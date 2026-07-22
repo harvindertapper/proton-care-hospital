@@ -334,7 +334,7 @@ test("structural guard: affected-row proof precedes success audits in scoped mut
     "applyDeleteVideo",
   ];
 
-  const delegated = new Set(["applyDeleteDoctor", "applyRestoreDoctor", "applyDoctor"]);
+  const delegated = new Set(["applyDeleteDoctor", "applyRestoreDoctor", "applyDoctor", "applyBlogVisibility"]);
   for (const functionName of functionNames) {
     const start = adminRoute.indexOf(`async function ${functionName}`);
     const next = adminRoute.indexOf("\nasync function ", start + 1);
@@ -343,9 +343,10 @@ test("structural guard: affected-row proof precedes success audits in scoped mut
     const successAudit = block.indexOf("await audit");
     assert.ok(start >= 0, `${functionName} must exist`);
     if (delegated.has(functionName)) {
-      // These delegate the affected-row proof + audit to doctor-admin helpers.
+      // These delegate the affected-row proof + audit to lifecycle-aware helpers.
       assert.ok(block.indexOf("archiveDoctor") >= 0 || block.indexOf("restoreDoctor") >= 0 ||
-        block.indexOf("createDoctor") >= 0 || block.indexOf("updateDoctor") >= 0,
+        block.indexOf("createDoctor") >= 0 || block.indexOf("updateDoctor") >= 0 ||
+        block.indexOf("publishBlog") >= 0 || block.indexOf("hideBlog") >= 0,
         `${functionName} must delegate to lifecycle-aware helpers`);
       continue;
     }

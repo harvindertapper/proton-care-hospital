@@ -70,8 +70,8 @@ export default async function BlogDetailPage({ params }: Props) {
             <img
               src={blog.coverMediaUrl}
               alt={blog.coverAltText || blog.title}
-              width={800}
-              height={400}
+              width={blog.coverWidth && blog.coverWidth > 0 ? blog.coverWidth : 800}
+              height={blog.coverHeight && blog.coverHeight > 0 ? blog.coverHeight : 400}
               style={{ width: "100%", maxHeight: 400, objectFit: "cover", borderRadius: 12, marginBottom: 32 }}
             />
           )}
