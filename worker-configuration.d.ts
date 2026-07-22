@@ -11,6 +11,7 @@ interface __BaseEnv_Env {
 	ADMIN_SUPER_EMAIL: string;
 	ADMIN_SUPER_PASSWORD: string;
 	TURNSTILE_SECRET_KEY: string;
+	APPOINTMENT_ALERT_TO_EMAIL?: string;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
@@ -23,7 +24,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "ADMIN_SESSION_SECRET" | "AUTH_SECRET" | "RESEND_API_KEY" | "ADMIN_SUPER_EMAIL" | "ADMIN_SUPER_PASSWORD" | "TURNSTILE_SECRET_KEY">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "ADMIN_SESSION_SECRET" | "AUTH_SECRET" | "RESEND_API_KEY" | "ADMIN_SUPER_EMAIL" | "ADMIN_SUPER_PASSWORD" | "TURNSTILE_SECRET_KEY" | "APPOINTMENT_ALERT_TO_EMAIL">> {}
 }
 
 // Begin runtime types

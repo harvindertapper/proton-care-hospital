@@ -10,6 +10,7 @@ export interface SendEmailResult {
   mocked?: boolean;
   id?: string;
   error?: string;
+  errorCode?: string;
   recipientBlocked?: boolean;
 }
 

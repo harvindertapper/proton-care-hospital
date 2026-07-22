@@ -11,6 +11,11 @@ export interface AppointmentAlertDetails {
   concern: string;
 }
 
+export type AppointmentAlertResult =
+  | { status: "SENT"; recipient: string; providerId?: string }
+  | { status: "FAILED"; recipient: string; reason: string }
+  | { status: "SKIPPED"; reason: string };
+
 function escapeHtml(input: string): string {
   return input
     .replace(/&/g, "&amp;")
@@ -20,28 +25,40 @@ function escapeHtml(input: string): string {
     .replace(/'/g, "&#39;");
 }
 
+function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) && email.length <= 254;
+}
+
 /**
  * Resolves the hospital alert recipient email address.
  * Priority: APPOINTMENT_ALERT_TO_EMAIL → ADMIN_SUPER_EMAIL → null (skip).
+ * Returns null if no valid email is found.
  */
 async function resolveRecipient(): Promise<string | null> {
+  let raw: string | undefined;
   try {
-    // Dynamic import to avoid Node link-time crash during testing
     const { env } = await import("cloudflare:workers");
     const typed = env as unknown as Record<string, string | undefined>;
-    return typed.APPOINTMENT_ALERT_TO_EMAIL || typed.ADMIN_SUPER_EMAIL || null;
+    raw = typed.APPOINTMENT_ALERT_TO_EMAIL || typed.ADMIN_SUPER_EMAIL;
   } catch {
-    return (
-      (typeof process !== "undefined" && (process.env?.APPOINTMENT_ALERT_TO_EMAIL || process.env?.ADMIN_SUPER_EMAIL)) ||
-      null
-    );
+    raw =
+      (typeof process !== "undefined" &&
+        (process.env?.APPOINTMENT_ALERT_TO_EMAIL || process.env?.ADMIN_SUPER_EMAIL)) ||
+      undefined;
   }
+  if (!raw) return null;
+  const trimmed = raw.trim().toLowerCase();
+  if (!isValidEmail(trimmed)) return null;
+  return trimmed;
 }
 
 /**
  * Returns the full HTML template for the hospital appointment alert email.
+ * Includes a server-generated submittedAt timestamp.
  */
-export function getHospitalAppointmentAlertTemplate(details: AppointmentAlertDetails): string {
+export function getHospitalAppointmentAlertTemplate(
+  details: AppointmentAlertDetails & { submittedAt: string },
+): string {
   const esc = escapeHtml;
   return `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
@@ -77,8 +94,12 @@ export function getHospitalAppointmentAlertTemplate(details: AppointmentAlertDet
           <td style="padding: 10px; border-bottom: 1px solid #edf2f7;">${esc(details.requestedTime)}</td>
         </tr>
         <tr>
-          <td style="padding: 10px; font-weight: bold;">Concern:</td>
-          <td style="padding: 10px;">${esc(details.concern)}</td>
+          <td style="padding: 10px; font-weight: bold; border-bottom: 1px solid #edf2f7;">Concern:</td>
+          <td style="padding: 10px; border-bottom: 1px solid #edf2f7;">${esc(details.concern)}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px; font-weight: bold;">Submitted At:</td>
+          <td style="padding: 10px;">${esc(details.submittedAt)}</td>
         </tr>
       </table>
       <p style="color: #718096; font-size: 14px;">This is an automated alert. Please review and follow up with the patient as soon as possible.</p>
@@ -90,18 +111,20 @@ export function getHospitalAppointmentAlertTemplate(details: AppointmentAlertDet
 
 /**
  * Sends the hospital appointment alert email.
+ * Returns a typed AppointmentAlertResult with truthful status.
  * Always returns a result object; never throws.
  */
 export async function sendHospitalAppointmentAlert(
   details: AppointmentAlertDetails,
-): Promise<{ sent: boolean; recipient: string | null; error?: string }> {
+): Promise<AppointmentAlertResult> {
   const recipient = await resolveRecipient();
   if (!recipient) {
-    return { sent: false, recipient: null, error: "No recipient configured" };
+    return { status: "SKIPPED", reason: "NOT_CONFIGURED" };
   }
 
-  const html = getHospitalAppointmentAlertTemplate(details);
-  const subject = `New Appointment Request — ${details.patientName} (${details.requestId})`;
+  const submittedAt = new Date().toISOString();
+  const html = getHospitalAppointmentAlertTemplate({ ...details, submittedAt });
+  const subject = `New appointment request — ${details.requestId} — ${details.departmentName}`;
 
   try {
     const result = await sendEmail({
@@ -111,12 +134,20 @@ export async function sendHospitalAppointmentAlert(
       replyTo: details.email,
     });
 
-    if (result.success) {
-      return { sent: true, recipient };
+    if (result.mocked) {
+      return { status: "SKIPPED", reason: "MOCKED" };
     }
 
-    return { sent: false, recipient, error: result.error || "Email send failed" };
+    if (result.success && result.id) {
+      return { status: "SENT", recipient, providerId: result.id };
+    }
+
+    if (result.success && !result.id) {
+      return { status: "FAILED", recipient, reason: "INVALID_RESPONSE" };
+    }
+
+    return { status: "FAILED", recipient, reason: result.error || "PROVIDER_REJECTED" };
   } catch (error) {
-    return { sent: false, recipient, error: String(error) };
+    return { status: "FAILED", recipient, reason: String(error).includes("fetch") ? "NETWORK_ERROR" : String(error) };
   }
 }

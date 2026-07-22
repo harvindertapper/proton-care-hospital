@@ -157,13 +157,37 @@ export async function POST(request: Request) {
       requestedTime,
       concern,
     });
-    if (alertResult.sent) {
-      await audit("system", "APPOINTMENT_ALERT_SENT", "Appointment", id, `Alert sent to ${alertResult.recipient}`);
-    } else {
-      await audit("system", "APPOINTMENT_ALERT_SKIPPED", "Appointment", id, alertResult.error || "Skipped");
+    try {
+      if (alertResult.status === "SENT") {
+        await audit(
+          "system",
+          "APPOINTMENT_ALERT_SENT",
+          "Appointment",
+          id,
+          `${requestId} SENT ${alertResult.providerId ?? "unknown"}`,
+        );
+      } else if (alertResult.status === "FAILED") {
+        await audit(
+          "system",
+          "APPOINTMENT_ALERT_FAILED",
+          "Appointment",
+          id,
+          `${requestId} FAILED ${alertResult.reason}`,
+        );
+      } else {
+        await audit(
+          "system",
+          "APPOINTMENT_ALERT_SKIPPED",
+          "Appointment",
+          id,
+          `${requestId} SKIPPED ${alertResult.reason}`,
+        );
+      }
+    } catch {
+      // Audit failure must never break the booking flow.
     }
   } catch {
-    // Silently swallow — alert failure must never break the booking flow.
+    // Alert send failure must never break the booking flow.
   }
 
   const responseData = {
