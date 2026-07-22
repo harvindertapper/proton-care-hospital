@@ -29,7 +29,15 @@ export default async function BlogPage() {
             <div className="blog-grid">
               {blogs.map((blog) => (
                 <article className="blog-card" key={blog.slug} style={{ display: "flex", flexDirection: "column" }}>
-                  <Newspaper size={24} aria-hidden="true" style={{ marginBottom: 16 }} />
+                  {blog.coverMediaUrl ? (
+                    <img
+                      src={blog.coverMediaUrl}
+                      alt={blog.title}
+                      style={{ width: "100%", height: 180, objectFit: "cover", borderRadius: 8, marginBottom: 16 }}
+                    />
+                  ) : (
+                    <Newspaper size={24} aria-hidden="true" style={{ marginBottom: 16 }} />
+                  )}
                   <Link href={`/blog/${blog.slug}`} style={{ flex: 1 }}>
                     <h3 className="transition-colors duration-300 hover:text-teal-600">{blog.title}</h3>
                     <p style={{ marginTop: 8 }}>{blog.excerpt}</p>

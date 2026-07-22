@@ -52,6 +52,7 @@ const mockedDataRouteContent = dataRouteContent
   .replace(/from "@\/app\/lib\/resend";/g, 'from "../app/lib/resend.ts";')
   .replace(/from "@\/app\/lib\/utils";/g, 'from "../app/lib/utils.ts";')
   .replace(/from "@\/app\/lib\/doctor-admin";/g, 'from "../app/lib/doctor-admin.ts";')
+  .replace(/from "@\/app\/lib\/blog-admin";/g, 'from "../app/lib/blog-admin.ts";')
   .replace(/from "@\/app\/lib\/gallery-v2";/g, 'from "./gallery-v2-reorder-mocked.ts";');
 await writeFile(new URL("./data-route-real-mocked-db.ts", import.meta.url), mockedDataRouteContent, "utf8");
 
@@ -69,10 +70,6 @@ const mockedGalleryV2Content = galleryV2Content
   .replace('from "./media-library";', 'from "./media-library-reorder-mocked.ts";');
 await writeFile(new URL("./gallery-v2-reorder-mocked.ts", import.meta.url), mockedGalleryV2Content, "utf8");
 
-const { applyAtomicReorder } = await import("./gallery-v2-reorder-mocked.ts");
-const { POST: postReorder } = await import("./reorder-route-real-mocked.ts");
-const { POST: postData } = await import("./data-route-real-mocked-db.ts");
-
 // Cleanup generated mock files on completion
 after(async () => {
   try {
@@ -86,6 +83,10 @@ after(async () => {
     // Ignore cleanup errors
   }
 });
+
+const { applyAtomicReorder } = await import("./gallery-v2-reorder-mocked.ts");
+const { POST: postReorder } = await import("./reorder-route-real-mocked.ts");
+const { POST: postData } = await import("./data-route-real-mocked-db.ts");
 
 function seedGalleryData(db) {
   // Clear existing items

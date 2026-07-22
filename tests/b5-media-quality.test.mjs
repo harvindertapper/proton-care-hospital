@@ -402,7 +402,7 @@ test("44. Unreferenced admin-upload returns 404 via doctor_profiles check (struc
 
 test("45. Authorization failure does not touch R2 (structural)", () => {
   assert.doesNotMatch(mediaGateway, /bucket\.get[\s\S]{0,200}purpose.*doctor-photo/);
-  assert.match(mediaGateway, /metaResult[\s\S]{0,3000}bucket\.get/);
+  assert.match(mediaGateway, /metaResult[\s\S]{0,6000}bucket\.get/);
 });
 
 test("46. Response no longer uses immutable one-year cache", () => {
@@ -514,11 +514,12 @@ test("ALLOWED_MIME_TYPES contains exactly JPEG, PNG, WebP", () => {
   assert.ok(!ALLOWED_MIME_TYPES.has("image/svg+xml"));
 });
 
-test("ALLOWED_PURPOSES contains exactly gallery, doctor-photo, admin-upload", () => {
-  assert.equal(ALLOWED_PURPOSES.size, 3);
+test("ALLOWED_PURPOSES contains exactly gallery, doctor-photo, admin-upload, blog-cover", () => {
+  assert.equal(ALLOWED_PURPOSES.size, 4);
   assert.ok(ALLOWED_PURPOSES.has("gallery"));
   assert.ok(ALLOWED_PURPOSES.has("doctor-photo"));
   assert.ok(ALLOWED_PURPOSES.has("admin-upload"));
+  assert.ok(ALLOWED_PURPOSES.has("blog-cover"));
 });
 
 test("media_assets table supports lifecycle_status and deleted_at columns", () => {

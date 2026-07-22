@@ -73,42 +73,74 @@ export async function GET(_request: Request, { params }: { params: Promise<{ key
   // 3. Authorize by purpose
   if (meta.purpose === "gallery") {
     // Gallery: authorized
-  } else if (meta.purpose === "doctor-photo" || meta.purpose === "admin-upload") {
-    // Doctor photo or admin-upload: must be DOCTOR category and referenced by an eligible doctor
-    if (meta.category !== "DOCTOR") {
+  } else if (meta.purpose === "blog-cover") {
+    // Blog cover: must be BLOG category and referenced by an active blog post
+    if (meta.category !== "BLOG") {
       return new Response("Not found", { status: 404 });
     }
-    // Check 1: Legacy photo_url match
-    const doctorRef = await query<{ slug: string }>(
-      `SELECT slug FROM doctor_profiles
-       WHERE photo_url = ?
-         AND lifecycle_status = 'PUBLISHED'
-         AND status = 'APPROVED'
+    const blogRef = await query<{ slug: string }>(
+      `SELECT slug FROM blog_posts
+       WHERE cover_media_id = (SELECT id FROM media_assets WHERE r2_key = ? AND deleted_at IS NULL LIMIT 1)
          AND is_visible = 1
          AND is_deleted = 0
-         AND deleted_at IS NULL
        LIMIT 1`,
-      `/api/media/${objectKey}`,
+      objectKey,
     );
-    if (doctorRef.results && doctorRef.results.length > 0) {
-      // Authorized via legacy photo_url
-    } else {
-      // Check 2: photo_media_id match (media_assets.id reference)
-      const doctorMediaRef = await query<{ slug: string }>(
-        `SELECT dp.slug FROM doctor_profiles dp
-         INNER JOIN media_assets ma ON ma.id = dp.photo_media_id
+    if (!blogRef.results || blogRef.results.length === 0) {
+      return new Response("Not found", { status: 404 });
+    }
+  } else if (meta.purpose === "doctor-photo" || meta.purpose === "admin-upload") {
+    // Doctor photo or admin-upload: must be DOCTOR or BLOG category and referenced by an eligible entity
+    if (meta.category === "BLOG") {
+      // Blog cover: check if referenced by an active blog post
+      const blogMediaRef = await query<{ slug: string }>(
+        `SELECT bp.slug FROM blog_posts bp
+         INNER JOIN media_assets ma ON bp.cover_media_id = ma.id
          WHERE ma.r2_key = ?
-           AND ma.category = 'DOCTOR'
-           AND dp.lifecycle_status = 'PUBLISHED'
-           AND dp.status = 'APPROVED'
-           AND dp.is_visible = 1
-           AND dp.is_deleted = 0
-           AND dp.deleted_at IS NULL
+           AND ma.category = 'BLOG'
+           AND bp.is_visible = 1
+           AND bp.is_deleted = 0
          LIMIT 1`,
         objectKey,
       );
-      if (!doctorMediaRef.results || doctorMediaRef.results.length === 0) {
+      if (!blogMediaRef.results || blogMediaRef.results.length === 0) {
         return new Response("Not found", { status: 404 });
+      }
+    } else if (meta.category !== "DOCTOR") {
+      return new Response("Not found", { status: 404 });
+    } else {
+      // Check 1: Legacy photo_url match
+      const doctorRef = await query<{ slug: string }>(
+        `SELECT slug FROM doctor_profiles
+         WHERE photo_url = ?
+           AND lifecycle_status = 'PUBLISHED'
+           AND status = 'APPROVED'
+           AND is_visible = 1
+           AND is_deleted = 0
+           AND deleted_at IS NULL
+         LIMIT 1`,
+        `/api/media/${objectKey}`,
+      );
+      if (doctorRef.results && doctorRef.results.length > 0) {
+        // Authorized via legacy photo_url
+      } else {
+        // Check 2: photo_media_id match (media_assets.id reference)
+        const doctorMediaRef = await query<{ slug: string }>(
+          `SELECT dp.slug FROM doctor_profiles dp
+           INNER JOIN media_assets ma ON ma.id = dp.photo_media_id
+           WHERE ma.r2_key = ?
+             AND ma.category = 'DOCTOR'
+             AND dp.lifecycle_status = 'PUBLISHED'
+             AND dp.status = 'APPROVED'
+             AND dp.is_visible = 1
+             AND dp.is_deleted = 0
+             AND dp.deleted_at IS NULL
+           LIMIT 1`,
+          objectKey,
+        );
+        if (!doctorMediaRef.results || doctorMediaRef.results.length === 0) {
+          return new Response("Not found", { status: 404 });
+        }
       }
     }
   } else {

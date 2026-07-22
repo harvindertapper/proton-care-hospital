@@ -44,12 +44,9 @@ const mockedDataRouteContent = dataRouteContent
   .replace('from "@/app/lib/resend";', 'from "../app/lib/resend.ts";')
   .replace('from "@/app/lib/utils";', 'from "../app/lib/utils.ts";')
   .replace('from "@/app/lib/doctor-admin";', 'from "../app/lib/doctor-admin.ts";')
+  .replace('from "@/app/lib/blog-admin";', 'from "../app/lib/blog-admin.ts";')
   .replace('from "@/app/lib/gallery-v2";', 'from "./gallery-v2-mocked.ts";');
 await writeFile(new URL("./data-route-real-mocked.ts", import.meta.url), mockedDataRouteContent, "utf8");
-
-// Import the dynamically generated production-logic routes
-const { POST: statusPostHandler } = await import("./status-route-real-mocked.ts");
-const { GET: getDashboardData, POST: postDashboardData } = await import("./data-route-real-mocked.ts");
 
 // Cleanup generated mock files on completion
 after(async () => {
@@ -64,6 +61,10 @@ after(async () => {
     // Ignore cleanup errors
   }
 });
+
+// Import the dynamically generated production-logic routes
+const { POST: statusPostHandler } = await import("./status-route-real-mocked.ts");
+const { GET: getDashboardData, POST: postDashboardData } = await import("./data-route-real-mocked.ts");
 
 test("homepage source contains the Protone public experience", async () => {
   const [page, shell, data] = await Promise.all([

@@ -9,10 +9,11 @@ export const ALLOWED_MIME_TYPES: ReadonlySet<string> = new Set([
 export const ALLOWED_PURPOSES: ReadonlySet<string> = new Set([
   "gallery",
   "doctor-photo",
+  "blog-cover",
   "admin-upload",
 ]);
 
-export type MediaPurpose = "gallery" | "doctor-photo" | "admin-upload";
+export type MediaPurpose = "gallery" | "doctor-photo" | "blog-cover" | "admin-upload";
 
 const JPEG_SIG = [0xff, 0xd8, 0xff];
 const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];

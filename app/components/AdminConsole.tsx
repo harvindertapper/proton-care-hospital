@@ -1283,6 +1283,7 @@ export function AdminConsole({
         {active === "Blogs" ? (
           <BlogForm
             busy={busy}
+            csrf={session.csrf}
             onSave={(payload) => mutate({ action: "blog.save", payload }, "Blog saved or sent for approval.")}
             onVisibility={(slug, isVisible) => mutate({ action: "blog.visibility", payload: { slug, isVisible } }, isVisible ? "Blog shown publicly." : "Blog hidden from public site.")}
             onDelete={(slug) => mutate({ action: "blog.delete", slug }, "Blog deleted successfully.")}
@@ -2403,25 +2404,28 @@ function DoctorManager({
 
 function BlogForm({
   busy,
+  csrf,
   onSave,
   onVisibility,
   onDelete,
   rows,
 }: {
   busy: boolean;
+  csrf: string;
   onSave: (payload: Record<string, unknown>) => void;
   onVisibility?: (slug: string, isVisible: number) => void;
   onDelete?: (slug: string) => void;
   rows: AdminData["blogs"];
 }) {
-  const [form, setForm] = useState({ title: "", slug: "", excerpt: "", body: "" });
+  const [form, setForm] = useState({ title: "", slug: "", excerpt: "", body: "", coverMediaId: "" });
+  const [showCoverPicker, setShowCoverPicker] = useState(false);
   return (
     <div className="admin-panel-grid">
-      <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave({ ...form, slug: form.slug || slugify(form.title) }); }}>
+      <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave({ ...form, slug: form.slug || slugify(form.title), coverMediaId: form.coverMediaId || null }); }}>
         {rows.some(b => b.slug === form.slug && form.slug) && (
           <div style={{ background: "#e0f2fe", color: "#0369a1", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <span>Γ£Å∩╕Å Editing blog post: <strong>{form.title}</strong></span>
-            <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({ title: "", slug: "", excerpt: "", body: "" })}>
+            <span>Editing blog post: <strong>{form.title}</strong></span>
+            <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({ title: "", slug: "", excerpt: "", body: "", coverMediaId: "" })}>
               Create New
             </button>
           </div>
@@ -2430,6 +2434,30 @@ function BlogForm({
         <label>Slug<input value={form.slug} onChange={(event) => setForm({ ...form, slug: slugify(event.target.value) })} /></label>
         <label>Excerpt<textarea rows={3} value={form.excerpt} onChange={(event) => setForm({ ...form, excerpt: event.target.value })} /></label>
         <label>Body<textarea rows={7} value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} /></label>
+
+        <div style={{ borderTop: "1px solid var(--line)", paddingTop: 12, marginTop: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "var(--navy)" }}>Blog Cover Image</div>
+          {form.coverMediaId ? (
+            <div style={{ fontSize: 12, color: "#16a34a", background: "#f0fdf4", padding: "6px 10px", borderRadius: 6, marginBottom: 8 }}>
+              Cover set (media: {form.coverMediaId.slice(0, 16)}...)
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: "#64748b", background: "#f1f5f9", padding: "6px 10px", borderRadius: 6, marginBottom: 8 }}>
+              No cover image set.
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            <button type="button" className="button secondary small" onClick={() => setShowCoverPicker(true)}>
+              Select from Media Library
+            </button>
+            {form.coverMediaId && (
+              <button type="button" className="button secondary small" style={{ color: "#dc2626" }} onClick={() => setForm({ ...form, coverMediaId: "" })}>
+                Clear Cover
+              </button>
+            )}
+          </div>
+        </div>
+
         <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
           <button className="button primary" style={{ flex: 1 }} disabled={busy}><Newspaper size={17} aria-hidden="true" /> Save Blog</button>
           {form.slug && (
@@ -2449,6 +2477,19 @@ function BlogForm({
           )}
         </div>
       </form>
+      {showCoverPicker && (
+        <MediaPickerDialog
+          csrf={csrf}
+          category="BLOG"
+          categoryLabel="Blog Cover"
+          selectedId={form.coverMediaId || null}
+          onClose={() => setShowCoverPicker(false)}
+          onSelect={(asset) => {
+            setForm({ ...form, coverMediaId: asset.id });
+            setShowCoverPicker(false);
+          }}
+        />
+      )}
       <DataTable
         rows={rows}
         columns={["title", "status", "is_visible", "created_at"]}
@@ -2457,6 +2498,7 @@ function BlogForm({
           slug: String(row.slug || ""),
           excerpt: String(row.excerpt || ""),
           body: String(row.body || ""),
+          coverMediaId: String(row.cover_media_id || ""),
         })}
         actions={onVisibility ? (row) => (
           <div className="table-actions">
@@ -2774,6 +2816,9 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Blog title is required." };
     if (typeof obj.body !== "string" || !obj.body.trim()) return { ok: false, error: "Blog body is required." };
     if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Blog slug is required." };
+    if (obj.coverMediaId !== undefined && obj.coverMediaId !== null && obj.coverMediaId !== "") {
+      if (typeof obj.coverMediaId !== "string" || obj.coverMediaId.length > 140) return { ok: false, error: "coverMediaId must be a string of at most 140 characters." };
+    }
   } else if (action === "career.save") {
     if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Job title is required." };
     if (typeof obj.description !== "string" || !obj.description.trim()) return { ok: false, error: "Job description is required." };

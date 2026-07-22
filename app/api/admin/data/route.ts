@@ -28,6 +28,11 @@ import {
   throwInvalidExpectedVersion,
   type DoctorRepo,
 } from "@/app/lib/doctor-admin";
+import {
+  loadBlog,
+  validateBlogMediaRelation,
+  type BlogRepo,
+} from "@/app/lib/blog-admin";
 import { departmentBySlug } from "@/app/lib/data";
 import { validateStaffAccountInput } from "@/app/lib/adminAuth";
 import { sendEmail, getStaffOnboardingTemplate } from "@/app/lib/resend";
@@ -66,7 +71,7 @@ async function dashboardData(session: AdminSession) {
     query("SELECT * FROM content_revisions ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM feedback ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM contact_messages ORDER BY created_at DESC LIMIT 100"),
-    query("SELECT * FROM blog_posts WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 100"),
+    query("SELECT *, cover_media_id FROM blog_posts WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM career_jobs WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM patient_videos WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM media_assets WHERE storage_type = 'R2' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100"),
@@ -234,16 +239,43 @@ async function applyBlog(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 100) || slugify(title);
   const excerpt = clean(payload.excerpt, 300);
   const body = clean(payload.body, 8000);
+  const coverMediaId = payload.coverMediaId !== undefined && payload.coverMediaId !== null && payload.coverMediaId !== ""
+    ? clean(payload.coverMediaId, 140) || null
+    : null;
   if (!title || !slug || !excerpt || !body) throw new Error("Invalid blog payload.");
+
+  const blogRepo: BlogRepo = { query, run, audit };
+  const existing = await loadBlog(blogRepo, slug);
+
+  const expectedVersion = typeof payload.expectedVersion === "number"
+    ? parseExpectedVersion(payload.expectedVersion, { minimum: 1 })
+    : NaN;
+
+  if (existing) {
+    if (existing.is_deleted) {
+      throw new MutationNotFoundError("Blog post");
+    }
+    if (!Number.isNaN(expectedVersion) && existing.version !== expectedVersion) {
+      throw new MutationConflictError("Blog post was modified by another session.");
+    }
+  }
+
+  if (coverMediaId) {
+    const blogVisible = existing ? existing.is_visible === 1 : true;
+    const mediaCheck = await validateBlogMediaRelation(blogRepo, coverMediaId, blogVisible);
+    if (!mediaCheck.ok) throw new Error(mediaCheck.error);
+  }
+
   await run(
-    `INSERT INTO blog_posts (id, slug, title, excerpt, body, status, is_visible, source_note)
-      VALUES (?, ?, ?, ?, ?, 'APPROVED', 1, 'admin-approved')
-      ON CONFLICT(slug) DO UPDATE SET title = excluded.title, excerpt = excluded.excerpt, body = excluded.body, status = 'APPROVED', is_visible = 1`,
+    `INSERT INTO blog_posts (id, slug, title, excerpt, body, cover_media_id, status, is_visible, source_note)
+      VALUES (?, ?, ?, ?, ?, ?, 'APPROVED', 1, 'admin-approved')
+      ON CONFLICT(slug) DO UPDATE SET title = excluded.title, excerpt = excluded.excerpt, body = excluded.body, cover_media_id = excluded.cover_media_id, status = 'APPROVED', is_visible = 1`,
     `blog-${slug}`,
     slug,
     title,
     excerpt,
     body,
+    coverMediaId,
   );
   await audit(actorEmail, "BLOG_APPROVED", "BlogPost", slug, title);
 }
@@ -799,6 +831,14 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Blog title is required." };
     if (typeof obj.body !== "string" || !obj.body.trim()) return { ok: false, error: "Blog body is required." };
     if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Blog slug is required." };
+    if (obj.coverMediaId !== undefined && obj.coverMediaId !== null && obj.coverMediaId !== "") {
+      if (typeof obj.coverMediaId !== "string" || obj.coverMediaId.length > 140) return { ok: false, error: "coverMediaId must be a string of at most 140 characters." };
+    }
+    if (obj.expectedVersion !== undefined && obj.expectedVersion !== null) {
+      if (obj.expectedVersion !== undefined && obj.expectedVersion !== null && Number.isNaN(parseExpectedVersion(obj.expectedVersion))) {
+        return { ok: false, error: "expectedVersion must be a non-negative integer." };
+      }
+    }
   } else if (action === "career.save") {
     if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Job title is required." };
     if (typeof obj.description !== "string" || !obj.description.trim()) return { ok: false, error: "Job description is required." };

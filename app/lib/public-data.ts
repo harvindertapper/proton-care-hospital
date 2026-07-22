@@ -7,6 +7,7 @@ import {
   DOCTOR_LIST_SQL,
   DOCTOR_BY_SLUG_SQL,
 } from "./doctor-public.ts";
+import { generateR2MediaUrl, validatePublicPath } from "./media-resolver.ts";
 
 export type PublicBlog = {
   id?: string;
@@ -17,6 +18,7 @@ export type PublicBlog = {
   author?: string;
   reviewer?: string;
   created_at?: string;
+  coverMediaUrl?: string | null;
 };
 
 export type PublicJob = {
@@ -47,20 +49,63 @@ export type PublicVideo = {
 export type { DoctorQuery } from "./doctor-public.ts";
 export { dbDoctorToPublic, DOCTOR_LIST_SQL, DOCTOR_BY_SLUG_SQL };
 
+function resolveBlogCoverUrl(row: Record<string, unknown>): string | null {
+  const storageType = row.cover_storage_type as string | undefined;
+  if (!storageType) return null;
+
+  if (storageType === "R2") {
+    const r2Key = row.cover_r2_key as string | undefined;
+    if (!r2Key) return null;
+    const result = generateR2MediaUrl(r2Key);
+    return result.ok ? result.url : null;
+  }
+
+  if (storageType === "PUBLIC") {
+    const displayPath = row.cover_display_public_path as string | undefined;
+    const publicPath = row.cover_public_path as string | undefined;
+    const path = displayPath || publicPath;
+    if (!path) return null;
+    const result = validatePublicPath(path);
+    return result.ok ? result.path : null;
+  }
+
+  return null;
+}
+
 export async function getPublicDoctors() {
   return resolvePublicDoctors(query);
 }
 
 export async function getPublishedBlogs() {
   try {
-    const rows = await query<PublicBlog>(
-      "SELECT id, slug, title, excerpt, body, author, reviewer, created_at FROM blog_posts WHERE status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0 ORDER BY created_at DESC",
+    const rows = await query<Record<string, unknown>>(
+      `SELECT bp.id, bp.slug, bp.title, bp.excerpt, bp.body, bp.author, bp.reviewer, bp.created_at,
+              ma.storage_type AS cover_storage_type,
+              ma.r2_key AS cover_r2_key,
+              ma.public_path AS cover_public_path,
+              ma.display_public_path AS cover_display_public_path
+       FROM blog_posts bp
+       LEFT JOIN media_assets ma ON bp.cover_media_id = ma.id AND ma.deleted_at IS NULL
+       WHERE bp.status = 'APPROVED' AND bp.is_visible = 1 AND bp.is_deleted = 0
+       ORDER BY bp.created_at DESC`,
     );
-    if (rows.results?.length) return rows.results;
+    if (rows.results?.length) {
+      return rows.results.map((row) => ({
+        id: row.id as string,
+        slug: row.slug as string,
+        title: row.title as string,
+        excerpt: row.excerpt as string,
+        body: row.body as string,
+        author: row.author as string,
+        reviewer: row.reviewer as string,
+        created_at: row.created_at as string,
+        coverMediaUrl: resolveBlogCoverUrl(row),
+      }));
+    }
   } catch {
-    return defaultBlogs.filter((item) => item.status === "approved").map((item) => ({ ...item, body: "" }));
+    return defaultBlogs.filter((item) => item.status === "approved").map((item) => ({ ...item, body: "", coverMediaUrl: null }));
   }
-  return defaultBlogs.filter((item) => item.status === "approved").map((item) => ({ ...item, body: "" }));
+  return defaultBlogs.filter((item) => item.status === "approved").map((item) => ({ ...item, body: "", coverMediaUrl: null }));
 }
 
 export async function getPublishedJobs() {
@@ -115,11 +160,31 @@ export async function getPublishedVideos() {
 
 export async function getBlogBySlug(slug: string): Promise<PublicBlog | null> {
   try {
-    const rows = await query<PublicBlog>(
-      "SELECT id, slug, title, excerpt, body, author, reviewer, created_at FROM blog_posts WHERE slug = ? AND status = 'APPROVED' AND is_visible = 1 AND is_deleted = 0",
+    const rows = await query<Record<string, unknown>>(
+      `SELECT bp.id, bp.slug, bp.title, bp.excerpt, bp.body, bp.author, bp.reviewer, bp.created_at,
+              ma.storage_type AS cover_storage_type,
+              ma.r2_key AS cover_r2_key,
+              ma.public_path AS cover_public_path,
+              ma.display_public_path AS cover_display_public_path
+       FROM blog_posts bp
+       LEFT JOIN media_assets ma ON bp.cover_media_id = ma.id AND ma.deleted_at IS NULL
+       WHERE bp.slug = ? AND bp.status = 'APPROVED' AND bp.is_visible = 1 AND bp.is_deleted = 0`,
       slug
     );
-    if (rows.results?.length) return rows.results[0];
+    if (rows.results?.length) {
+      const row = rows.results[0];
+      return {
+        id: row.id as string,
+        slug: row.slug as string,
+        title: row.title as string,
+        excerpt: row.excerpt as string,
+        body: row.body as string,
+        author: row.author as string,
+        reviewer: row.reviewer as string,
+        created_at: row.created_at as string,
+        coverMediaUrl: resolveBlogCoverUrl(row),
+      };
+    }
   } catch {
     // fallback
     const fallback = defaultBlogs.find((item) => item.slug === slug && item.status === "approved");

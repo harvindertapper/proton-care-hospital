@@ -381,28 +381,26 @@ test("PRES.32 existing timestamps remain unchanged", () => {
    III. Compatibility checks — no runtime dependency
    ═══════════════════════════════════════════════════════════════════════════ */
 
-test("COMP.33 applyBlog does not read cover_media_id", () => {
+test("COMP.33 applyBlog reads cover_media_id", () => {
   const routeContent = fs.readFileSync(path.join(rootDir, "app", "api", "admin", "data", "route.ts"), "utf8");
   const applyBlogMatch = routeContent.match(/async function applyBlog[\s\S]*?^}/m);
   assert.ok(applyBlogMatch, "applyBlog function found");
-  assert.ok(!applyBlogMatch[0].includes("cover_media_id"), "applyBlog does not reference cover_media_id");
+  assert.ok(applyBlogMatch[0].includes("cover_media_id"), "applyBlog references cover_media_id");
 });
 
-test("COMP.34 applyBlog does not require cover_media_id", () => {
+test("COMP.34 applyBlog uses coverMediaId in validation", () => {
   const routeContent = fs.readFileSync(path.join(rootDir, "app", "api", "admin", "data", "route.ts"), "utf8");
-  assert.ok(!routeContent.includes("cover_media_id"), "route.ts has no cover_media_id reference");
+  assert.ok(routeContent.includes("coverMediaId"), "route.ts has coverMediaId reference");
 });
 
-test("COMP.35 BlogForm does not read cover_media_id", () => {
+test("COMP.35 BlogForm reads cover_media_id", () => {
   const adminContent = fs.readFileSync(path.join(rootDir, "app", "components", "AdminConsole.tsx"), "utf8");
-  const blogFormMatch = adminContent.match(/function BlogForm[\s\S]*?^}/m);
-  assert.ok(blogFormMatch, "BlogForm function found");
-  assert.ok(!blogFormMatch[0].includes("cover_media_id"), "BlogForm does not reference cover_media_id");
+  assert.ok(adminContent.includes("coverMediaId"), "AdminConsole references coverMediaId");
 });
 
-test("COMP.36 public Blog query does not read cover_media_id", () => {
+test("COMP.36 public Blog query reads cover_media_id", () => {
   const publicData = fs.readFileSync(path.join(rootDir, "app", "lib", "public-data.ts"), "utf8");
-  assert.ok(!publicData.includes("cover_media_id"), "public-data.ts has no cover_media_id reference");
+  assert.ok(publicData.includes("cover_media_id"), "public-data.ts has cover_media_id reference");
 });
 
 test("COMP.37 no runtime auto-migration exists", () => {

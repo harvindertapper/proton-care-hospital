@@ -34,7 +34,7 @@ export default async function BlogDetailPage({ params }: Props) {
     notFound();
   }
 
-  const jsonLd = {
+  const jsonLd: Record<string, unknown> = {
     "@context": "https://schema.org",
     "@type": "Article",
     headline: blog.title,
@@ -50,6 +50,10 @@ export default async function BlogDetailPage({ params }: Props) {
     }
   };
 
+  if (blog.coverMediaUrl) {
+    jsonLd.image = blog.coverMediaUrl;
+  }
+
   return (
     <PageShell>
       <script
@@ -61,6 +65,14 @@ export default async function BlogDetailPage({ params }: Props) {
           <Link href="/blog" style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--blue)", fontWeight: 600, marginBottom: 32 }}>
             <ArrowLeft size={18} /> Back to Blog
           </Link>
+
+          {blog.coverMediaUrl && (
+            <img
+              src={blog.coverMediaUrl}
+              alt={blog.title}
+              style={{ width: "100%", maxHeight: 400, objectFit: "cover", borderRadius: 12, marginBottom: 32 }}
+            />
+          )}
           
           <h1 style={{ fontSize: "clamp(32px, 5vw, 48px)", color: "var(--navy)", lineHeight: 1.1, marginBottom: 16 }}>
             {blog.title}

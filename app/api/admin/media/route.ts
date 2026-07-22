@@ -95,6 +95,10 @@ export async function POST(request: Request) {
     status = "APPROVED";
     isVisible = 1;
     lifecycleStatus = "PUBLISHED";
+  } else if (purpose === "blog-cover") {
+    status = "APPROVED";
+    isVisible = 1;
+    lifecycleStatus = "PUBLISHED";
   } else {
     status = "HIDDEN";
     isVisible = 0;
@@ -102,7 +106,7 @@ export async function POST(request: Request) {
   }
 
   // Map purpose to M1 category
-  const category = purpose === "gallery" ? "GALLERY" : purpose === "doctor-photo" ? "DOCTOR" : "GENERAL";
+  const category = purpose === "gallery" ? "GALLERY" : purpose === "doctor-photo" ? "DOCTOR" : purpose === "blog-cover" ? "BLOG" : "GENERAL";
 
   try {
     const result = await run(
