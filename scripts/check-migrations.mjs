@@ -67,6 +67,8 @@ export const PROTECTED_MIGRATION_HASHES = {
   "0000_baseline.sql": "F72C5CBA5D08DB5F46A178EF7792192D847B6EB8AD67AB2A008473A57ED01530",
   "0001_enforce_department_slot_exclusivity.sql": "95CC50AAC38ED9A4EC2F298EE67E652FF4DFA40DD23920DFB4D0D54A59F87BFB",
   "0002_add_content_lifecycle_foundation.sql": "69456A06436FAFCC8EF3C003FCC1E01E453B2B9D3410240940FED2ABEA7E5971",
+  "0003_add_media_library_and_gallery.sql": "E034485A63DA905546559FB02517E4B7332BE016B0CBC98A591FCC4F2628E596",
+  "0004_add_doctor_media_relation.sql": "FD98A0CA5FC965D836BBF1EA950133B7A94B6B635F3F85D827603F0E1CF878E1",
 };
 
 export const M1_MIGRATION_FILE = "0003_add_media_library_and_gallery.sql";
@@ -345,6 +347,68 @@ export function validateM4Migration(migrationsDir) {
   // Verify no FOREIGN KEY or column-level REFERENCES constraint (SQLite limitation — deferred to M4-B)
   if (/FOREIGN\s+KEY/i.test(stripped) || /\bREFERENCES\s+\w+/i.test(stripped)) {
     errors.push("Migration 0004 must not add FOREIGN KEY or REFERENCES constraint via ALTER TABLE (SQLite limitation; use application-level validation in M4-B)");
+  }
+
+  return errors;
+}
+
+export const M4C_MIGRATION_FILE = "0005_add_blog_cover_media_relation.sql";
+
+export const M4C_EXPECTED_COLUMNS = ["cover_media_id"];
+
+export const M4C_EXPECTED_INDEXES = ["idx_blog_posts_cover_media"];
+
+export function validateM4CMigration(migrationsDir) {
+  const errors = [];
+  const m4cPath = path.join(migrationsDir, M4C_MIGRATION_FILE);
+
+  if (!fs.existsSync(m4cPath)) {
+    errors.push(`Migration 0005 file missing: ${M4C_MIGRATION_FILE}`);
+    return errors;
+  }
+
+  const content = fs.readFileSync(m4cPath, "utf8");
+  const stripped = stripComments(content);
+
+  for (const col of M4C_EXPECTED_COLUMNS) {
+    const alterRegex = new RegExp(
+      `ALTER\\s+TABLE\\s+blog_posts\\s+ADD\\s+COLUMN\\s+${col}\\b`,
+      "i"
+    );
+    if (!alterRegex.test(stripped)) {
+      errors.push(`Migration 0005 missing ALTER TABLE blog_posts ADD COLUMN ${col}`);
+    }
+  }
+
+  for (const idx of M4C_EXPECTED_INDEXES) {
+    const idxRegex = new RegExp(`CREATE\\s+(?:UNIQUE\\s+)?INDEX.*\\b${idx}\\b`, "i");
+    if (!idxRegex.test(stripped)) {
+      errors.push(`Migration 0005 missing index: ${idx}`);
+    }
+  }
+
+  const indexIsNonUnique = /CREATE\s+INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?idx_blog_posts_cover_media\b/i.test(stripped);
+  if (!indexIsNonUnique) {
+    errors.push("Migration 0005 index idx_blog_posts_cover_media must be non-unique");
+  }
+
+  const statements = parseSqlStatements(content);
+  for (const stmt of statements) {
+    const destructiveReason = checkDestructiveStatement(stmt);
+    if (destructiveReason) {
+      errors.push(`Migration 0005 contains destructive SQL: ${destructiveReason}`);
+    }
+  }
+
+  for (const stmt of statements) {
+    const normalized = normalizeSql(stmt);
+    if (/^\s*(UPDATE|INSERT|DELETE|REPLACE)\b/i.test(normalized)) {
+      errors.push(`Migration 0005 must be additive; found: ${normalized.slice(0, 60)}`);
+    }
+  }
+
+  if (/FOREIGN\s+KEY/i.test(stripped) || /\bREFERENCES\s+\w+/i.test(stripped)) {
+    errors.push("Migration 0005 must not add FOREIGN KEY or REFERENCES constraint via ALTER TABLE (SQLite limitation; use application-level validation in M4-C2)");
   }
 
   return errors;
@@ -779,9 +843,19 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
     process.exit(1);
   }
 
+  const m4cErrors = validateM4CMigration(migrationsDir);
+  if (m4cErrors.length > 0) {
+    console.error("❌ Migration 0005 Validation Failed:");
+    for (const err of m4cErrors) {
+      console.error(`  - ${err}`);
+    }
+    process.exit(1);
+  }
+
   console.log(`✅ Migration Check Passed: Verified ${result.filesCount} migration file(s) with zero schema drift.`);
-  console.log("✅ Protected hashes verified for 0000-0002.");
+  console.log("✅ Protected hashes verified for 0000-0004.");
   console.log("✅ Migration 0003 validated: additive media library + gallery foundation.");
   console.log("✅ Migration 0004 validated: additive doctor media relation foundation.");
+  console.log("✅ Migration 0005 validated: additive blog cover media relation foundation.");
   process.exit(0);
 }
