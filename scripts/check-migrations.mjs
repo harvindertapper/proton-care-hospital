@@ -134,6 +134,12 @@ export const M1_GALLERY_ITEM_IDS = [
   "gallery-item-single",
 ];
 
+export const M4_MIGRATION_FILE = "0004_add_doctor_media_relation.sql";
+
+export const M4_EXPECTED_COLUMNS = ["photo_media_id"];
+
+export const M4_EXPECTED_INDEXES = ["idx_doctor_profiles_photo_media"];
+
 export async function computeFileSha256(filePath) {
   const crypto = await import("node:crypto");
   const content = fs.readFileSync(filePath);
@@ -283,6 +289,62 @@ export function validateMediaLifecycleColumns(migrationsDir) {
         errors.push(`Migration 0003 ${table} missing lifecycle column: ${col}`);
       }
     }
+  }
+
+  return errors;
+}
+
+export function validateM4Migration(migrationsDir) {
+  const errors = [];
+  const m4Path = path.join(migrationsDir, M4_MIGRATION_FILE);
+
+  if (!fs.existsSync(m4Path)) {
+    errors.push(`Migration 0004 file missing: ${M4_MIGRATION_FILE}`);
+    return errors;
+  }
+
+  const content = fs.readFileSync(m4Path, "utf8");
+  const stripped = stripComments(content);
+
+  // Verify ALTER TABLE doctor_profiles ADD COLUMN photo_media_id
+  for (const col of M4_EXPECTED_COLUMNS) {
+    const alterRegex = new RegExp(
+      `ALTER\\s+TABLE\\s+doctor_profiles\\s+ADD\\s+COLUMN\\s+${col}\\b`,
+      "i"
+    );
+    if (!alterRegex.test(stripped)) {
+      errors.push(`Migration 0004 missing ALTER TABLE doctor_profiles ADD COLUMN ${col}`);
+    }
+  }
+
+  // Verify index
+  for (const idx of M4_EXPECTED_INDEXES) {
+    const idxRegex = new RegExp(`CREATE\\s+(?:UNIQUE\\s+)?INDEX.*\\b${idx}\\b`, "i");
+    if (!idxRegex.test(stripped)) {
+      errors.push(`Migration 0004 missing index: ${idx}`);
+    }
+  }
+
+  // Verify no destructive SQL
+  const statements = parseSqlStatements(content);
+  for (const stmt of statements) {
+    const destructiveReason = checkDestructiveStatement(stmt);
+    if (destructiveReason) {
+      errors.push(`Migration 0004 contains destructive SQL: ${destructiveReason}`);
+    }
+  }
+
+  // Verify no UPDATE/INSERT/DELETE (additive only)
+  for (const stmt of statements) {
+    const normalized = normalizeSql(stmt);
+    if (/^\s*(UPDATE|INSERT|DELETE|REPLACE)\b/i.test(normalized)) {
+      errors.push(`Migration 0004 must be additive; found: ${normalized.slice(0, 60)}`);
+    }
+  }
+
+  // Verify no FOREIGN KEY or column-level REFERENCES constraint (SQLite limitation — deferred to M4-B)
+  if (/FOREIGN\s+KEY/i.test(stripped) || /\bREFERENCES\s+\w+/i.test(stripped)) {
+    errors.push("Migration 0004 must not add FOREIGN KEY or REFERENCES constraint via ALTER TABLE (SQLite limitation; use application-level validation in M4-B)");
   }
 
   return errors;
@@ -708,8 +770,18 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename
     process.exit(1);
   }
 
+  const m4Errors = validateM4Migration(migrationsDir);
+  if (m4Errors.length > 0) {
+    console.error("❌ Migration 0004 Validation Failed:");
+    for (const err of m4Errors) {
+      console.error(`  - ${err}`);
+    }
+    process.exit(1);
+  }
+
   console.log(`✅ Migration Check Passed: Verified ${result.filesCount} migration file(s) with zero schema drift.`);
   console.log("✅ Protected hashes verified for 0000-0002.");
   console.log("✅ Migration 0003 validated: additive media library + gallery foundation.");
+  console.log("✅ Migration 0004 validated: additive doctor media relation foundation.");
   process.exit(0);
 }
