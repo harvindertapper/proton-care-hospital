@@ -2,13 +2,33 @@ interface SendEmailParams {
   to: string;
   subject: string;
   html: string;
+  replyTo?: string;
+}
+
+export interface SendEmailResult {
+  success: boolean;
+  mocked?: boolean;
+  id?: string;
+  error?: string;
+  recipientBlocked?: boolean;
+}
+
+async function resolveFromEmail(): Promise<string> {
+  let fromEmail: string | undefined;
+  try {
+    const { env } = await import("cloudflare:workers");
+    fromEmail = (env as unknown as Record<string, string | undefined>).RESEND_FROM_EMAIL;
+  } catch {
+    fromEmail = typeof process !== "undefined" ? process.env?.RESEND_FROM_EMAIL : undefined;
+  }
+  return fromEmail || "Protone Care Hospital <onboarding@resend.dev>";
 }
 
 /**
  * Sends a transactional email using the Resend HTTP API.
  * Expects RESEND_API_KEY to be configured as an environment secret.
  */
-export async function sendEmail({ to, subject, html }: SendEmailParams) {
+export async function sendEmail({ to, subject, html, replyTo }: SendEmailParams): Promise<SendEmailResult> {
   let apiKey: string | undefined;
   try {
     // Dynamic import to avoid Node link-time crash during testing
@@ -26,23 +46,23 @@ export async function sendEmail({ to, subject, html }: SendEmailParams) {
   }
 
   try {
+    const body: Record<string, unknown> = {
+      from: await resolveFromEmail(),
+      to: [to],
+      subject,
+      html,
+    };
+    if (replyTo) {
+      body.reply_to = [replyTo];
+    }
+
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        // TODO: After verifying protonecarehospital.com DNS in Resend, switch the
-        // sender to "Protone Care Hospital <noreply@protonecarehospital.com>" so
-        // production emails are not sent from the unverified Resend sandbox domain.
-        // Until DNS is verified, onboarding@resend.dev is used; some providers may
-        // reject it, but a hard failure here would block password-reset/OTP emails.
-        from: "Protone Care Hospital <onboarding@resend.dev>",
-        to: [to],
-        subject,
-        html,
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -51,7 +71,8 @@ export async function sendEmail({ to, subject, html }: SendEmailParams) {
       return { success: false, error: errorText };
     }
 
-    return { success: true };
+    const payload = (await response.json().catch(() => ({}))) as { id?: string };
+    return { success: true, id: payload.id };
   } catch (error) {
     console.error(`[RESEND EMAIL ERROR] Fetch error for ${to}:`, error);
     return { success: false, error: String(error) };

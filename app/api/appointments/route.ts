@@ -19,6 +19,7 @@ import {
   verifyTurnstile,
 } from "@/app/lib/server";
 import { clean } from "@/app/lib/utils";
+import { sendHospitalAppointmentAlert } from "@/app/lib/appointment-email";
 
 const APPOINTMENT_PHONE_DAILY_LIMIT = 3;
 
@@ -143,6 +144,27 @@ export async function POST(request: Request) {
   }
 
   await audit("system", "APPOINTMENT_CREATED", "Appointment", id, `${requestId} ${department.name} ${requestedDate} ${requestedTime}`);
+
+  // Best-effort hospital alert email — never blocks the booking response.
+  try {
+    const alertResult = await sendHospitalAppointmentAlert({
+      requestId,
+      patientName,
+      phone,
+      email,
+      departmentName: department.name,
+      requestedDate,
+      requestedTime,
+      concern,
+    });
+    if (alertResult.sent) {
+      await audit("system", "APPOINTMENT_ALERT_SENT", "Appointment", id, `Alert sent to ${alertResult.recipient}`);
+    } else {
+      await audit("system", "APPOINTMENT_ALERT_SKIPPED", "Appointment", id, alertResult.error || "Skipped");
+    }
+  } catch {
+    // Silently swallow — alert failure must never break the booking flow.
+  }
 
   const responseData = {
     success: true,
