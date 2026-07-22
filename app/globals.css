@@ -1341,7 +1341,7 @@ textarea[aria-invalid="true"] {
   position: absolute;
   bottom: 14px;
   left: 16px;
-  right: 16px;
+  right: 88px;
   margin: 0;
   color: white;
   font-size: 1rem;
@@ -1380,6 +1380,7 @@ textarea[aria-invalid="true"] {
 /* ── Play Button ────────────────────────────────────────────────────── */
 
 .ps-play-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
