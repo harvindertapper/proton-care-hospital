@@ -3,6 +3,7 @@ import Link from "next/link";
 import { SITE_URL } from "@/app/lib/data";
 import { getPublishedReviews, getPublishedVideos } from "@/app/lib/public-data";
 import { PageHero, PageShell, SectionHeader } from "@/app/components/SiteShell";
+import PatientStoriesGallery from "@/app/components/PatientStoriesGallery";
 
 export const dynamic = "force-dynamic";
 
@@ -48,21 +49,9 @@ export default async function TestimonialsPage() {
           </div>
         </div>
       </section>
-      <section className="section alt">
+      <section className="section ps-section">
         <div className="container">
-          <SectionHeader eyebrow="Video stories" title="Video Testimonials" />
-          {videos.length ? (
-            <div className="video-grid">
-              {videos.map((video) => (
-                <article className="video-card" key={video.id}>
-                  <iframe title={video.title} src={`https://www.youtube.com/embed/${video.youtube_id}`} loading="lazy" allowFullScreen />
-                  <h3>{video.title}</h3>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <div className="empty-state">No video testimonials are currently available. Check back soon.</div>
-          )}
+          <PatientStoriesGallery videos={videos} />
         </div>
       </section>
     </PageShell>
