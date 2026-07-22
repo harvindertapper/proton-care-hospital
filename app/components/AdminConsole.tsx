@@ -18,6 +18,7 @@ import type { Department, Doctor } from "@/app/lib/data";
 import { slugify } from "@/app/lib/utils";
 import { resolveDoctorManagerRows } from "@/app/lib/doctor-admin.ts";
 import { computeCropPlan } from "@/app/lib/media-policy.ts";
+import PatientVideoStudio from "@/app/components/admin/PatientVideoStudio";
 import { MediaLibraryPanel } from "@/app/components/admin/MediaLibraryPanel";
 import { GalleryManagerPanel } from "@/app/components/admin/GalleryManagerPanel";
 import MediaPickerDialog from "@/app/components/admin/MediaPickerDialog";
@@ -1300,12 +1301,15 @@ export function AdminConsole({
           />
         ) : null}
         {active === "Videos" ? (
-          <VideoForm
+          <PatientVideoStudio
             busy={busy}
-            onSave={(payload) => mutate({ action: "video.save", payload }, "Patient video saved or sent for approval.")}
-            onVisibility={(id, isVisible) => mutate({ action: "video.visibility", payload: { id, isVisible } }, isVisible ? "Video shown publicly." : "Video hidden from public site.")}
-            onDelete={(id) => mutate({ action: "video.delete", id }, "Video deleted successfully.")}
-            rows={adminData.videos}
+            csrf={csrf}
+            videos={adminData.videos}
+            onSave={(payload) => mutate({ action: "video.save", payload }, "Patient video saved.")}
+            onPublish={(id) => mutate({ action: "video.visibility", payload: { id, action: "publish" } }, "Video published.")}
+            onHide={(id) => mutate({ action: "video.visibility", payload: { id, action: "hide" } }, "Video hidden.")}
+            onArchive={(id) => mutate({ action: "video.delete", id }, "Video archived.")}
+            onRestore={(id) => mutate({ action: "video.restore", id }, "Video restored.")}
           />
         ) : null}
 

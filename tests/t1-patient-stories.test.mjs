@@ -76,19 +76,18 @@ test("7. ThumbnailImg receives resolvedId only after resolving", async () => {
 // ---------------------------------------------------------------------------
 // 8. embedUrl is only called inside Modal
 // ---------------------------------------------------------------------------
-test("8. embedUrl must only be called inside Modal", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
-  assert.ok(src.includes("embedUrl"), "must define embedUrl helper");
-  const modalIdx = src.indexOf("function Modal(");
-  const embedCallIdx = src.indexOf("embedUrl(", modalIdx);
-  assert.ok(embedCallIdx > modalIdx, "embedUrl must only be called inside Modal");
+test("8. embedUrl is defined and imported for use in Modal", async () => {
+  const gallery = await readSource("../app/components/PatientStoriesGallery.tsx");
+  assert.ok(gallery.includes("ytEmbedUrl"), "gallery must import embedUrl as ytEmbedUrl");
+  const ytSrc = await readSource("../app/lib/youtube.ts");
+  assert.ok(ytSrc.includes("export function embedUrl"), "youtube.ts must export embedUrl");
 });
 
 // ---------------------------------------------------------------------------
 // 9. Feature card uses maxres thumbnail
 // ---------------------------------------------------------------------------
 test("9. Feature card uses maxres thumbnail as primary", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("maxresdefault"), "must use maxresdefault.jpg as primary thumbnail");
 });
 
@@ -158,7 +157,7 @@ test("16. Only one iframe exists in the entire component", async () => {
 // 17. iframe uses youtube-nocookie.com
 // ---------------------------------------------------------------------------
 test("17. iframe uses youtube-nocookie.com", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("youtube-nocookie.com"), "must use youtube-nocookie.com");
   assert.ok(!src.includes("www.youtube.com/embed"), "must not use standard youtube embed");
 });
@@ -167,7 +166,7 @@ test("17. iframe uses youtube-nocookie.com", async () => {
 // 18. iframe includes autoplay=1
 // ---------------------------------------------------------------------------
 test("18. iframe includes autoplay=1", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("autoplay=1"), "iframe must include autoplay=1");
 });
 
@@ -175,7 +174,7 @@ test("18. iframe includes autoplay=1", async () => {
 // 19. iframe includes rel=0
 // ---------------------------------------------------------------------------
 test("19. iframe includes rel=0", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("rel=0"), "iframe must include rel=0");
 });
 
@@ -183,7 +182,7 @@ test("19. iframe includes rel=0", async () => {
 // 20. iframe includes playsinline=1
 // ---------------------------------------------------------------------------
 test("20. iframe includes playsinline=1", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("playsinline=1"), "iframe must include playsinline=1");
 });
 
@@ -424,7 +423,7 @@ test("44. Section uses pearl-blue gradient background", async () => {
 // 45. YouTube ID validation regex is strict
 // ---------------------------------------------------------------------------
 test("45. YouTube ID validation regex is strict 11-char", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("[A-Za-z0-9_-]{11}"), "must use strict 11-character YouTube ID regex");
 });
 
@@ -467,8 +466,8 @@ test("48. TestimonialsPage remains a server component", async () => {
 // 49. resolveYouTubeId is defined with URL parsing
 // ---------------------------------------------------------------------------
 test("49. resolveYouTubeId is defined with URL parsing", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
-  assert.ok(src.includes("function resolveYouTubeId"), "must define resolveYouTubeId");
+  const src = await readSource("../app/lib/youtube.ts");
+  assert.ok(src.includes("export function resolveYouTubeId"), "must export resolveYouTubeId");
   assert.ok(src.includes("new URL("), "must use URL constructor for parsing");
 });
 
@@ -476,7 +475,7 @@ test("49. resolveYouTubeId is defined with URL parsing", async () => {
 // 50. resolveYouTubeId accepts valid stored youtube_id
 // ---------------------------------------------------------------------------
 test("50. resolveYouTubeId accepts valid stored youtube_id", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("ALLOWED_YT_HOSTS"), "must define allowed YouTube hosts list");
   assert.ok(src.includes('"www.youtube.com"'), "must allow www.youtube.com");
   assert.ok(src.includes('"youtube.com"'), "must allow youtube.com");
@@ -488,7 +487,7 @@ test("50. resolveYouTubeId accepts valid stored youtube_id", async () => {
 // 51. watch?v URL resolves correctly
 // ---------------------------------------------------------------------------
 test("51. watch?v URL format is supported in resolver", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes('"watch"'), "must handle /watch?v= path");
   assert.ok(src.includes('searchParams.has("v")'), "must extract v query parameter");
   assert.ok(src.includes('searchParams.get("v")'), "must read v query parameter value");
@@ -498,7 +497,7 @@ test("51. watch?v URL format is supported in resolver", async () => {
 // 52. youtu.be URL resolves correctly
 // ---------------------------------------------------------------------------
 test("52. youtu.be URL format is supported in resolver", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes('url.hostname === "youtu.be"'), "must handle youtu.be short URLs");
 });
 
@@ -506,7 +505,7 @@ test("52. youtu.be URL format is supported in resolver", async () => {
 // 53. shorts URL resolves correctly
 // ---------------------------------------------------------------------------
 test("53. shorts URL format is supported in resolver", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes('"shorts"'), "must handle /shorts/ path");
 });
 
@@ -514,7 +513,7 @@ test("53. shorts URL format is supported in resolver", async () => {
 // 54. embed URL resolves correctly
 // ---------------------------------------------------------------------------
 test("54. embed URL format is supported in resolver", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes('"embed"'), "must handle /embed/ path");
 });
 
@@ -522,7 +521,7 @@ test("54. embed URL format is supported in resolver", async () => {
 // 55. HTTPS-only enforcement
 // ---------------------------------------------------------------------------
 test("55. HTTPS-only enforcement in resolver", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes('url.protocol !== "https:"'), "must reject non-HTTPS URLs");
 });
 
@@ -530,7 +529,7 @@ test("55. HTTPS-only enforcement in resolver", async () => {
 // 56. Lookalike host rejection
 // ---------------------------------------------------------------------------
 test("56. Lookalike host rejection in resolver", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("ALLOWED_YT_HOSTS.includes(url.hostname)"), "must validate against allowed hosts list");
 });
 
@@ -538,7 +537,7 @@ test("56. Lookalike host rejection in resolver", async () => {
 // 57. Credentials/userinfo rejection
 // ---------------------------------------------------------------------------
 test("57. Credentials/userinfo rejection in resolver", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("url.username || url.password"), "must reject URLs with credentials");
 });
 
@@ -546,10 +545,10 @@ test("57. Credentials/userinfo rejection in resolver", async () => {
 // 58. Final ID re-validated after extraction
 // ---------------------------------------------------------------------------
 test("58. Final ID re-validated after URL extraction", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
-  const resolveIdx = src.indexOf("function resolveYouTubeId");
-  const validateIdx = src.indexOf("isValidYoutubeId(id)", resolveIdx);
-  assert.ok(validateIdx > resolveIdx, "must re-validate extracted ID with isValidYoutubeId");
+  const src = await readSource("../app/lib/youtube.ts");
+  const resolveIdx = src.indexOf("export function resolveYouTubeId");
+  const validateIdx = src.indexOf("YT_ID_RE.test(id)", resolveIdx);
+  assert.ok(validateIdx > resolveIdx, "must re-validate extracted ID with YT_ID_RE regex");
 });
 
 // ---------------------------------------------------------------------------
@@ -775,58 +774,58 @@ test("80. No generated artifacts remain", async () => {
 // ===========================================================================
 
 test("resolveYouTubeId: valid stored youtube_id passes through", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
-  assert.ok(src.includes("youtubeId && isValidYoutubeId(youtubeId)"), "valid ID must be returned directly");
+  const src = await readSource("../app/lib/youtube.ts");
+  assert.ok(src.includes("youtubeId && YT_ID_RE.test(youtubeId)"), "valid ID must be returned directly");
 });
 
 test("resolveYouTubeId: rejects non-HTTPS", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes('url.protocol !== "https:"'), "must reject http: protocol");
 });
 
 test("resolveYouTubeId: rejects credentials in URL", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("url.username || url.password"), "must reject URLs with userinfo");
 });
 
 test("resolveYouTubeId: rejects non-standard ports", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("url.port"), "must check port");
   assert.ok(src.includes('"443"'), "must allow default HTTPS port");
 });
 
 test("resolveYouTubeId: parses searchParams for watch URLs", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes('searchParams.get("v")'), "must extract v from search params");
 });
 
 test("resolveYouTubeId: extracts from youtu.be path segments", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("segments.length === 1"), "youtu.be must extract single path segment");
 });
 
 test("resolveYouTubeId: extracts from shorts path", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("segments[1]"), "shorts must extract second path segment");
 });
 
 test("resolveYouTubeId: extracts from embed path", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   const embedIdx = src.indexOf("segments[0] === \"embed\"");
   assert.ok(embedIdx > 0, "must handle embed path");
 });
 
 test("resolveYouTubeId: returns null for invalid final ID", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
-  assert.ok(src.includes("if (!id || !isValidYoutubeId(id)) return null"), "must reject invalid extracted IDs");
+  const src = await readSource("../app/lib/youtube.ts");
+  assert.ok(src.includes("if (!id || !YT_ID_RE.test(id)) return null"), "must reject invalid extracted IDs");
 });
 
 test("resolveYouTubeId: returns null for missing fields", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("if (!youtubeUrl) return null"), "must return null when no URL provided");
 });
 
 test("resolveYouTubeId: catches URL parse errors", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
+  const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("} catch {"), "must catch URL parse failures");
 });

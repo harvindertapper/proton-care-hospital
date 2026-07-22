@@ -2,66 +2,11 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Play, X } from "lucide-react";
-
-const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
-const ALLOWED_YT_HOSTS = ["www.youtube.com", "youtube.com", "m.youtube.com", "youtu.be"];
-
-function isValidYoutubeId(id: string): boolean {
-  return YT_ID_RE.test(id);
-}
-
-function resolveYouTubeId({
-  youtubeId,
-  youtubeUrl,
-}: {
-  youtubeId?: string;
-  youtubeUrl?: string;
-}): string | null {
-  if (youtubeId && isValidYoutubeId(youtubeId)) return youtubeId;
-
-  if (!youtubeUrl) return null;
-
-  let url: URL;
-  try {
-    url = new URL(youtubeUrl);
-  } catch {
-    return null;
-  }
-
-  if (url.protocol !== "https:") return null;
-  if (url.username || url.password) return null;
-  if (!ALLOWED_YT_HOSTS.includes(url.hostname)) return null;
-  if (url.port && url.port !== "443" && url.port !== "") return null;
-
-  let id: string | null = null;
-
-  if (url.hostname === "youtu.be") {
-    const segments = url.pathname.split("/").filter(Boolean);
-    if (segments.length === 1) id = segments[0];
-  } else {
-    const segments = url.pathname.split("/").filter(Boolean);
-    if (segments[0] === "watch" && url.searchParams.has("v")) {
-      id = url.searchParams.get("v");
-    } else if (segments[0] === "shorts" && segments.length === 2) {
-      id = segments[1];
-    } else if (segments[0] === "embed" && segments.length === 2) {
-      id = segments[1];
-    }
-  }
-
-  if (!id || !isValidYoutubeId(id)) return null;
-  return id;
-}
-
-function thumbnailUrl(id: string, fallback: boolean): string {
-  return fallback
-    ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
-    : `https://i.ytimg.com/vi/${id}/maxresdefault.jpg`;
-}
-
-function embedUrl(id: string): string {
-  return `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&playsinline=1`;
-}
+import {
+  resolveYouTubeId,
+  thumbnailUrl as ytThumbnailUrl,
+  embedUrl as ytEmbedUrl,
+} from "@/app/lib/youtube";
 
 type VideoItem = {
   id: string;
@@ -108,7 +53,7 @@ function ThumbnailImg({
 
   return (
     <img
-      src={thumbnailUrl(resolvedId, phase === "hqdefault")}
+      src={ytThumbnailUrl(resolvedId, phase === "hqdefault")}
       alt={title}
       className={className}
       style={style}
@@ -290,7 +235,7 @@ function Modal({
         </div>
         <div className="ps-modal-player">
           <iframe
-            src={embedUrl(video._resolvedId)}
+            src={ytEmbedUrl(video._resolvedId)}
             title={`Patient story video: ${video.title}`}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
             allowFullScreen
