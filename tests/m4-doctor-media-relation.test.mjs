@@ -320,14 +320,14 @@ test("R.09 Gallery media data is unchanged after 0004", () => {
    COMPATIBILITY
    ═══════════════════════════════════════════════════════════════════════ */
 
-test("C.01 current Doctor public code does not read photo_media_id", () => {
+test("C.01 Doctor public code reads photo_media_id for media resolution", () => {
   const publicCode = fs.readFileSync(path.join(rootDir, "app", "lib", "doctor-public.ts"), "utf8");
-  assert.ok(!publicCode.includes("photo_media_id"), "doctor-public.ts must not reference photo_media_id");
+  assert.ok(publicCode.includes("photo_media_id"), "doctor-public.ts must reference photo_media_id for media resolution");
 });
 
-test("C.02 current Doctor save does not require photo_media_id", () => {
+test("C.02 Doctor save supports photo_media_id", () => {
   const adminCode = fs.readFileSync(path.join(rootDir, "app", "lib", "doctor-admin.ts"), "utf8");
-  assert.ok(!adminCode.includes("photo_media_id"), "doctor-admin.ts must not reference photo_media_id");
+  assert.ok(adminCode.includes("photo_media_id"), "doctor-admin.ts must reference photo_media_id for doctor save");
 });
 
 test("C.03 current photo_url rendering remains intact", () => {

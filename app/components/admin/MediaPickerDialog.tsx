@@ -8,6 +8,10 @@ type Props = {
   csrf: string;
   onClose: () => void;
   onSelect: (asset: MediaAssetDto) => void;
+  category?: string;
+  title?: string;
+  categoryLabel?: string;
+  selectedId?: string | null;
 };
 
 const LIMIT = 24;
@@ -38,17 +42,21 @@ function lifecycleBadgeStyle(status: string): { background: string; color: strin
   }
 }
 
-export default function MediaPickerDialog({ csrf, onClose, onSelect }: Props) {
+export default function MediaPickerDialog({ csrf, onClose, onSelect, category = "GALLERY", title, categoryLabel, selectedId: externalSelectedId }: Props) {
   const [search, setSearch] = useState("");
   const [lifecycleStatus, setLifecycleStatus] = useState("ALL");
   const [assets, setAssets] = useState<MediaAssetDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [hasMore, setHasMore] = useState(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(externalSelectedId ?? null);
   const offsetRef = useRef(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+
+  const dialogTitle = title || (category === "DOCTOR" ? "Select Doctor Photo" : "Select Gallery Asset");
+  const filterLabel = categoryLabel || (category === "DOCTOR" ? "Doctor" : "Gallery");
+  const selectLabel = category === "DOCTOR" ? "Select Photo" : "Select";
 
   const [debouncedSearch, setDebouncedSearch] = useState("");
 
@@ -68,7 +76,7 @@ export default function MediaPickerDialog({ csrf, onClose, onSelect }: Props) {
       {
         search: debouncedSearch,
         storageType: "ALL",
-        category: "GALLERY",
+        category,
         purpose: "ALL",
         lifecycleStatus,
       },
@@ -90,7 +98,7 @@ export default function MediaPickerDialog({ csrf, onClose, onSelect }: Props) {
       },
     );
     return () => { cancelled = true; };
-  }, [csrf, debouncedSearch, lifecycleStatus]);
+  }, [csrf, debouncedSearch, lifecycleStatus, category]);
 
   const loadMore = useCallback(() => {
     if (loading || !hasMore) return;
@@ -102,7 +110,7 @@ export default function MediaPickerDialog({ csrf, onClose, onSelect }: Props) {
           {
             search: debouncedSearch,
             storageType: "ALL",
-            category: "GALLERY",
+            category,
             purpose: "ALL",
             lifecycleStatus,
           },
@@ -119,7 +127,7 @@ export default function MediaPickerDialog({ csrf, onClose, onSelect }: Props) {
         setLoading(false);
       }
     })();
-  }, [csrf, debouncedSearch, lifecycleStatus, loading, hasMore]);
+  }, [csrf, debouncedSearch, lifecycleStatus, category, loading, hasMore]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -159,7 +167,7 @@ export default function MediaPickerDialog({ csrf, onClose, onSelect }: Props) {
           {
             search: debouncedSearch,
             storageType: "ALL",
-            category: "GALLERY",
+            category,
             purpose: "ALL",
             lifecycleStatus,
           },
@@ -182,7 +190,7 @@ export default function MediaPickerDialog({ csrf, onClose, onSelect }: Props) {
   };
 
   const isEligible = (asset: MediaAssetDto) =>
-    asset.category === "GALLERY" &&
+    asset.category === category &&
     asset.lifecycleStatus === "PUBLISHED" &&
     asset.status === "APPROVED" &&
     asset.isVisible === 1;
@@ -227,7 +235,7 @@ export default function MediaPickerDialog({ csrf, onClose, onSelect }: Props) {
           }}
         >
           <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
-            Select Gallery Asset
+            {dialogTitle}
           </h2>
           <button
             onClick={onClose}
@@ -272,7 +280,7 @@ export default function MediaPickerDialog({ csrf, onClose, onSelect }: Props) {
             alignItems: "center",
           }}
         >
-          <span style={{ fontSize: 13, color: "#64748b", fontWeight: 500 }}>Gallery</span>
+          <span style={{ fontSize: 13, color: "#64748b", fontWeight: 500 }}>{filterLabel}</span>
           <select
             value={lifecycleStatus}
             onChange={(e) => setLifecycleStatus(e.target.value)}
@@ -526,7 +534,7 @@ export default function MediaPickerDialog({ csrf, onClose, onSelect }: Props) {
                       aria-label={`Select ${asset.title || asset.fileName}`}
                       style={{ width: "100%", marginTop: 8 }}
                     >
-                      Select
+                      {selectLabel}
                     </button>
                   </div>
                 );

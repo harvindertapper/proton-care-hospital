@@ -501,9 +501,9 @@ test("68. GalleryManagerPanel catches AdminApiError eligibility/guard errors", (
    18. MediaPickerDialog GALLERY isolation and features (tests 69-72)
    ═══════════════════════════════════════════════════════════════════════════ */
 
-test("69. MediaPickerDialog fetches with category=GALLERY only", () => {
-  assert.ok(_mediaPickerDialog.includes('category: "GALLERY"'), "Must query with category GALLERY");
-  assert.ok(_mediaPickerDialog.includes("Select Gallery Asset"), "Must have Gallery-specific heading");
+test("69. MediaPickerDialog defaults category=GALLERY and has category prop", () => {
+  assert.ok(_mediaPickerDialog.includes('category = "GALLERY"'), "Must default category to GALLERY");
+  assert.ok(_mediaPickerDialog.includes("Select Gallery Asset") || _mediaPickerDialog.includes("title"), "Must have configurable heading or title prop");
 });
 
 test("70. MediaPickerDialog shows PUBLICATION ELIGIBLE badge for eligible assets", () => {

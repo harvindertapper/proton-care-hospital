@@ -58,6 +58,7 @@ export type LoadedDoctor = {
   status: string;
   is_visible: number;
   is_deleted: number;
+  photo_media_id: string | null;
 };
 
 export const ACTIVE_DOCTORS_ADMIN_SQL =
@@ -114,12 +115,61 @@ export function deriveLifecycleFromVisibility(isVisible: boolean): {
   return { lifecycle_status: "HIDDEN", status: "HIDDEN", is_visible: 0, is_deleted: 0 };
 }
 
+export type MediaRelationValidation =
+  | { ok: true }
+  | { ok: false; error: string };
+
+export async function validateDoctorMediaRelation(
+  repo: DoctorRepo,
+  photoMediaId: string | null,
+  isDoctorVisible: boolean,
+): Promise<MediaRelationValidation> {
+  if (!photoMediaId) return { ok: true };
+
+  const rows = await repo.query(
+    `SELECT id, category, lifecycle_status, status, is_visible, deleted_at
+     FROM media_assets
+     WHERE id = ?
+     LIMIT 1`,
+    photoMediaId,
+  );
+
+  const media = rows.results?.[0];
+  if (!media) {
+    return { ok: false, error: "Selected Doctor photo was not found." };
+  }
+
+  if (media.deleted_at) {
+    return { ok: false, error: "Selected Doctor photo is archived or unavailable." };
+  }
+
+  if (String(media.category) !== "DOCTOR") {
+    return { ok: false, error: "Selected media must be in the Doctor category." };
+  }
+
+  if (isDoctorVisible) {
+    if (
+      String(media.lifecycle_status) !== "PUBLISHED" ||
+      String(media.status) !== "APPROVED" ||
+      Number(media.is_visible) !== 1
+    ) {
+      return {
+        ok: false,
+        error:
+          "Publish and approve the selected Doctor photo before using it on a visible profile.",
+      };
+    }
+  }
+
+  return { ok: true };
+}
+
 export async function loadDoctor(
   repo: DoctorRepo,
   slug: string,
 ): Promise<LoadedDoctor | null> {
   const rows = await repo.query(
-    "SELECT id, slug, lifecycle_status, version, deleted_at, status, is_visible, is_deleted FROM doctor_profiles WHERE slug = ? LIMIT 1",
+    "SELECT id, slug, lifecycle_status, version, deleted_at, status, is_visible, is_deleted, photo_media_id FROM doctor_profiles WHERE slug = ? LIMIT 1",
     slug,
   );
   if (!rows.results?.length) return null;
@@ -133,6 +183,7 @@ export async function loadDoctor(
     status: String(row.status),
     is_visible: Number(row.is_visible),
     is_deleted: Number(row.is_deleted),
+    photo_media_id: row.photo_media_id ? String(row.photo_media_id) : null,
   };
 }
 
@@ -177,6 +228,7 @@ export async function createDoctor(
     qualification: string;
     departmentSlug: string;
     photoUrl: string;
+    photoMediaId: string | null;
     profileNote: string;
     blockedDates: string;
     isVisible: boolean;
@@ -188,8 +240,8 @@ export async function createDoctor(
   try {
     result = await repo.run(
       `INSERT INTO doctor_profiles
-        (id, slug, name, speciality, qualification, department_slug, photo_url, profile_note, consent_status, status, is_visible, approved_by, blocked_dates, is_deleted, lifecycle_status, version, deleted_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED_SOURCE', ?, ?, ?, ?, ?, ?, 1, NULL, CURRENT_TIMESTAMP)`,
+        (id, slug, name, speciality, qualification, department_slug, photo_url, photo_media_id, profile_note, consent_status, status, is_visible, approved_by, blocked_dates, is_deleted, lifecycle_status, version, deleted_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED_SOURCE', ?, ?, ?, ?, ?, ?, 1, NULL, CURRENT_TIMESTAMP)`,
       `doctor-${slug}`,
       slug,
       fields.name,
@@ -197,6 +249,7 @@ export async function createDoctor(
       fields.qualification,
       fields.departmentSlug,
       fields.photoUrl,
+      fields.photoMediaId,
       fields.profileNote,
       lifecycle.status,
       lifecycle.is_visible,
@@ -234,6 +287,7 @@ export async function updateDoctor(
     qualification: string;
     departmentSlug: string;
     photoUrl: string;
+    photoMediaId: string | null;
     profileNote: string;
     blockedDates: string;
     isVisible: boolean;
@@ -253,7 +307,7 @@ export async function updateDoctor(
   const result = await repo.run(
     `UPDATE doctor_profiles SET
       name = ?, speciality = ?, qualification = ?, department_slug = ?, photo_url = ?,
-      profile_note = ?, approved_by = ?, blocked_dates = ?,
+      photo_media_id = ?, profile_note = ?, approved_by = ?, blocked_dates = ?,
       status = ?, is_visible = ?, is_deleted = ?, lifecycle_status = ?,
       deleted_at = NULL, updated_at = CURRENT_TIMESTAMP, version = version + 1
       WHERE slug = ? AND version = ? AND is_deleted = 0 AND lifecycle_status != 'ARCHIVED'`,
@@ -262,6 +316,7 @@ export async function updateDoctor(
     fields.qualification,
     fields.departmentSlug,
     fields.photoUrl,
+    fields.photoMediaId,
     fields.profileNote,
     actorEmail,
     fields.blockedDates,

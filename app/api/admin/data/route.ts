@@ -20,6 +20,7 @@ import {
   loadDoctor,
   createDoctor,
   updateDoctor,
+  validateDoctorMediaRelation,
   ARCHIVED_SAVE_ERROR,
   ACTIVE_DOCTORS_ADMIN_SQL,
   ARCHIVED_DOCTORS_ADMIN_SQL,
@@ -185,6 +186,9 @@ async function applyDoctor(payload: Record<string, unknown>, actorEmail: string)
   const departmentSlug = clean(payload.departmentSlug, 120);
   const department = departmentBySlug(departmentSlug);
   const photoUrl = clean(payload.photoUrl, 500);
+  const photoMediaId = typeof payload.photoMediaId === "string" && payload.photoMediaId.trim()
+    ? clean(payload.photoMediaId, 120)
+    : null;
   const profileNote = clean(payload.profileNote, 1000);
   const isVisible = Number(payload.isVisible) === 0 ? 0 : 1;
   const blockedDates = clean(payload.blockedDates, 2000);
@@ -195,6 +199,10 @@ async function applyDoctor(payload: Record<string, unknown>, actorEmail: string)
   if (!name || !slug || !speciality || !department) throw new Error("Invalid doctor profile payload.");
 
   const repo: DoctorRepo = { query, run, audit };
+
+  const mediaCheck = await validateDoctorMediaRelation(repo, photoMediaId, isVisible === 1);
+  if (!mediaCheck.ok) throw new Error(mediaCheck.error);
+
   const current = await loadDoctor(repo, slug);
 
   if (!current) {
@@ -203,7 +211,7 @@ async function applyDoctor(payload: Record<string, unknown>, actorEmail: string)
     }
     return createDoctor(repo, slug, {
       name, speciality, qualification, departmentSlug: department.slug,
-      photoUrl, profileNote, blockedDates, isVisible: isVisible === 1,
+      photoUrl, photoMediaId, profileNote, blockedDates, isVisible: isVisible === 1,
     }, actorEmail);
   }
 
@@ -217,7 +225,7 @@ async function applyDoctor(payload: Record<string, unknown>, actorEmail: string)
 
   return updateDoctor(repo, slug, expectedVersion, {
     name, speciality, qualification, departmentSlug: department.slug,
-    photoUrl, profileNote, blockedDates, isVisible: isVisible === 1,
+    photoUrl, photoMediaId, profileNote, blockedDates, isVisible: isVisible === 1,
   }, actorEmail);
 }
 

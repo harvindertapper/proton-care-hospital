@@ -20,6 +20,7 @@ import { resolveDoctorManagerRows } from "@/app/lib/doctor-admin.ts";
 import { computeCropPlan } from "@/app/lib/media-policy.ts";
 import { MediaLibraryPanel } from "@/app/components/admin/MediaLibraryPanel";
 import { GalleryManagerPanel } from "@/app/components/admin/GalleryManagerPanel";
+import MediaPickerDialog from "@/app/components/admin/MediaPickerDialog";
 
 type AdminSession = {
   email: string;
@@ -727,17 +728,17 @@ export function AdminConsole({
     }
   }
 
-  async function uploadMedia(formData: FormData) {
+  async function uploadMedia(formData: FormData): Promise<{ url: string; mediaId: string }> {
     setBusy(true);
     setNotice("");
     try {
       const uploadRes = await uploadAdminMedia(session.csrf, formData);
       setNotice("Media uploaded successfully.");
       await refreshData(true);
-      return String(uploadRes.url || "");
+      return { url: String(uploadRes.url || ""), mediaId: String(uploadRes.id || "") };
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Media upload failed.");
-      return "";
+      return { url: "", mediaId: "" };
     } finally {
       setBusy(false);
     }
@@ -1880,8 +1881,8 @@ function ImageCropUploader({
   onUpload,
   onComplete,
 }: {
-  onUpload: (formData: FormData) => Promise<string>;
-  onComplete: (url: string) => void;
+  onUpload: (formData: FormData) => Promise<{ url: string; mediaId: string }>;
+  onComplete: (url: string, mediaId: string) => void;
 }) {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [originalFile, setOriginalFile] = useState<File | null>(null);
@@ -2017,8 +2018,8 @@ function ImageCropUploader({
       const formData = new FormData();
       formData.append("file", originalFile);
       formData.append("purpose", "doctor-photo");
-      const url = await onUpload(formData);
-      onComplete(url);
+      const { url, mediaId } = await onUpload(formData);
+      onComplete(url, mediaId);
       setImageSrc(null);
       setOriginalFile(null);
       setMessage("Original uploaded successfully!");
@@ -2047,8 +2048,8 @@ function ImageCropUploader({
       const formData = new FormData();
       formData.append("file", file);
       formData.append("purpose", "doctor-photo");
-      const url = await onUpload(formData);
-      onComplete(url);
+      const { url, mediaId } = await onUpload(formData);
+      onComplete(url, mediaId);
       setImageSrc(null);
       setOriginalFile(null);
       setCropInfo("");
@@ -2178,9 +2179,15 @@ function DoctorManager({
   onSave: (payload: Record<string, unknown>) => void;
   onArchive?: (slug: string, expectedVersion: number) => void;
   onRestore?: (slug: string, expectedVersion: number) => void;
-  onUpload?: (formData: FormData) => Promise<string>;
+  onUpload?: (formData: FormData) => Promise<{ url: string; mediaId: string }>;
 }) {
   const source = resolveDoctorManagerRows(rows);
+  const csrf = useMemo(() => {
+    if (typeof document === "undefined") return "";
+    const metaCsrf = document.querySelector('meta[name="csrf-token"]');
+    return metaCsrf ? metaCsrf.getAttribute("content") || "" : "";
+  }, []);
+  const [showDoctorPicker, setShowDoctorPicker] = useState(false);
 
   const first = source && source.length > 0 ? source[0] : null;
   const [form, setForm] = useState({
@@ -2190,6 +2197,7 @@ function DoctorManager({
     qualification: String(first?.qualification || ""),
     departmentSlug: String(first?.department_slug || departments?.[0]?.slug || ""),
     photoUrl: String(first?.photo_url || ""),
+    photoMediaId: String(first?.photo_media_id || ""),
     profileNote: String(first?.profile_note || ""),
     isVisible: String(first?.is_visible ?? "1"),
     blockedDates: String(first?.blocked_dates || ""),
@@ -2206,6 +2214,7 @@ function DoctorManager({
       qualification: String(row.qualification || ""),
       departmentSlug: String(row.department_slug || departments?.[0]?.slug || ""),
       photoUrl: String(row.photo_url || ""),
+      photoMediaId: String(row.photo_media_id || ""),
       profileNote: String(row.profile_note || ""),
       isVisible: String(row.is_visible ?? "1"),
       blockedDates: String(row.blocked_dates || ""),
@@ -2213,12 +2222,14 @@ function DoctorManager({
     });
   }
 
+  const photoSource = form.photoMediaId ? "media_library" : form.photoUrl ? "legacy_url" : "none";
+
   return (
     <div className="admin-panel-grid">
       <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave(form); }}>
         {(source || []).some(d => d && d.slug === form.slug && form.slug) && (
           <div style={{ background: "#e0f2fe", color: "#0369a1", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <span>Γ£Å∩╕Å Editing doctor profile: <strong>{form.name}</strong></span>
+            <span>Editing doctor profile: <strong>{form.name}</strong></span>
             <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({
               slug: "",
               name: "",
@@ -2226,6 +2237,7 @@ function DoctorManager({
               qualification: "",
               departmentSlug: departments?.[0]?.slug || "",
               photoUrl: "",
+              photoMediaId: "",
               profileNote: "",
               isVisible: "1",
               blockedDates: "",
@@ -2257,10 +2269,46 @@ function DoctorManager({
             ))}
           </select>
         </label>
-        <label>Photo URL or uploaded media URL<input value={form.photoUrl} onChange={(event) => setForm({ ...form, photoUrl: event.target.value })} /></label>
-        {onUpload && (
-          <ImageCropUploader onUpload={onUpload} onComplete={(url) => setForm({ ...form, photoUrl: url })} />
-        )}
+
+        <div style={{ marginTop: 8, padding: 12, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1e293b", marginBottom: 8 }}>Doctor Photo</div>
+          {photoSource === "media_library" && (
+            <div style={{ fontSize: 12, color: "#059669", background: "#ecfdf5", padding: "6px 10px", borderRadius: 6, marginBottom: 8 }}>
+              Media Library photo is authoritative for this Doctor.
+            </div>
+          )}
+          {photoSource === "legacy_url" && (
+            <div style={{ fontSize: 12, color: "#a16207", background: "#fef9c3", padding: "6px 10px", borderRadius: 6, marginBottom: 8 }}>
+              This Doctor currently uses a legacy photo URL.
+            </div>
+          )}
+          {photoSource === "none" && (
+            <div style={{ fontSize: 12, color: "#64748b", background: "#f1f5f9", padding: "6px 10px", borderRadius: 6, marginBottom: 8 }}>
+              No photo set for this Doctor.
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            {csrf && (
+              <button type="button" className="button secondary small" onClick={() => setShowDoctorPicker(true)}>
+                Select from Media Library
+              </button>
+            )}
+            {form.photoMediaId && (
+              <button type="button" className="button secondary small" style={{ color: "#dc2626" }} onClick={() => setForm({ ...form, photoMediaId: "" })}>
+                Clear Media Relation
+              </button>
+            )}
+          </div>
+
+          <label style={{ fontSize: 12 }}>Photo URL / legacy URL
+            <input value={form.photoUrl} onChange={(event) => setForm({ ...form, photoUrl: event.target.value })} style={{ fontSize: 12 }} />
+          </label>
+          {onUpload && (
+            <ImageCropUploader onUpload={onUpload} onComplete={(url, mediaId) => setForm({ ...form, photoUrl: url, photoMediaId: mediaId })} />
+          )}
+        </div>
+
         <label>Profile note<textarea rows={3} value={form.profileNote} onChange={(event) => setForm({ ...form, profileNote: event.target.value })} /></label>
         <label>Blocked Dates / Leaves (comma-separated, e.g. 2026-07-20,2026-07-21)<input placeholder="e.g. 2026-07-20,2026-07-21" value={form.blockedDates} onChange={(event) => setForm({ ...form, blockedDates: event.target.value })} /></label>
         <label className="checkbox-field">
@@ -2325,6 +2373,21 @@ function DoctorManager({
           <p className="empty-state">No archived doctors.</p>
         )}
       </section>
+
+      {showDoctorPicker && csrf && (
+        <MediaPickerDialog
+          csrf={csrf}
+          category="DOCTOR"
+          title="Select Doctor Photo"
+          categoryLabel="Doctor"
+          selectedId={form.photoMediaId || null}
+          onClose={() => setShowDoctorPicker(false)}
+          onSelect={(asset) => {
+            setForm({ ...form, photoMediaId: asset.id, photoUrl: asset.displayUrl || asset.originalUrl || "" });
+            setShowDoctorPicker(false);
+          }}
+        />
+      )}
     </div>
   );
 }

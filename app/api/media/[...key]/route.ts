@@ -74,6 +74,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ key
     // Gallery: authorized
   } else if (meta.purpose === "doctor-photo" || meta.purpose === "admin-upload") {
     // Doctor photo or admin-upload: must be referenced by an eligible doctor
+    // Check 1: Legacy photo_url match
     const doctorRef = await query<{ slug: string }>(
       `SELECT slug FROM doctor_profiles
        WHERE photo_url = ?
@@ -85,8 +86,25 @@ export async function GET(_request: Request, { params }: { params: Promise<{ key
        LIMIT 1`,
       `/api/media/${objectKey}`,
     );
-    if (!doctorRef.results || doctorRef.results.length === 0) {
-      return new Response("Not found", { status: 404 });
+    if (doctorRef.results && doctorRef.results.length > 0) {
+      // Authorized via legacy photo_url
+    } else {
+      // Check 2: photo_media_id match (media_assets.id reference)
+      const doctorMediaRef = await query<{ slug: string }>(
+        `SELECT dp.slug FROM doctor_profiles dp
+         INNER JOIN media_assets ma ON ma.id = dp.photo_media_id
+         WHERE ma.r2_key = ?
+           AND dp.lifecycle_status = 'PUBLISHED'
+           AND dp.status = 'APPROVED'
+           AND dp.is_visible = 1
+           AND dp.is_deleted = 0
+           AND dp.deleted_at IS NULL
+         LIMIT 1`,
+        objectKey,
+      );
+      if (!doctorMediaRef.results || doctorMediaRef.results.length === 0) {
+        return new Response("Not found", { status: 404 });
+      }
     }
   } else {
     return new Response("Not found", { status: 404 });

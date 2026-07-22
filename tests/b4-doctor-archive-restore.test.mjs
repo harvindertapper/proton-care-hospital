@@ -74,9 +74,9 @@ function makeRepo({ rows = [] } = {}) {
         const row = {
           id: binds[0], slug: binds[1], name: binds[2], speciality: binds[3],
           qualification: binds[4], department_slug: binds[5], photo_url: binds[6],
-          profile_note: binds[7], status: binds[8], is_visible: binds[9],
-          approved_by: binds[10], blocked_dates: binds[11] || "",
-          is_deleted: binds[12], lifecycle_status: binds[13], version: 1,
+          photo_media_id: binds[7], profile_note: binds[8], status: binds[9], is_visible: binds[10],
+          approved_by: binds[11], blocked_dates: binds[12] || "",
+          is_deleted: binds[13], lifecycle_status: binds[14], version: 1,
           deleted_at: null,
         };
         db.set(binds[1], row);
@@ -104,10 +104,10 @@ function makeRepo({ rows = [] } = {}) {
     if (sql.includes("UPDATE doctor_profiles SET") && sql.includes("name = ?")) {
       matchBySlug.name = binds[0];
       matchBySlug.speciality = binds[1];
-      matchBySlug.lifecycle_status = binds[11];
-      matchBySlug.status = binds[8];
-      matchBySlug.is_visible = binds[9];
-      matchBySlug.is_deleted = binds[10];
+      matchBySlug.lifecycle_status = binds[12];
+      matchBySlug.status = binds[9];
+      matchBySlug.is_visible = binds[10];
+      matchBySlug.is_deleted = binds[11];
       matchBySlug.deleted_at = null;
     }
     return { success: true, meta: { changes: 1 } };
@@ -119,7 +119,7 @@ function makeRepo({ rows = [] } = {}) {
 function fields(overrides = {}) {
   return {
     name: "Dr New", speciality: "Cardiology", qualification: "MD",
-    departmentSlug: "cardiology", photoUrl: "", profileNote: "",
+    departmentSlug: "cardiology", photoUrl: "", photoMediaId: null, profileNote: "",
     blockedDates: "", isVisible: true, ...overrides,
   };
 }

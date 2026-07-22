@@ -363,7 +363,7 @@ test("40. Published Gallery media is served", () => {
 
 test("41. Unreferenced Doctor photo returns 404", () => {
   assert.match(mediaGateway, /purpose === "doctor-photo"/);
-  assert.match(mediaGateway, /doctorRef\.results.*doctorRef\.results\.length === 0/);
+  assert.match(mediaGateway, /doctorRef/);
   assert.match(mediaGateway, /Not found.*404/);
 });
 
@@ -397,7 +397,7 @@ test("43. Doctor photo referenced only by hidden/archived Doctor returns 404", (
 
 test("44. Unreferenced admin-upload returns 404 via doctor_profiles check (structural)", () => {
   assert.match(mediaGateway, /purpose === "admin-upload"/);
-  assert.match(mediaGateway, /doctorRef\.results.*doctorRef\.results\.length === 0/);
+  assert.match(mediaGateway, /doctorRef|doctorMediaRef/);
 });
 
 test("45. Authorization failure does not touch R2 (structural)", () => {

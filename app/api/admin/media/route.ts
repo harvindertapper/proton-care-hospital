@@ -224,6 +224,17 @@ export async function DELETE(request: Request) {
     }
   }
 
+  const doctorMediaRef = await query<{ id: string }>(
+    "SELECT id FROM doctor_profiles WHERE photo_media_id = ? LIMIT 1",
+    id,
+  );
+  if (doctorMediaRef.results && doctorMediaRef.results.length > 0) {
+    return json(
+      { success: false, outcome: "CONFLICT", error: "Media is still in use. Replace or remove its references before deleting it." },
+      { status: 409 },
+    );
+  }
+
   // R2 assets: preserve existing compensation behavior
   const bucket = getR2();
   if (!bucket) return json({ error: "R2 media binding is not configured." }, { status: 503 });

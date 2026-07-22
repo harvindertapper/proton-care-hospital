@@ -397,6 +397,7 @@ export async function DELETE(
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND version = ? AND deleted_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM gallery_items WHERE media_id = media_assets.id)
+        AND NOT EXISTS (SELECT 1 FROM doctor_profiles WHERE photo_media_id = media_assets.id)
         ${doctorRefUrls.length > 0 ? `AND NOT EXISTS (SELECT 1 FROM doctor_profiles WHERE photo_url IN (${placeholders}))` : ""}
     `;
 
@@ -429,6 +430,18 @@ export async function DELETE(
           );
         }
       }
+
+      const doctorMediaRef = await query<Row>(
+        "SELECT id FROM doctor_profiles WHERE photo_media_id = ? LIMIT 1",
+        id,
+      );
+      if (doctorMediaRef.results && doctorMediaRef.results.length > 0) {
+        return json(
+          { success: false, outcome: "CONFLICT", error: "Media is still in use. Replace or remove its references before deleting it." },
+          { status: 409 },
+        );
+      }
+
       const galleryRef = await query<Row>("SELECT id FROM gallery_items WHERE media_id = ? LIMIT 1", id);
       if (galleryRef.results && galleryRef.results.length > 0) {
         return json(
