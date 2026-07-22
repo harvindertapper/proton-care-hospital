@@ -96,9 +96,9 @@ export async function POST(request: Request) {
     isVisible = 1;
     lifecycleStatus = "PUBLISHED";
   } else if (purpose === "blog-cover") {
-    status = "APPROVED";
-    isVisible = 1;
-    lifecycleStatus = "PUBLISHED";
+    status = "HIDDEN";
+    isVisible = 0;
+    lifecycleStatus = "DRAFT";
   } else {
     status = "HIDDEN";
     isVisible = 0;
@@ -233,6 +233,17 @@ export async function DELETE(request: Request) {
     id,
   );
   if (doctorMediaRef.results && doctorMediaRef.results.length > 0) {
+    return json(
+      { success: false, outcome: "CONFLICT", error: "Media is still in use. Replace or remove its references before deleting it." },
+      { status: 409 },
+    );
+  }
+
+  const blogCoverRef = await query<{ id: string }>(
+    "SELECT id FROM blog_posts WHERE cover_media_id = ? AND is_deleted = 0 LIMIT 1",
+    id,
+  );
+  if (blogCoverRef.results && blogCoverRef.results.length > 0) {
     return json(
       { success: false, outcome: "CONFLICT", error: "Media is still in use. Replace or remove its references before deleting it." },
       { status: 409 },

@@ -83,6 +83,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ key
        WHERE cover_media_id = (SELECT id FROM media_assets WHERE r2_key = ? AND deleted_at IS NULL LIMIT 1)
          AND is_visible = 1
          AND is_deleted = 0
+         AND lifecycle_status = 'PUBLISHED'
        LIMIT 1`,
       objectKey,
     );
@@ -100,6 +101,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ key
            AND ma.category = 'BLOG'
            AND bp.is_visible = 1
            AND bp.is_deleted = 0
+           AND bp.lifecycle_status = 'PUBLISHED'
          LIMIT 1`,
         objectKey,
       );

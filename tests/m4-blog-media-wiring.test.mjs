@@ -544,8 +544,8 @@ test("DEL.40 atomic delete succeeds when no blog references", () => {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 test("API.41 applyBlog SQL includes cover_media_id in INSERT", async () => {
-  const src = fs.readFileSync(path.join(rootDir, "app", "api", "admin", "data", "route.ts"), "utf8");
-  assert.ok(src.includes("cover_media_id"), "applyBlog must include cover_media_id in SQL");
+  const blogAdmin = fs.readFileSync(path.join(rootDir, "app", "lib", "blog-admin.ts"), "utf8");
+  assert.ok(blogAdmin.includes("cover_media_id"), "blog-admin createBlog/updateBlog include cover_media_id SQL");
 });
 
 test("API.42 applyBlog validates coverMediaId via validateBlogMediaRelation", async () => {
@@ -901,7 +901,7 @@ test("URL.80 validatePublicPath rejects non-/assets/ path", () => {
 
 test("DASH.81 dashboard blog query includes cover_media_id", async () => {
   const src = fs.readFileSync(path.join(rootDir, "app", "api", "admin", "data", "route.ts"), "utf8");
-  assert.ok(src.includes("cover_media_id FROM blog_posts"), "dashboard query must select cover_media_id");
+  assert.ok(src.includes("SELECT * FROM blog_posts"), "dashboard query selects all columns including cover_media_id");
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════

@@ -2417,15 +2417,16 @@ function BlogForm({
   onDelete?: (slug: string) => void;
   rows: AdminData["blogs"];
 }) {
-  const [form, setForm] = useState({ title: "", slug: "", excerpt: "", body: "", coverMediaId: "" });
+  const [form, setForm] = useState({ title: "", slug: "", excerpt: "", body: "", coverMediaId: "", blogId: "", expectedVersion: 0 });
   const [showCoverPicker, setShowCoverPicker] = useState(false);
+  const isEditing = rows.some(b => b.slug === form.slug && form.slug);
   return (
     <div className="admin-panel-grid">
-      <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave({ ...form, slug: form.slug || slugify(form.title), coverMediaId: form.coverMediaId || null }); }}>
-        {rows.some(b => b.slug === form.slug && form.slug) && (
+      <form className="admin-form" onSubmit={(event) => { event.preventDefault(); onSave({ ...form, slug: form.slug || slugify(form.title), coverMediaId: form.coverMediaId || null, expectedVersion: isEditing ? form.expectedVersion : 0 }); }}>
+        {isEditing && (
           <div style={{ background: "#e0f2fe", color: "#0369a1", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
             <span>Editing blog post: <strong>{form.title}</strong></span>
-            <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({ title: "", slug: "", excerpt: "", body: "", coverMediaId: "" })}>
+            <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => setForm({ title: "", slug: "", excerpt: "", body: "", coverMediaId: "", blogId: "", expectedVersion: 0 })}>
               Create New
             </button>
           </div>
@@ -2438,8 +2439,9 @@ function BlogForm({
         <div style={{ borderTop: "1px solid var(--line)", paddingTop: 12, marginTop: 8 }}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "var(--navy)" }}>Blog Cover Image</div>
           {form.coverMediaId ? (
-            <div style={{ fontSize: 12, color: "#16a34a", background: "#f0fdf4", padding: "6px 10px", borderRadius: 6, marginBottom: 8 }}>
-              Cover set (media: {form.coverMediaId.slice(0, 16)}...)
+            <div style={{ fontSize: 12, color: "#16a34a", background: "#f0fdf4", padding: "6px 10px", borderRadius: 6, marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
+              <img src={`/api/media/${rows.find(b => b.slug === form.slug)?.cover_media_id ? `blog-cover/${form.coverMediaId}` : form.coverMediaId}`} alt={form.title || "Blog cover"} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 4 }} />
+              <span>Cover set</span>
             </div>
           ) : (
             <div style={{ fontSize: 12, color: "#64748b", background: "#f1f5f9", padding: "6px 10px", borderRadius: 6, marginBottom: 8 }}>
@@ -2499,6 +2501,8 @@ function BlogForm({
           excerpt: String(row.excerpt || ""),
           body: String(row.body || ""),
           coverMediaId: String(row.cover_media_id || ""),
+          blogId: String(row.id || ""),
+          expectedVersion: Number(row.version || 0),
         })}
         actions={onVisibility ? (row) => (
           <div className="table-actions">

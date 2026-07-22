@@ -1,4 +1,4 @@
-import { defaultBlogs, defaultJobs, type Doctor } from "@/app/lib/data";
+import { defaultJobs, type Doctor } from "@/app/lib/data";
 import { query } from "@/app/lib/server";
 import {
   resolvePublicDoctors,
@@ -19,6 +19,7 @@ export type PublicBlog = {
   reviewer?: string;
   created_at?: string;
   coverMediaUrl?: string | null;
+  coverAltText?: string | null;
 };
 
 export type PublicJob = {
@@ -83,10 +84,12 @@ export async function getPublishedBlogs() {
               ma.storage_type AS cover_storage_type,
               ma.r2_key AS cover_r2_key,
               ma.public_path AS cover_public_path,
-              ma.display_public_path AS cover_display_public_path
+              ma.display_public_path AS cover_display_public_path,
+              ma.alt_text AS cover_alt_text
        FROM blog_posts bp
        LEFT JOIN media_assets ma ON bp.cover_media_id = ma.id AND ma.deleted_at IS NULL
        WHERE bp.status = 'APPROVED' AND bp.is_visible = 1 AND bp.is_deleted = 0
+         AND bp.lifecycle_status = 'PUBLISHED'
        ORDER BY bp.created_at DESC`,
     );
     if (rows.results?.length) {
@@ -100,12 +103,13 @@ export async function getPublishedBlogs() {
         reviewer: row.reviewer as string,
         created_at: row.created_at as string,
         coverMediaUrl: resolveBlogCoverUrl(row),
+        coverAltText: (row.cover_alt_text as string) || null,
       }));
     }
   } catch {
-    return defaultBlogs.filter((item) => item.status === "approved").map((item) => ({ ...item, body: "", coverMediaUrl: null }));
+    return [];
   }
-  return defaultBlogs.filter((item) => item.status === "approved").map((item) => ({ ...item, body: "", coverMediaUrl: null }));
+  return [];
 }
 
 export async function getPublishedJobs() {
@@ -165,10 +169,12 @@ export async function getBlogBySlug(slug: string): Promise<PublicBlog | null> {
               ma.storage_type AS cover_storage_type,
               ma.r2_key AS cover_r2_key,
               ma.public_path AS cover_public_path,
-              ma.display_public_path AS cover_display_public_path
+              ma.display_public_path AS cover_display_public_path,
+              ma.alt_text AS cover_alt_text
        FROM blog_posts bp
        LEFT JOIN media_assets ma ON bp.cover_media_id = ma.id AND ma.deleted_at IS NULL
-       WHERE bp.slug = ? AND bp.status = 'APPROVED' AND bp.is_visible = 1 AND bp.is_deleted = 0`,
+       WHERE bp.slug = ? AND bp.status = 'APPROVED' AND bp.is_visible = 1 AND bp.is_deleted = 0
+         AND bp.lifecycle_status = 'PUBLISHED'`,
       slug
     );
     if (rows.results?.length) {
@@ -183,12 +189,11 @@ export async function getBlogBySlug(slug: string): Promise<PublicBlog | null> {
         reviewer: row.reviewer as string,
         created_at: row.created_at as string,
         coverMediaUrl: resolveBlogCoverUrl(row),
+        coverAltText: (row.cover_alt_text as string) || null,
       };
     }
   } catch {
-    // fallback
-    const fallback = defaultBlogs.find((item) => item.slug === slug && item.status === "approved");
-    if (fallback) return { ...fallback, body: fallback.body || fallback.excerpt };
+    // fallback removed — return null for missing or broken blog lookups
   }
   return null;
 }

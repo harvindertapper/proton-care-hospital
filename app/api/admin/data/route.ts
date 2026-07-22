@@ -31,6 +31,8 @@ import {
 import {
   loadBlog,
   validateBlogMediaRelation,
+  createBlog,
+  updateBlog,
   type BlogRepo,
 } from "@/app/lib/blog-admin";
 import { departmentBySlug } from "@/app/lib/data";
@@ -71,7 +73,7 @@ async function dashboardData(session: AdminSession) {
     query("SELECT * FROM content_revisions ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM feedback ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM contact_messages ORDER BY created_at DESC LIMIT 100"),
-    query("SELECT *, cover_media_id FROM blog_posts WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 100"),
+    query("SELECT * FROM blog_posts WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM career_jobs WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM patient_videos WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 100"),
     query("SELECT * FROM media_assets WHERE storage_type = 'R2' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100"),
@@ -239,10 +241,15 @@ async function applyBlog(payload: Record<string, unknown>, actorEmail: string) {
   const slug = clean(payload.slug, 100) || slugify(title);
   const excerpt = clean(payload.excerpt, 300);
   const body = clean(payload.body, 8000);
-  const coverMediaId = payload.coverMediaId !== undefined && payload.coverMediaId !== null && payload.coverMediaId !== ""
-    ? clean(payload.coverMediaId, 140) || null
-    : null;
   if (!title || !slug || !excerpt || !body) throw new Error("Invalid blog payload.");
+
+  const coverMediaIdExplicitlyProvided = payload.coverMediaId !== undefined && payload.coverMediaId !== null;
+  const coverMediaId = coverMediaIdExplicitlyProvided
+    ? (typeof payload.coverMediaId === "string" && payload.coverMediaId.trim()
+      ? clean(payload.coverMediaId, 140) || null
+      : null)
+    : undefined;
+  const isVisible = payload.isVisible !== undefined ? Number(payload.isVisible) === 1 : true;
 
   const blogRepo: BlogRepo = { query, run, audit };
   const existing = await loadBlog(blogRepo, slug);
@@ -255,29 +262,39 @@ async function applyBlog(payload: Record<string, unknown>, actorEmail: string) {
     if (existing.is_deleted) {
       throw new MutationNotFoundError("Blog post");
     }
-    if (!Number.isNaN(expectedVersion) && existing.version !== expectedVersion) {
-      throw new MutationConflictError("Blog post was modified by another session.");
+    if (Number.isNaN(expectedVersion)) {
+      throw new Error("expectedVersion is required for existing blog posts.");
+    }
+    if (existing.version !== expectedVersion) {
+      throw new MutationConflictError("Blog post was modified by another session. Refresh and try again.");
+    }
+  } else {
+    if (!Number.isNaN(expectedVersion) && expectedVersion > 0) {
+      throw new MutationConflictError("Blog post was created by another session. Refresh and try again.");
     }
   }
 
-  if (coverMediaId) {
-    const blogVisible = existing ? existing.is_visible === 1 : true;
-    const mediaCheck = await validateBlogMediaRelation(blogRepo, coverMediaId, blogVisible);
+  const effectiveCoverMediaId = coverMediaIdExplicitlyProvided ? coverMediaId : null;
+  if (effectiveCoverMediaId) {
+    const targetVisible = existing ? (isVisible || existing.is_visible === 1) : isVisible;
+    const mediaCheck = await validateBlogMediaRelation(blogRepo, effectiveCoverMediaId, targetVisible);
     if (!mediaCheck.ok) throw new Error(mediaCheck.error);
   }
 
-  await run(
-    `INSERT INTO blog_posts (id, slug, title, excerpt, body, cover_media_id, status, is_visible, source_note)
-      VALUES (?, ?, ?, ?, ?, ?, 'APPROVED', 1, 'admin-approved')
-      ON CONFLICT(slug) DO UPDATE SET title = excluded.title, excerpt = excluded.excerpt, body = excluded.body, cover_media_id = excluded.cover_media_id, status = 'APPROVED', is_visible = 1`,
-    `blog-${slug}`,
-    slug,
-    title,
-    excerpt,
-    body,
-    coverMediaId,
-  );
-  await audit(actorEmail, "BLOG_APPROVED", "BlogPost", slug, title);
+  if (existing) {
+    return updateBlog(blogRepo, slug, expectedVersion, {
+      title, excerpt, body,
+      coverMediaId: coverMediaId ?? null,
+      coverMediaIdExplicitlyProvided,
+      isVisible,
+    }, actorEmail);
+  }
+
+  return createBlog(blogRepo, slug, {
+    title, excerpt, body,
+    coverMediaId: coverMediaId ?? null,
+    isVisible,
+  }, actorEmail);
 }
 
 async function applyCareer(payload: Record<string, unknown>, actorEmail: string) {
@@ -834,8 +851,8 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (obj.coverMediaId !== undefined && obj.coverMediaId !== null && obj.coverMediaId !== "") {
       if (typeof obj.coverMediaId !== "string" || obj.coverMediaId.length > 140) return { ok: false, error: "coverMediaId must be a string of at most 140 characters." };
     }
-    if (obj.expectedVersion !== undefined && obj.expectedVersion !== null) {
-      if (obj.expectedVersion !== undefined && obj.expectedVersion !== null && Number.isNaN(parseExpectedVersion(obj.expectedVersion))) {
+    if (obj.expectedVersion !== undefined) {
+      if (typeof obj.expectedVersion !== "number" || Number.isNaN(parseExpectedVersion(obj.expectedVersion))) {
         return { ok: false, error: "expectedVersion must be a non-negative integer." };
       }
     }

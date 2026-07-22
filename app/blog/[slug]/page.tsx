@@ -69,7 +69,9 @@ export default async function BlogDetailPage({ params }: Props) {
           {blog.coverMediaUrl && (
             <img
               src={blog.coverMediaUrl}
-              alt={blog.title}
+              alt={blog.coverAltText || blog.title}
+              width={800}
+              height={400}
               style={{ width: "100%", maxHeight: 400, objectFit: "cover", borderRadius: 12, marginBottom: 32 }}
             />
           )}

@@ -382,10 +382,8 @@ test("PRES.32 existing timestamps remain unchanged", () => {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 test("COMP.33 applyBlog reads cover_media_id", () => {
-  const routeContent = fs.readFileSync(path.join(rootDir, "app", "api", "admin", "data", "route.ts"), "utf8");
-  const applyBlogMatch = routeContent.match(/async function applyBlog[\s\S]*?^}/m);
-  assert.ok(applyBlogMatch, "applyBlog function found");
-  assert.ok(applyBlogMatch[0].includes("cover_media_id"), "applyBlog references cover_media_id");
+  const blogAdmin = fs.readFileSync(path.join(rootDir, "app", "lib", "blog-admin.ts"), "utf8");
+  assert.ok(blogAdmin.includes("cover_media_id"), "blog-admin.ts createBlog/updateBlog reference cover_media_id");
 });
 
 test("COMP.34 applyBlog uses coverMediaId in validation", () => {
