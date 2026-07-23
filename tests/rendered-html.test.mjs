@@ -45,7 +45,8 @@ const mockedDataRouteContent = dataRouteContent
   .replace('from "@/app/lib/utils";', 'from "../app/lib/utils.ts";')
   .replace('from "@/app/lib/doctor-admin";', 'from "../app/lib/doctor-admin.ts";')
   .replace('from "@/app/lib/blog-admin";', 'from "../app/lib/blog-admin.ts";')
-  .replace('from "@/app/lib/gallery-v2";', 'from "./gallery-v2-mocked.ts";');
+  .replace('from "@/app/lib/gallery-v2";', 'from "./gallery-v2-mocked.ts";')
+  .replace('from "@/app/lib/youtube";', 'from "../app/lib/youtube.ts";');
 await writeFile(new URL("./data-route-real-mocked.ts", import.meta.url), mockedDataRouteContent, "utf8");
 
 // Cleanup generated mock files on completion

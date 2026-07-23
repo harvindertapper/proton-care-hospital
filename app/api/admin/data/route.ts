@@ -3,7 +3,6 @@ import {
   checkRateLimit,
   getClientIp,
   json,
-  parseYouTubeId,
   MutationNotFoundError,
   query,
   requireAdmin,
@@ -13,6 +12,7 @@ import {
   hashPassword,
   nextRequestId,
 } from "@/app/lib/server";
+import { resolveYouTubeId } from "@/app/lib/youtube";
 import { executeRoleMutation, MutationConflictError } from "@/app/lib/mutation-result";
 import {
   archiveDoctor,
@@ -332,17 +332,34 @@ async function applyCareer(payload: Record<string, unknown>, actorEmail: string)
 }
 
 async function applyVideo(payload: Record<string, unknown>, actorEmail: string) {
+  const mode = clean(payload.mode, 10).toUpperCase();
+  if (mode !== "CREATE" && mode !== "UPDATE") {
+    throw new Error("mode must be 'CREATE' or 'UPDATE'.");
+  }
   const title = clean(payload.title, 180);
   const youtubeUrl = clean(payload.youtubeUrl, 500);
   const consentNote = clean(payload.consentNote, 1000);
-  const youtubeId = parseYouTubeId(youtubeUrl);
-  if (!title || !youtubeUrl || !youtubeId || consentNote.length < 5) throw new Error("Valid YouTube URL and consent note are required.");
-  const id = clean(payload.id as string, 120) || `video-${youtubeId}`;
-  const isNew = payload.isNew === true;
+  const youtubeId = resolveYouTubeId({ youtubeUrl });
+  if (!title || !youtubeUrl || !youtubeId || consentNote.length < 5) {
+    throw new Error("Valid YouTube URL and consent note are required.");
+  }
 
-  if (isNew) {
-    const existing = await query("SELECT id FROM patient_videos WHERE id = ? LIMIT 1", id);
-    if (existing.results?.length) throw new Error("A video with this YouTube ID already exists.");
+  if (mode === "CREATE") {
+    const activeRow = await query(
+      "SELECT id FROM patient_videos WHERE youtube_id = ? AND is_deleted = 0 LIMIT 1",
+      youtubeId,
+    );
+    if (activeRow.results?.length) {
+      throw new Error("This YouTube video already exists. Edit the existing entry instead.");
+    }
+    const archivedRow = await query(
+      "SELECT id FROM patient_videos WHERE youtube_id = ? AND is_deleted = 1 LIMIT 1",
+      youtubeId,
+    );
+    if (archivedRow.results?.length) {
+      throw new Error("This YouTube video is archived. Restore the existing entry instead.");
+    }
+    const id = `video-${youtubeId}`;
     await run(
       `INSERT INTO patient_videos (id, title, youtube_url, youtube_id, consent_note, status, is_visible)
         VALUES (?, ?, ?, ?, ?, 'HIDDEN', 0)`,
@@ -354,7 +371,27 @@ async function applyVideo(payload: Record<string, unknown>, actorEmail: string) 
     );
     await audit(actorEmail, "VIDEO_CREATED", "PatientVideo", id, title);
   } else {
+    const id = clean(payload.id as string, 120);
     if (!id) throw new Error("Video ID is required for updates.");
+    const existing = await query(
+      "SELECT id, is_deleted FROM patient_videos WHERE id = ? LIMIT 1",
+      id,
+    );
+    if (!existing.results?.length) {
+      throw new Error("Patient video was not found.");
+    }
+    const row = existing.results[0] as { id: string; is_deleted: number };
+    if (row.is_deleted === 1) {
+      throw new Error("Cannot edit an archived video. Restore it first.");
+    }
+    const conflict = await query(
+      "SELECT id FROM patient_videos WHERE youtube_id = ? AND id <> ? AND is_deleted = 0 LIMIT 1",
+      youtubeId,
+      id,
+    );
+    if (conflict.results?.length) {
+      throw new Error("Another active video already uses this YouTube URL.");
+    }
     const result = await run(
       "UPDATE patient_videos SET title = ?, youtube_url = ?, youtube_id = ?, consent_note = ? WHERE id = ? AND is_deleted = 0",
       title,
@@ -458,19 +495,45 @@ async function applyCareerVisibility(payload: Record<string, unknown>, actorEmai
 
 async function applyVideoVisibility(payload: Record<string, unknown>, actorEmail: string) {
   const id = clean(payload.id, 120);
+  const targetAction = clean(payload.action, 40).toLowerCase();
   if (!id) throw new Error("Video id is required.");
-  const existing = await query<{ id: string; status: string; is_visible: number }>(
-    "SELECT id, status, is_visible FROM patient_videos WHERE id = ? AND is_deleted = 0 LIMIT 1",
+  if (targetAction !== "publish" && targetAction !== "hide") {
+    throw new Error("action must be 'publish' or 'hide'.");
+  }
+
+  const rows = await query<{
+    id: string;
+    title: string;
+    youtube_url: string;
+    youtube_id: string;
+    consent_note: string;
+    status: string;
+    is_visible: number;
+    is_deleted: number;
+  }>(
+    "SELECT id, title, youtube_url, youtube_id, consent_note, status, is_visible, is_deleted FROM patient_videos WHERE id = ? LIMIT 1",
     id,
   );
-  if (!existing.results?.length) throw new Error("Patient video was not found.");
-  const current = existing.results[0];
+  if (!rows.results?.length) throw new Error("Patient video was not found.");
+  const current = rows.results[0];
 
-  const targetAction = clean(payload.action, 40).toLowerCase();
+  if (current.is_deleted === 1) {
+    throw new Error("Cannot change visibility of an archived video. Restore it first.");
+  }
 
   if (targetAction === "publish") {
     if (current.status === "APPROVED" && current.is_visible === 1) {
-      return { outcome: "APPLIED" as const };
+      return { outcome: "NO_OP" as const };
+    }
+    if (!current.title || !current.title.trim()) {
+      throw new Error("Cannot publish: video title is missing.");
+    }
+    if (!current.consent_note || current.consent_note.trim().length < 5) {
+      throw new Error("Cannot publish: consent note is missing or too short.");
+    }
+    const resolvedId = resolveYouTubeId({ youtubeId: current.youtube_id, youtubeUrl: current.youtube_url });
+    if (!resolvedId) {
+      throw new Error("Cannot publish: stored YouTube URL or ID is invalid.");
     }
     const result = await run(
       "UPDATE patient_videos SET status = 'APPROVED', is_visible = 1 WHERE id = ? AND is_deleted = 0",
@@ -478,9 +541,9 @@ async function applyVideoVisibility(payload: Record<string, unknown>, actorEmail
     );
     requireAppliedMutation(result, true, "Patient video");
     await audit(actorEmail, "VIDEO_PUBLISHED", "PatientVideo", id, current.status);
-  } else if (targetAction === "hide") {
+  } else {
     if (current.status === "HIDDEN" && current.is_visible === 0) {
-      return { outcome: "APPLIED" as const };
+      return { outcome: "NO_OP" as const };
     }
     const result = await run(
       "UPDATE patient_videos SET status = 'HIDDEN', is_visible = 0 WHERE id = ? AND is_deleted = 0",
@@ -488,16 +551,6 @@ async function applyVideoVisibility(payload: Record<string, unknown>, actorEmail
     );
     requireAppliedMutation(result, true, "Patient video");
     await audit(actorEmail, "VIDEO_HIDDEN", "PatientVideo", id, current.status);
-  } else {
-    const isVisible = Number(payload.isVisible) === 1 ? 1 : 0;
-    const result = await run(
-      "UPDATE patient_videos SET is_visible = ?, status = ? WHERE id = ? AND is_deleted = 0",
-      isVisible,
-      isVisible ? "APPROVED" : "HIDDEN",
-      id,
-    );
-    requireAppliedMutation(result, true, "Patient video");
-    await audit(actorEmail, "VIDEO_VISIBILITY", "PatientVideo", id, `visible=${isVisible}`);
   }
   return { outcome: "APPLIED" as const };
 }
@@ -505,11 +558,15 @@ async function applyVideoVisibility(payload: Record<string, unknown>, actorEmail
 async function applyVideoRestore(payload: Record<string, unknown>, actorEmail: string) {
   const id = clean(payload.id, 120);
   if (!id) throw new Error("Video ID is required.");
-  const existing = await query<{ id: string; is_deleted: number }>(
-    "SELECT id, is_deleted FROM patient_videos WHERE id = ? LIMIT 1",
+  const rows = await query<{ id: string; is_deleted: number; status: string; is_visible: number }>(
+    "SELECT id, is_deleted, status, is_visible FROM patient_videos WHERE id = ? LIMIT 1",
     id,
   );
-  if (!existing.results?.length) throw new Error("Patient video was not found.");
+  if (!rows.results?.length) throw new Error("Patient video was not found.");
+  const current = rows.results[0];
+  if (current.is_deleted === 0) {
+    return { outcome: "NO_OP" as const };
+  }
   const result = await run(
     "UPDATE patient_videos SET is_deleted = 0, status = 'HIDDEN', is_visible = 0 WHERE id = ?",
     id,
@@ -968,11 +1025,17 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (typeof obj.description !== "string" || !obj.description.trim()) return { ok: false, error: "Job description is required." };
     if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Job slug is required." };
   } else if (action === "video.save") {
+    if (typeof obj.mode !== "string" || !["CREATE", "UPDATE"].includes(clean(obj.mode, 10).toUpperCase())) {
+      return { ok: false, error: "mode must be 'CREATE' or 'UPDATE'." };
+    }
     if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Video title is required." };
     if (typeof obj.youtubeUrl !== "string" || !obj.youtubeUrl.trim()) return { ok: false, error: "YouTube URL is required." };
     if (typeof obj.consentNote !== "string" || obj.consentNote.trim().length < 5) return { ok: false, error: "Consent note must be at least 5 characters." };
   } else if (action === "video.visibility") {
     if (typeof obj.id !== "string" || !obj.id.trim()) return { ok: false, error: "Video ID is required." };
+    if (typeof obj.action !== "string" || !["publish", "hide"].includes(clean(obj.action, 40).toLowerCase())) {
+      return { ok: false, error: "action must be 'publish' or 'hide'." };
+    }
   } else if (action === "video.delete") {
     if (typeof obj.id !== "string" || !obj.id.trim()) return { ok: false, error: "Video ID is required." };
   } else if (action === "video.restore") {
@@ -1128,7 +1191,7 @@ async function applyDeleteVideo(payload: Record<string, unknown>, actorEmail: st
   const id = clean(payload.id, 120);
   if (!id) throw new Error("Video ID is required.");
   const existing = await query("SELECT id FROM patient_videos WHERE id = ? AND is_deleted = 0 LIMIT 1", id);
-  const result = await run("UPDATE patient_videos SET is_deleted = 1 WHERE id = ? AND is_deleted = 0", id);
+  const result = await run("UPDATE patient_videos SET is_deleted = 1, is_visible = 0, status = 'HIDDEN' WHERE id = ? AND is_deleted = 0", id);
   requireAppliedMutation(result, Boolean(existing.results?.length), "Patient video");
   await audit(actorEmail, "VIDEO_ARCHIVED", "PatientVideo", id, `Archived video with ID: ${id}`);
   return { outcome: "APPLIED" as const };

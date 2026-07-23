@@ -26,15 +26,12 @@ import {
 /*                                  Types                                     */
 /* -------------------------------------------------------------------------- */
 
+type VideoMutateResult = { ok: boolean; outcome?: string; error?: string };
+
 type Props = {
   busy: boolean;
-  csrf: string;
   videos: Record<string, string | number | null>[];
-  onSave: (payload: Record<string, unknown>) => Promise<void>;
-  onPublish: (id: string) => Promise<void>;
-  onHide: (id: string) => Promise<void>;
-  onArchive: (id: string) => Promise<void>;
-  onRestore: (id: string) => Promise<void>;
+  videoMutate: (payload: Record<string, unknown>) => Promise<VideoMutateResult>;
 };
 
 type Lifecycle = "live" | "hidden" | "archived";
@@ -585,13 +582,8 @@ const S = {
 
 export default function PatientVideoStudio({
   busy,
-  csrf,
   videos,
-  onSave,
-  onPublish,
-  onHide,
-  onArchive,
-  onRestore,
+  videoMutate,
 }: Props) {
   /* ------------------------------------------------------------------ */
   /*  State                                                             */
@@ -602,7 +594,6 @@ export default function PatientVideoStudio({
     "all" | "live" | "hidden" | "archived"
   >("all");
   const [selectedVideo, setSelectedVideo] = useState<Record<string, string | number | null> | null>(null);
-  const [isCreating, setIsCreating] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [formErrors, setFormErrors] = useState<FormErrors>(EMPTY_ERRORS);
   const [previewVideo, setPreviewVideo] = useState<Record<string, string | number | null> | null>(null);
@@ -612,6 +603,8 @@ export default function PatientVideoStudio({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const closingRef = useRef(false);
+  const [editorThumbFailed, setEditorThumbFailed] = useState(false);
+  const [cardThumbFailures, setCardThumbFailures] = useState<Record<string, "maxres" | "hq" | "unavailable">>({});
 
   /* ------------------------------------------------------------------ */
   /*  Derived state                                                     */
@@ -678,12 +671,19 @@ export default function PatientVideoStudio({
 
   const currentErrors = useMemo(() => validateForm(form), [form]);
 
-  const canSave = isDirty && !currentErrors.title && !currentErrors.youtubeUrl && !currentErrors.consentNote && !busy;
+  const isArchivedEdit = selectedVideo && selectedVideo.is_deleted === 1;
+  const canSave = isDirty && !currentErrors.title && !currentErrors.youtubeUrl && !currentErrors.consentNote && !busy && !isArchivedEdit;
 
   const resolved = useMemo(() => {
     if (!form.youtubeUrl.trim()) return null;
     return resolveYouTubeIdWithType({ youtubeUrl: form.youtubeUrl });
   }, [form.youtubeUrl]);
+
+  const prevResolvedIdRef = useRef<string | null | undefined>(null);
+  if (prevResolvedIdRef.current !== resolved?.id) {
+    prevResolvedIdRef.current = resolved?.id;
+    setEditorThumbFailed(false);
+  }
 
   /* ------------------------------------------------------------------ */
   /*  Notice helper                                                     */
@@ -737,7 +737,6 @@ export default function PatientVideoStudio({
     (row: Record<string, string | number | null>) => {
       if (!guardDirty()) return;
       setSelectedVideo(row);
-      setIsCreating(false);
       setForm({
         title: String(row.title || ""),
         youtubeUrl: String(row.youtube_url || ""),
@@ -751,7 +750,6 @@ export default function PatientVideoStudio({
   const handleAddNew = useCallback(() => {
     if (!guardDirty()) return;
     setSelectedVideo(null);
-    setIsCreating(true);
     setForm(EMPTY_FORM);
     setFormErrors(EMPTY_ERRORS);
   }, [guardDirty]);
@@ -761,82 +759,106 @@ export default function PatientVideoStudio({
     setFormErrors(errors);
     if (errors.title || errors.youtubeUrl || errors.consentNote) return;
 
-    try {
-      const payload: Record<string, unknown> = selectedVideo
-        ? {
-            id: selectedVideo.id,
-            title: form.title.trim(),
-            youtubeUrl: form.youtubeUrl.trim(),
-            consentNote: form.consentNote.trim(),
-          }
-        : {
-            isNew: true,
-            title: form.title.trim(),
-            youtubeUrl: form.youtubeUrl.trim(),
-            consentNote: form.consentNote.trim(),
-          };
-      await onSave(payload);
-      showNotice(
-        selectedVideo ? "Video updated successfully." : "Video created successfully.",
-        "success"
-      );
-      if (!selectedVideo) {
+    const isUpdate = !!selectedVideo;
+    const payload: Record<string, unknown> = isUpdate
+      ? {
+          mode: "UPDATE",
+          id: selectedVideo.id,
+          title: form.title.trim(),
+          youtubeUrl: form.youtubeUrl.trim(),
+          consentNote: form.consentNote.trim(),
+        }
+      : {
+          mode: "CREATE",
+          title: form.title.trim(),
+          youtubeUrl: form.youtubeUrl.trim(),
+          consentNote: form.consentNote.trim(),
+        };
+
+    const result = await videoMutate({ action: "video.save", payload });
+    if (result.ok) {
+      if (isUpdate) {
+        showNotice("Video updated successfully.", "success");
+        setSelectedVideo({
+          ...selectedVideo,
+          title: form.title.trim(),
+          youtube_url: form.youtubeUrl.trim(),
+          consent_note: form.consentNote.trim(),
+        });
+      } else {
+        showNotice("Video saved as hidden. Preview it, then publish when ready.", "success");
         setForm(EMPTY_FORM);
-        setIsCreating(false);
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Save failed.";
-      showNotice(msg, "error");
+    } else {
+      showNotice(result.error || "Save failed.", "error");
     }
-  }, [form, selectedVideo, onSave, showNotice]);
+  }, [form, selectedVideo, videoMutate, showNotice]);
 
   const handlePublish = useCallback(
     async (id: string) => {
-      try {
-        await onPublish(id);
-        showNotice("Video published.", "success");
-      } catch (err: unknown) {
-        showNotice(err instanceof Error ? err.message : "Publish failed.", "error");
+      const result = await videoMutate({
+        action: "video.visibility",
+        payload: { id, action: "publish" },
+      });
+      if (result.ok) {
+        if (result.outcome === "NO_OP") {
+          showNotice("Video is already published.", "success");
+        } else {
+          showNotice("Video published.", "success");
+        }
+      } else {
+        showNotice(result.error || "Publish failed.", "error");
       }
     },
-    [onPublish, showNotice]
+    [videoMutate, showNotice]
   );
 
   const handleHide = useCallback(
     async (id: string) => {
-      try {
-        await onHide(id);
-        showNotice("Video hidden.", "success");
-      } catch (err: unknown) {
-        showNotice(err instanceof Error ? err.message : "Hide failed.", "error");
+      const result = await videoMutate({
+        action: "video.visibility",
+        payload: { id, action: "hide" },
+      });
+      if (result.ok) {
+        if (result.outcome === "NO_OP") {
+          showNotice("Video is already hidden.", "success");
+        } else {
+          showNotice("Video hidden.", "success");
+        }
+      } else {
+        showNotice(result.error || "Hide failed.", "error");
       }
     },
-    [onHide, showNotice]
+    [videoMutate, showNotice]
   );
 
   const handleArchive = useCallback(
     async (id: string) => {
       if (!window.confirm("Archive this video? It can be restored later.")) return;
-      try {
-        await onArchive(id);
+      const result = await videoMutate({ action: "video.delete", id });
+      if (result.ok) {
         showNotice("Video archived.", "success");
-      } catch (err: unknown) {
-        showNotice(err instanceof Error ? err.message : "Archive failed.", "error");
+      } else {
+        showNotice(result.error || "Archive failed.", "error");
       }
     },
-    [onArchive, showNotice]
+    [videoMutate, showNotice]
   );
 
   const handleRestore = useCallback(
     async (id: string) => {
-      try {
-        await onRestore(id);
-        showNotice("Video restored to hidden.", "success");
-      } catch (err: unknown) {
-        showNotice(err instanceof Error ? err.message : "Restore failed.", "error");
+      const result = await videoMutate({ action: "video.restore", id });
+      if (result.ok) {
+        if (result.outcome === "NO_OP") {
+          showNotice("Video is already active.", "success");
+        } else {
+          showNotice("Video restored to hidden.", "success");
+        }
+      } else {
+        showNotice(result.error || "Restore failed.", "error");
       }
     },
-    [onRestore, showNotice]
+    [videoMutate, showNotice]
   );
 
   const handlePreview = useCallback(
@@ -1038,17 +1060,25 @@ export default function PatientVideoStudio({
               )}
               {resolved && (
                 <div style={S.thumbPreview}>
-                  <img
-                    src={thumbnailUrl(resolved.id, false)}
-                    alt="YouTube thumbnail preview"
-                    style={S.thumbPreviewImg}
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src = thumbnailUrl(
-                        resolved.id,
-                        true
-                      );
-                    }}
-                  />
+                  {editorThumbFailed ? (
+                    <div style={{ ...S.thumbPreviewImg, display: "flex", alignItems: "center", justifyContent: "center", background: "#08233A" }}>
+                      <Film size={28} color="#64748b" />
+                    </div>
+                  ) : (
+                    <img
+                      src={thumbnailUrl(resolved.id, false)}
+                      alt="YouTube thumbnail preview"
+                      style={S.thumbPreviewImg}
+                      onError={(e) => {
+                        const img = e.target as HTMLImageElement;
+                        if (img.src.includes("maxresdefault")) {
+                          img.src = thumbnailUrl(resolved.id, true);
+                        } else {
+                          setEditorThumbFailed(true);
+                        }
+                      }}
+                    />
+                  )}
                 </div>
               )}
             </label>
@@ -1115,16 +1145,19 @@ export default function PatientVideoStudio({
                 >
                   {/* Thumbnail */}
                   <div style={S.cardMedia} className="vs-card-media">
-                    {row._resolvedId ? (
+                    {row._resolvedId && (cardThumbFailures[row.id as string] ?? "maxres") !== "unavailable" ? (
                       <img
-                        src={thumbnailUrl(row._resolvedId, false)}
+                        src={thumbnailUrl(row._resolvedId, (cardThumbFailures[row.id as string] ?? "maxres") === "hq")}
                         alt={String(row.title || "Video thumbnail")}
                         style={S.cardImg}
                         onError={(e) => {
-                          (e.target as HTMLImageElement).src = thumbnailUrl(
-                            row._resolvedId,
-                            true
-                          );
+                          const current = cardThumbFailures[row.id as string] ?? "maxres";
+                          if (current === "maxres") {
+                            setCardThumbFailures((prev) => ({ ...prev, [row.id as string]: "hq" }));
+                          } else {
+                            setCardThumbFailures((prev) => ({ ...prev, [row.id as string]: "unavailable" }));
+                          }
+                          e.stopPropagation();
                         }}
                       />
                     ) : (
@@ -1166,7 +1199,9 @@ export default function PatientVideoStudio({
                         type="button"
                         style={S.button}
                         onClick={(e) => handlePreview(row, e)}
-                        aria-label={`Preview ${row.title}`}
+                        disabled={!row._resolvedId}
+                        title={row._resolvedId ? `Preview ${row.title}` : "Fix the YouTube URL before previewing."}
+                        aria-label={row._resolvedId ? `Preview ${row.title}` : "Fix the YouTube URL before previewing."}
                       >
                         <Play size={14} /> Preview
                       </button>
@@ -1179,9 +1214,11 @@ export default function PatientVideoStudio({
                           e.stopPropagation();
                           handleSelectVideo(row);
                         }}
-                        aria-label={`Edit ${row.title}`}
+                        disabled={lifecycle === "archived"}
+                        title={lifecycle === "archived" ? "Restore this video before editing." : `Edit ${row.title}`}
+                        aria-label={lifecycle === "archived" ? "Restore before editing" : `Edit ${row.title}`}
                       >
-                        <Eye size={14} /> Edit
+                        <Eye size={14} /> {lifecycle === "archived" ? "View" : "Edit"}
                       </button>
 
                       {/* Lifecycle actions */}

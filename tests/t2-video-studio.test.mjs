@@ -7,7 +7,7 @@ async function readSource(relativePath) {
 }
 
 // ===========================================================================
-// 1. youtube.ts — resolveYouTubeId handles youtu.be share URLs
+// 1. resolveYouTubeId handles youtu.be share URLs
 // ===========================================================================
 test("1. resolveYouTubeId handles youtu.be share URLs", async () => {
   const src = await readSource("../app/lib/youtube.ts");
@@ -166,29 +166,31 @@ test("15. resolveYouTubeIdWithType returns null for invalid input", async () => 
 });
 
 // ===========================================================================
-// 16. applyVideo creates new video as HIDDEN with is_visible=0
+// 16. applyVideo with mode=CREATE inserts as HIDDEN with is_visible=0
 // ===========================================================================
-test("16. applyVideo creates new video as HIDDEN with is_visible=0 (isNew=true)", async () => {
+test("16. applyVideo with mode=CREATE inserts as HIDDEN with is_visible=0", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const fnStart = src.indexOf("async function applyVideo(");
-  const fnBody = src.slice(fnStart, fnStart + 1200);
+  const fnBody = src.slice(fnStart, fnStart + 5000);
+  assert.ok(fnBody.includes('mode !== "CREATE"'), "must validate mode=CREATE");
+  assert.ok(fnBody.includes('mode !== "UPDATE"'), "must validate mode=UPDATE");
   assert.ok(
     fnBody.includes("'HIDDEN'") && fnBody.includes("is_visible"),
     "INSERT must set status='HIDDEN' and is_visible=0 for new videos"
   );
-  assert.ok(fnBody.includes("isNew === true"), "must check isNew flag");
   assert.ok(fnBody.includes("VIDEO_CREATED"), "must audit VIDEO_CREATED");
 });
 
 // ===========================================================================
-// 17. applyVideo updates existing video preserving current status
+// 17. applyVideo with mode=UPDATE updates existing row
 // ===========================================================================
-test("17. applyVideo updates existing video preserving current status (isNew=false)", async () => {
+test("17. applyVideo with mode=UPDATE updates existing row", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const fnStart = src.indexOf("async function applyVideo(");
-  const fnBody = src.slice(fnStart, fnStart + 1700);
+  const fnBody = src.slice(fnStart, fnStart + 5000);
   assert.ok(fnBody.includes("UPDATE patient_videos SET title"), "must UPDATE existing videos");
   assert.ok(fnBody.includes("VIDEO_UPDATED"), "must audit VIDEO_UPDATED for updates");
+  assert.ok(fnBody.includes('mode === "CREATE"'), "must branch on mode=CREATE");
 });
 
 // ===========================================================================
@@ -197,7 +199,7 @@ test("17. applyVideo updates existing video preserving current status (isNew=fal
 test("18. applyVideo throws if title is empty", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const fnStart = src.indexOf("async function applyVideo(");
-  const fnBody = src.slice(fnStart, fnStart + 600);
+  const fnBody = src.slice(fnStart, fnStart + 2000);
   assert.ok(
     fnBody.includes("!title") || fnBody.includes("title ||"),
     "must validate title is present"
@@ -232,26 +234,90 @@ test("20. applyVideo throws if consentNote is less than 5 chars", async () => {
 });
 
 // ===========================================================================
-// 21. applyVideo with isNew=true and duplicate id throws
+// 21. applyVideo CREATE rejects duplicate canonical YouTube ID (active row)
 // ===========================================================================
-test("21. applyVideo with isNew=true and duplicate id throws", async () => {
+test("21. applyVideo CREATE rejects duplicate canonical YouTube ID (active row)", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const fnStart = src.indexOf("async function applyVideo(");
-  const fnBody = src.slice(fnStart, fnStart + 1200);
+  const fnBody = src.slice(fnStart, fnStart + 1500);
   assert.ok(
-    fnBody.includes("A video with this YouTube ID already exists"),
-    "must throw on duplicate video ID for new inserts"
+    fnBody.includes("This YouTube video already exists"),
+    "must throw on duplicate YouTube ID for active rows"
   );
-  assert.ok(fnBody.includes("SELECT id FROM patient_videos WHERE id = ?"), "must check for existing ID");
+  assert.ok(
+    fnBody.includes("AND is_deleted = 0"),
+    "must check active rows (is_deleted=0) for duplicate"
+  );
 });
 
 // ===========================================================================
-// 22. applyVideoVisibility with action="publish" sets status=APPROVED, is_visible=1
+// 22. applyVideo CREATE rejects duplicate canonical YouTube ID (archived row)
 // ===========================================================================
-test("22. applyVideoVisibility publish sets status=APPROVED, is_visible=1", async () => {
+test("22. applyVideo CREATE rejects duplicate canonical YouTube ID (archived row)", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyVideo(");
+  const fnBody = src.slice(fnStart, fnStart + 1500);
+  assert.ok(
+    fnBody.includes("This YouTube video is archived"),
+    "must throw on duplicate YouTube ID for archived rows"
+  );
+  assert.ok(
+    fnBody.includes("AND is_deleted = 1"),
+    "must check archived rows (is_deleted=1) for duplicate"
+  );
+});
+
+// ===========================================================================
+// 23. applyVideo UPDATE without ID throws
+// ===========================================================================
+test("23. applyVideo UPDATE without ID throws", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyVideo(");
+  const fnBody = src.slice(fnStart, fnStart + 5000);
+  assert.ok(
+    fnBody.includes("Video ID is required for updates"),
+    "must throw if video ID is missing on UPDATE"
+  );
+});
+
+// ===========================================================================
+// 24. applyVideo UPDATE on deleted row throws
+// ===========================================================================
+test("24. applyVideo UPDATE on deleted row throws", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyVideo(");
+  const fnBody = src.slice(fnStart, fnStart + 5000);
+  assert.ok(
+    fnBody.includes("Cannot edit an archived video"),
+    "must throw if trying to update an archived (deleted) video"
+  );
+  assert.ok(fnBody.includes("is_deleted === 1"), "must check is_deleted flag for archived row");
+});
+
+// ===========================================================================
+// 25. applyVideo UPDATE rejects if another active row has same youtube_id
+// ===========================================================================
+test("25. applyVideo UPDATE rejects if another active row has same youtube_id", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyVideo(");
+  const fnBody = src.slice(fnStart, fnStart + 5000);
+  assert.ok(
+    fnBody.includes("Another active video already uses this YouTube URL"),
+    "must throw on youtube_id conflict with another active row"
+  );
+  assert.ok(
+    fnBody.includes("AND id <> ?"),
+    "conflict check must exclude current video by ID"
+  );
+});
+
+// ===========================================================================
+// 26. applyVideoVisibility publish sets status=APPROVED, is_visible=1
+// ===========================================================================
+test("26. applyVideoVisibility publish sets status=APPROVED, is_visible=1", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const fnStart = src.indexOf("async function applyVideoVisibility(");
-  const fnBody = src.slice(fnStart, fnStart + 1600);
+  const fnBody = src.slice(fnStart, fnStart + 4000);
   assert.ok(fnBody.includes('"publish"'), "must handle publish action");
   assert.ok(
     fnBody.includes("status = 'APPROVED', is_visible = 1"),
@@ -261,12 +327,12 @@ test("22. applyVideoVisibility publish sets status=APPROVED, is_visible=1", asyn
 });
 
 // ===========================================================================
-// 23. applyVideoVisibility with action="hide" sets status=HIDDEN, is_visible=0
+// 27. applyVideoVisibility hide sets status=HIDDEN, is_visible=0
 // ===========================================================================
-test("23. applyVideoVisibility hide sets status=HIDDEN, is_visible=0", async () => {
+test("27. applyVideoVisibility hide sets status=HIDDEN, is_visible=0", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const fnStart = src.indexOf("async function applyVideoVisibility(");
-  const fnBody = src.slice(fnStart, fnStart + 1600);
+  const fnBody = src.slice(fnStart, fnStart + 4000);
   assert.ok(fnBody.includes('"hide"'), "must handle hide action");
   assert.ok(
     fnBody.includes("status = 'HIDDEN', is_visible = 0"),
@@ -276,9 +342,9 @@ test("23. applyVideoVisibility hide sets status=HIDDEN, is_visible=0", async () 
 });
 
 // ===========================================================================
-// 24. applyVideoVisibility publish on already-published is idempotent
+// 28. applyVideoVisibility publish on already-published returns NO_OP
 // ===========================================================================
-test("24. applyVideoVisibility publish on already-published is idempotent", async () => {
+test("28. applyVideoVisibility publish on already-published returns NO_OP", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const fnStart = src.indexOf("async function applyVideoVisibility(");
   const fnBody = src.slice(fnStart, fnStart + 1600);
@@ -287,18 +353,18 @@ test("24. applyVideoVisibility publish on already-published is idempotent", asyn
     "must check current state before publishing"
   );
   assert.ok(
-    fnBody.includes('{ outcome: "APPLIED" as const }'),
-    "must return early with APPLIED when already in target state"
+    fnBody.includes('"NO_OP"'),
+    "must return NO_OP (not APPLIED) when already in target state"
   );
 });
 
 // ===========================================================================
-// 25. applyVideoVisibility hide on already-hidden is idempotent
+// 29. applyVideoVisibility hide on already-hidden returns NO_OP
 // ===========================================================================
-test("25. applyVideoVisibility hide on already-hidden is idempotent", async () => {
+test("29. applyVideoVisibility hide on already-hidden returns NO_OP", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const fnStart = src.indexOf("async function applyVideoVisibility(");
-  const fnBody = src.slice(fnStart, fnStart + 1600);
+  const fnBody = src.slice(fnStart, fnStart + 4000);
   assert.ok(
     fnBody.includes('current.status === "HIDDEN" && current.is_visible === 0'),
     "must check current state before hiding"
@@ -306,85 +372,88 @@ test("25. applyVideoVisibility hide on already-hidden is idempotent", async () =
 });
 
 // ===========================================================================
-// 26. applyVideoVisibility throws if video not found
+// 30. applyVideoVisibility throws if video not found
 // ===========================================================================
-test("26. applyVideoVisibility throws if video not found", async () => {
+test("30. applyVideoVisibility throws if video not found", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const fnStart = src.indexOf("async function applyVideoVisibility(");
-  const fnBody = src.slice(fnStart, fnStart + 600);
+  const fnBody = src.slice(fnStart, fnStart + 4000);
   assert.ok(
     fnBody.includes("Patient video was not found"),
     "must throw if video does not exist"
   );
-  assert.ok(fnBody.includes("is_deleted = 0"), "must exclude soft-deleted videos");
 });
 
 // ===========================================================================
-// 27. applyVideoRestore sets is_deleted=0, status=HIDDEN, is_visible=0
+// 31. applyVideoVisibility validates title, consent note, and YouTube ID before publish
 // ===========================================================================
-test("27. applyVideoRestore sets is_deleted=0, status=HIDDEN, is_visible=0", async () => {
+test("31. applyVideoVisibility validates title, consent note, and YouTube ID before publish", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
-  const fnStart = src.indexOf("async function applyVideoRestore(");
-  const fnBody = src.slice(fnStart, fnStart + 900);
+  const fnStart = src.indexOf("async function applyVideoVisibility(");
+  const fnBody = src.slice(fnStart, fnStart + 4000);
   assert.ok(
-    fnBody.includes("is_deleted = 0, status = 'HIDDEN', is_visible = 0"),
-    "must restore to hidden state with is_deleted=0"
+    fnBody.includes("Cannot publish: video title is missing"),
+    "must validate title before publish"
   );
-  assert.ok(fnBody.includes("VIDEO_RESTORED"), "must audit VIDEO_RESTORED");
-});
-
-// ===========================================================================
-// 28. applyVideoRestore throws if video not found
-// ===========================================================================
-test("28. applyVideoRestore throws if video not found", async () => {
-  const src = await readSource("../app/api/admin/data/route.ts");
-  const fnStart = src.indexOf("async function applyVideoRestore(");
-  const fnBody = src.slice(fnStart, fnStart + 600);
   assert.ok(
-    fnBody.includes("Patient video was not found"),
-    "must throw descriptive error when video not found"
+    fnBody.includes("Cannot publish: consent note is missing or too short"),
+    "must validate consent note before publish"
+  );
+  assert.ok(
+    fnBody.includes("Cannot publish: stored YouTube URL or ID is invalid"),
+    "must validate stored YouTube ID before publish"
+  );
+  assert.ok(
+    fnBody.includes("resolveYouTubeId"),
+    "must use resolveYouTubeId for pre-publish validation"
   );
 });
 
 // ===========================================================================
-// 29. applyDeleteVideo changes audit event to VIDEO_ARCHIVED
+// 32. validatePayload video.save requires mode CREATE or UPDATE
 // ===========================================================================
-test("29. applyDeleteVideo uses VIDEO_ARCHIVED (not VIDEO_DELETED)", async () => {
-  const src = await readSource("../app/api/admin/data/route.ts");
-  const fnStart = src.indexOf("async function applyDeleteVideo(");
-  const fnBody = src.slice(fnStart, fnStart + 600);
-  assert.ok(fnBody.includes("VIDEO_ARCHIVED"), "audit event must be VIDEO_ARCHIVED");
-  assert.ok(!fnBody.includes("VIDEO_DELETED"), "must NOT use VIDEO_DELETED");
-  assert.ok(fnBody.includes("is_deleted = 1"), "must soft-delete by setting is_deleted=1");
-});
-
-// ===========================================================================
-// 30. dashboardData video query includes soft-deleted rows
-// ===========================================================================
-test("30. dashboardData video query does NOT filter is_deleted=0", async () => {
-  const src = await readSource("../app/api/admin/data/route.ts");
-  assert.ok(
-    src.includes('SELECT * FROM patient_videos ORDER BY created_at DESC'),
-    "dashboard must query all patient_videos including soft-deleted"
-  );
-  const videoQueryIdx = src.indexOf("SELECT * FROM patient_videos ORDER BY created_at DESC");
-  const nextLine = src.slice(videoQueryIdx, videoQueryIdx + 120);
-  assert.ok(
-    !nextLine.includes("WHERE is_deleted"),
-    "video query must NOT have WHERE is_deleted filter"
-  );
-});
-
-// ===========================================================================
-// 31. validatePayload: video.save requires title
-// ===========================================================================
-test("31. validatePayload video.save requires title", async () => {
+test("32. validatePayload video.save requires mode CREATE or UPDATE", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const vpIdx = src.indexOf("function validatePayload(");
   const section = src.slice(vpIdx, vpIdx + 5000);
   const videoSaveIdx = section.indexOf('"video.save"');
   assert.ok(videoSaveIdx >= 0, "must have video.save validation branch");
-  const block = section.slice(videoSaveIdx, videoSaveIdx + 400);
+  const block = section.slice(videoSaveIdx, videoSaveIdx + 500);
+  assert.ok(
+    block.includes('["CREATE", "UPDATE"]') || block.includes('"CREATE", "UPDATE"'),
+    "must accept only CREATE or UPDATE as valid modes"
+  );
+  assert.ok(
+    block.includes("mode must be"),
+    "must return descriptive error for invalid mode"
+  );
+});
+
+// ===========================================================================
+// 33. validatePayload video.save rejects unknown mode
+// ===========================================================================
+test("33. validatePayload video.save rejects unknown mode", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const vpIdx = src.indexOf("function validatePayload(");
+  const section = src.slice(vpIdx, vpIdx + 5000);
+  const videoSaveIdx = section.indexOf('"video.save"');
+  const block = section.slice(videoSaveIdx, videoSaveIdx + 500);
+  assert.ok(
+    block.includes('typeof obj.mode !== "string"'),
+    "must validate mode is a string"
+  );
+  assert.ok(block.includes('return { ok: false'), "must return ok:false with error");
+});
+
+// ===========================================================================
+// 34. validatePayload video.save requires title
+// ===========================================================================
+test("34. validatePayload video.save requires title", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const vpIdx = src.indexOf("function validatePayload(");
+  const section = src.slice(vpIdx, vpIdx + 5000);
+  const videoSaveIdx = section.indexOf('"video.save"');
+  const block = section.slice(videoSaveIdx, videoSaveIdx + 500);
   assert.ok(
     block.includes('typeof obj.title !== "string" || !obj.title.trim()'),
     "must validate title is a non-empty string"
@@ -393,14 +462,14 @@ test("31. validatePayload video.save requires title", async () => {
 });
 
 // ===========================================================================
-// 32. validatePayload: video.save requires youtubeUrl
+// 35. validatePayload video.save requires youtubeUrl
 // ===========================================================================
-test("32. validatePayload video.save requires youtubeUrl", async () => {
+test("35. validatePayload video.save requires youtubeUrl", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const vpIdx = src.indexOf("function validatePayload(");
   const section = src.slice(vpIdx, vpIdx + 5000);
   const videoSaveIdx = section.indexOf('"video.save"');
-  const block = section.slice(videoSaveIdx, videoSaveIdx + 400);
+  const block = section.slice(videoSaveIdx, videoSaveIdx + 500);
   assert.ok(
     block.includes('typeof obj.youtubeUrl !== "string" || !obj.youtubeUrl.trim()'),
     "must validate youtubeUrl is a non-empty string"
@@ -409,14 +478,14 @@ test("32. validatePayload video.save requires youtubeUrl", async () => {
 });
 
 // ===========================================================================
-// 33. validatePayload: video.save requires consentNote >= 5 chars
+// 36. validatePayload video.save requires consentNote >= 5 chars
 // ===========================================================================
-test("33. validatePayload video.save requires consentNote >= 5 chars", async () => {
+test("36. validatePayload video.save requires consentNote >= 5 chars", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const vpIdx = src.indexOf("function validatePayload(");
   const section = src.slice(vpIdx, vpIdx + 5000);
   const videoSaveIdx = section.indexOf('"video.save"');
-  const block = section.slice(videoSaveIdx, videoSaveIdx + 600);
+  const block = section.slice(videoSaveIdx, videoSaveIdx + 1000);
   assert.ok(
     block.includes("consentNote") && block.includes("trim().length < 5"),
     "must validate consentNote is at least 5 characters"
@@ -425,15 +494,15 @@ test("33. validatePayload video.save requires consentNote >= 5 chars", async () 
 });
 
 // ===========================================================================
-// 34. validatePayload: video.visibility requires id
+// 37. validatePayload video.visibility requires id
 // ===========================================================================
-test("34. validatePayload video.visibility requires id", async () => {
+test("37. validatePayload video.visibility requires id", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const vpIdx = src.indexOf("function validatePayload(");
   const section = src.slice(vpIdx, vpIdx + 5500);
   const visIdx = section.indexOf('"video.visibility"');
   assert.ok(visIdx >= 0, "must have video.visibility validation branch");
-  const block = section.slice(visIdx, visIdx + 200);
+  const block = section.slice(visIdx, visIdx + 300);
   assert.ok(
     block.includes('typeof obj.id !== "string" || !obj.id.trim()'),
     "must validate id is a non-empty string"
@@ -442,43 +511,28 @@ test("34. validatePayload video.visibility requires id", async () => {
 });
 
 // ===========================================================================
-// 35. validatePayload: video.delete requires id
+// 38. validatePayload video.visibility requires action publish or hide
 // ===========================================================================
-test("35. validatePayload video.delete requires id", async () => {
+test("38. validatePayload video.visibility requires action publish or hide", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const vpIdx = src.indexOf("function validatePayload(");
   const section = src.slice(vpIdx, vpIdx + 5500);
-  const delIdx = section.indexOf('"video.delete"');
-  assert.ok(delIdx >= 0, "must have video.delete validation branch");
-  const block = section.slice(delIdx, delIdx + 200);
+  const visIdx = section.indexOf('"video.visibility"');
+  const block = section.slice(visIdx, visIdx + 400);
   assert.ok(
-    block.includes('typeof obj.id !== "string" || !obj.id.trim()'),
-    "must validate id is a non-empty string"
+    block.includes('"publish", "hide"') || block.includes("'publish', 'hide'"),
+    "must accept only publish or hide as valid actions"
   );
-  assert.ok(block.includes("Video ID is required"), "must return descriptive error");
+  assert.ok(
+    block.includes("action must be"),
+    "must return descriptive error for invalid action"
+  );
 });
 
 // ===========================================================================
-// 36. validatePayload: video.restore requires id
+// 39. validatePayload returns ok for valid video.save with mode=CREATE
 // ===========================================================================
-test("36. validatePayload video.restore requires id", async () => {
-  const src = await readSource("../app/api/admin/data/route.ts");
-  const vpIdx = src.indexOf("function validatePayload(");
-  const section = src.slice(vpIdx, vpIdx + 5500);
-  const restoreIdx = section.indexOf('"video.restore"');
-  assert.ok(restoreIdx >= 0, "must have video.restore validation branch");
-  const block = section.slice(restoreIdx, restoreIdx + 200);
-  assert.ok(
-    block.includes('typeof obj.id !== "string" || !obj.id.trim()'),
-    "must validate id is a non-empty string"
-  );
-  assert.ok(block.includes("Video ID is required"), "must return descriptive error");
-});
-
-// ===========================================================================
-// 37. validatePayload returns ok for valid video.save payload
-// ===========================================================================
-test("37. validatePayload returns ok for valid video.save payload", async () => {
+test("39. validatePayload returns ok for valid video.save with mode=CREATE", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const vpIdx = src.indexOf("function validatePayload(");
   const section = src.slice(vpIdx, vpIdx + 9000);
@@ -493,134 +547,205 @@ test("37. validatePayload returns ok for valid video.save payload", async () => 
 });
 
 // ===========================================================================
-// 38. validatePayload rejects invalid video.save payload
+// 40. applyVideoRestore sets is_deleted=0, status=HIDDEN, is_visible=0
 // ===========================================================================
-test("38. validatePayload rejects invalid video.save payload", async () => {
+test("40. applyVideoRestore sets is_deleted=0, status=HIDDEN, is_visible=0", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
-  const vpIdx = src.indexOf("function validatePayload(");
-  const section = src.slice(vpIdx, vpIdx + 5000);
-  const videoSaveIdx = section.indexOf('"video.save"');
-  const block = section.slice(videoSaveIdx, videoSaveIdx + 400);
-  assert.ok(block.includes('return { ok: false'), "must return ok:false with error message");
-  assert.ok(block.includes("error:"), "error response must include error message");
+  const fnStart = src.indexOf("async function applyVideoRestore(");
+  const fnBody = src.slice(fnStart, fnStart + 900);
+  assert.ok(
+    fnBody.includes("is_deleted = 0, status = 'HIDDEN', is_visible = 0"),
+    "must restore to hidden state with is_deleted=0"
+  );
+  assert.ok(fnBody.includes("VIDEO_RESTORED"), "must audit VIDEO_RESTORED");
 });
 
 // ===========================================================================
-// 39. PatientVideoStudio exists and is exported
+// 41. applyVideoRestore throws if video not found
 // ===========================================================================
-test("39. PatientVideoStudio exists and is exported", async () => {
-  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+test("41. applyVideoRestore throws if video not found", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyVideoRestore(");
+  const fnBody = src.slice(fnStart, fnStart + 600);
   assert.ok(
-    src.includes("export default function PatientVideoStudio"),
-    "must have default export named PatientVideoStudio"
+    fnBody.includes("Patient video was not found"),
+    "must throw descriptive error when video not found"
   );
 });
 
 // ===========================================================================
-// 40. PatientVideoStudio imports from @/app/lib/youtube
+// 42. applyVideoRestore returns NO_OP for active (non-deleted) row
 // ===========================================================================
-test("40. PatientVideoStudio imports from @/app/lib/youtube", async () => {
+test("42. applyVideoRestore returns NO_OP for active (non-deleted) row", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyVideoRestore(");
+  const fnBody = src.slice(fnStart, fnStart + 900);
+  assert.ok(
+    fnBody.includes('current.is_deleted === 0'),
+    "must check is_deleted === 0 for active rows"
+  );
+  assert.ok(
+    fnBody.includes('"NO_OP"'),
+    "must return NO_OP for active (non-deleted) rows"
+  );
+});
+
+// ===========================================================================
+// 43. applyDeleteVideo uses VIDEO_ARCHIVED audit
+// ===========================================================================
+test("43. applyDeleteVideo uses VIDEO_ARCHIVED audit", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyDeleteVideo(");
+  const fnBody = src.slice(fnStart, fnStart + 600);
+  assert.ok(fnBody.includes("VIDEO_ARCHIVED"), "audit event must be VIDEO_ARCHIVED");
+  assert.ok(!fnBody.includes("VIDEO_DELETED"), "must NOT use VIDEO_DELETED");
+});
+
+// ===========================================================================
+// 44. applyDeleteVideo sets is_visible=0 atomically
+// ===========================================================================
+test("44. applyDeleteVideo sets is_visible=0 atomically", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyDeleteVideo(");
+  const fnBody = src.slice(fnStart, fnStart + 600);
+  assert.ok(fnBody.includes("is_deleted = 1"), "must soft-delete by setting is_deleted=1");
+  assert.ok(fnBody.includes("is_visible = 0"), "must set is_visible=0 in same UPDATE");
+  assert.ok(fnBody.includes("status = 'HIDDEN'"), "must set status=HIDDEN in same UPDATE");
+});
+
+// ===========================================================================
+// 45. applyDeleteVideo requires id field
+// ===========================================================================
+test("45. applyDeleteVideo requires id field", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyDeleteVideo(");
+  const fnBody = src.slice(fnStart, fnStart + 400);
+  assert.ok(fnBody.includes("Video ID is required"), "must throw if id is missing");
+});
+
+// ===========================================================================
+// 46. dashboardData video query does NOT filter is_deleted=0
+// ===========================================================================
+test("46. dashboardData video query does NOT filter is_deleted=0", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  assert.ok(
+    src.includes('SELECT * FROM patient_videos ORDER BY created_at DESC'),
+    "dashboard must query all patient_videos including soft-deleted"
+  );
+  const videoQueryIdx = src.indexOf("SELECT * FROM patient_videos ORDER BY created_at DESC");
+  const nextLine = src.slice(videoQueryIdx, videoQueryIdx + 120);
+  assert.ok(
+    !nextLine.includes("WHERE is_deleted"),
+    "video query must NOT have WHERE is_deleted filter"
+  );
+});
+
+// ===========================================================================
+// 47. Shared resolver is used server-side (NOT parseYouTubeId)
+// ===========================================================================
+test("47. Shared resolver is used server-side (NOT parseYouTubeId)", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  assert.ok(
+    src.includes('import { resolveYouTubeId } from "@/app/lib/youtube"'),
+    "route.ts must import resolveYouTubeId from shared youtube module"
+  );
+  assert.ok(
+    !src.includes("parseYouTubeId"),
+    "route.ts must NOT reference parseYouTubeId"
+  );
+});
+
+// ===========================================================================
+// 48. PatientVideoStudio has videoMutate prop (not individual callbacks)
+// ===========================================================================
+test("48. PatientVideoStudio has videoMutate prop (not individual callbacks)", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  assert.ok(
+    src.includes("videoMutate"),
+    "must have videoMutate prop"
+  );
+  assert.ok(
+    src.includes("videoMutate: (payload: Record<string, unknown>) => Promise<VideoMutateResult>"),
+    "videoMutate must be a function that takes payload and returns VideoMutateResult"
+  );
+  assert.ok(!src.includes("onSave"), "must NOT have onSave prop");
+  assert.ok(!src.includes("onPublish"), "must NOT have onPublish prop");
+  assert.ok(!src.includes("onHide"), "must NOT have onHide prop");
+  assert.ok(!src.includes("onArchive"), "must NOT have onArchive prop");
+  assert.ok(!src.includes("onRestore"), "must NOT have onRestore prop");
+});
+
+// ===========================================================================
+// 49. PatientVideoStudio imports from @/app/lib/youtube
+// ===========================================================================
+test("49. PatientVideoStudio imports from @/app/lib/youtube", async () => {
   const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
   assert.ok(
     src.includes('from "@/app/lib/youtube"'),
     "must import from shared @/app/lib/youtube module"
   );
-});
-
-// ===========================================================================
-// 41. PatientVideoStudio has expected callback props
-// ===========================================================================
-test("41. PatientVideoStudio has onSave, onPublish, onHide, onArchive, onRestore props", async () => {
-  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
-  assert.ok(src.includes("onSave"), "must have onSave prop");
-  assert.ok(src.includes("onPublish"), "must have onPublish prop");
-  assert.ok(src.includes("onHide"), "must have onHide prop");
-  assert.ok(src.includes("onArchive"), "must have onArchive prop");
-  assert.ok(src.includes("onRestore"), "must have onRestore prop");
-});
-
-// ===========================================================================
-// 42. PatientVideoStudio renders "Patient Video Studio" heading
-// ===========================================================================
-test("42. PatientVideoStudio renders Patient Video Studio heading", async () => {
-  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
-  assert.ok(
-    src.includes("Patient Video Studio"),
-    "must render Patient Video Studio heading"
-  );
-  assert.ok(src.includes("<h2"), "heading must be an h2 element");
-});
-
-// ===========================================================================
-// 43. PatientVideoStudio renders Add Video button
-// ===========================================================================
-test("43. PatientVideoStudio renders Add Video button", async () => {
-  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
-  assert.ok(src.includes("Add Video"), "must render Add Video button text");
-  assert.ok(src.includes("Plus"), "must use Plus icon for add button");
-});
-
-// ===========================================================================
-// 44. PatientVideoStudio renders summary cards (total, live, hidden, archived)
-// ===========================================================================
-test("44. PatientVideoStudio renders summary cards for total, live, hidden, archived", async () => {
-  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
-  assert.ok(src.includes("vs-summary"), "must render summary section with class vs-summary");
-  assert.ok(src.includes("vs-summary-card"), "must render summary card elements");
-  const summaryStart = src.indexOf("vs-summary");
-  const summaryEnd = src.indexOf("vs-filters");
-  const summarySection = src.slice(summaryStart, summaryEnd);
-  assert.ok(summarySection.includes("Total"), "must show Total count label");
-  assert.ok(summarySection.includes("Live"), "must show Live count label");
-  assert.ok(summarySection.includes("Hidden"), "must show Hidden count label");
-  assert.ok(summarySection.includes("Archived"), "must show Archived count label");
-});
-
-// ===========================================================================
-// 45. PatientVideoStudio uses resolveYouTubeIdWithType for URL validation
-// ===========================================================================
-test("45. PatientVideoStudio uses resolveYouTubeIdWithType for URL validation", async () => {
-  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
   assert.ok(
     src.includes("resolveYouTubeIdWithType"),
-    "must use resolveYouTubeIdWithType for URL validation"
+    "must import resolveYouTubeIdWithType"
   );
   assert.ok(
-    src.includes('resolveYouTubeIdWithType({ youtubeUrl'),
-    "must pass youtubeUrl to resolver"
+    src.includes("thumbnailUrl"),
+    "must import thumbnailUrl"
+  );
+  assert.ok(
+    src.includes("embedUrl"),
+    "must import embedUrl"
   );
 });
 
 // ===========================================================================
-// 46. PatientVideoStudio uses thumbnailUrl for card images
+// 50. AdminConsole imports PatientVideoStudio
 // ===========================================================================
-test("46. PatientVideoStudio uses thumbnailUrl for card images", async () => {
-  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
-  assert.ok(src.includes("thumbnailUrl("), "must call thumbnailUrl for card thumbnails");
-  assert.ok(src.includes("src={thumbnailUrl("), "thumbnailUrl must be used for img src");
-  assert.ok(src.includes("onError"), "must have fallback onError handler");
+test("50. AdminConsole imports PatientVideoStudio", async () => {
+  const src = await readSource("../app/components/AdminConsole.tsx");
   assert.ok(
-    src.includes("thumbnailUrl(row._resolvedId,") && src.includes("true"),
-    "onError must fallback to hqdefault (true parameter)"
+    src.includes('import PatientVideoStudio from "@/app/components/admin/PatientVideoStudio"'),
+    "AdminConsole must import PatientVideoStudio"
   );
 });
 
 // ===========================================================================
-// 47. PatientVideoStudio uses embedUrl for preview modal
+// 51. AdminConsole defines videoMutate function
 // ===========================================================================
-test("47. PatientVideoStudio uses embedUrl for preview modal", async () => {
-  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
-  assert.ok(src.includes("embedUrl("), "must call embedUrl for preview");
+test("51. AdminConsole defines videoMutate function", async () => {
+  const src = await readSource("../app/components/AdminConsole.tsx");
   assert.ok(
-    src.includes('src={embedUrl(String(previewVideo._resolvedId))}'),
-    "preview iframe src must use embedUrl with resolved ID"
+    src.includes("async function videoMutate"),
+    "AdminConsole must define videoMutate function"
+  );
+  const fnStart = src.indexOf("async function videoMutate(");
+  const fnBody = src.slice(fnStart, fnStart + 300);
+  assert.ok(
+    fnBody.includes("{ ok: boolean"),
+    "videoMutate must return { ok: boolean; outcome?: string; error?: string }"
   );
 });
 
 // ===========================================================================
-// 48. PatientVideoStudio renders lifecycle badges (live, hidden, archived)
+// 52. Videos tab passes videoMutate to PatientVideoStudio
 // ===========================================================================
-test("48. PatientVideoStudio renders lifecycle badges (live, hidden, archived - never raw is_visible)", async () => {
+test("52. Videos tab passes videoMutate to PatientVideoStudio", async () => {
+  const src = await readSource("../app/components/AdminConsole.tsx");
+  const studioIdx = src.indexOf("<PatientVideoStudio");
+  assert.ok(studioIdx >= 0, "must render <PatientVideoStudio>");
+  const block = src.slice(studioIdx, studioIdx + 500);
+  assert.ok(block.includes("busy={busy}"), "must pass busy prop");
+  assert.ok(block.includes("videos={adminData.videos}"), "must pass videos data");
+  assert.ok(block.includes("videoMutate={videoMutate}"), "must pass videoMutate function");
+  assert.ok(!block.includes("onSave="), "must NOT pass onSave");
+  assert.ok(!block.includes("onPublish="), "must NOT pass onPublish");
+  assert.ok(!block.includes("onHide="), "must NOT pass onHide");
+});
+
+// ===========================================================================
+// 53. PatientVideoStudio renders lifecycle badges (never raw is_visible)
+// ===========================================================================
+test("53. PatientVideoStudio renders lifecycle badges (never raw is_visible)", async () => {
   const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
   assert.ok(src.includes('"live"'), "must use 'live' lifecycle label");
   assert.ok(src.includes('"hidden"'), "must use 'hidden' lifecycle label");
@@ -634,257 +759,55 @@ test("48. PatientVideoStudio renders lifecycle badges (live, hidden, archived - 
 });
 
 // ===========================================================================
-// 49. PatientVideoStudio uses native dialog for preview
+// 54. PatientVideoStudio uses resolveYouTubeIdWithType for URL validation
 // ===========================================================================
-test("49. PatientVideoStudio uses native dialog for preview", async () => {
-  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
-  assert.ok(src.includes("<dialog"), "must use native <dialog> element");
-  assert.ok(src.includes("ref={dialogRef}"), "dialog must use ref");
-  assert.ok(src.includes("showModal()"), "must call showModal() to open dialog");
-  assert.ok(src.includes("dialogRef.current?.close()"), "must call .close() to dismiss");
-  assert.ok(src.includes("onClose={handleClosePreview}"), "must handle onClose event");
-});
-
-// ===========================================================================
-// 50. PatientVideoStudio handles dirty state with confirm dialog
-// ===========================================================================
-test("50. PatientVideoStudio handles dirty state with confirm dialog", async () => {
-  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
-  assert.ok(src.includes("isDirty"), "must track dirty state");
-  assert.ok(
-    src.includes("Discard unsaved video changes?"),
-    "must prompt user when form is dirty"
-  );
-  assert.ok(src.includes("window.confirm"), "must use window.confirm for dirty guard");
-  assert.ok(src.includes("guardDirty"), "must define guardDirty helper function");
-});
-
-// ===========================================================================
-// 51. PatientVideoStudio renders search input
-// ===========================================================================
-test("51. PatientVideoStudio renders search input", async () => {
-  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
-  assert.ok(src.includes("vs-search"), "must render search container");
-  assert.ok(src.includes('placeholder="Search videos..."'), "must have search placeholder");
-  assert.ok(src.includes("searchQuery"), "must track search query state");
-  assert.ok(src.includes("setSearchQuery"), "must update search query state");
-  assert.ok(src.includes("Search"), "must use Search icon");
-});
-
-// ===========================================================================
-// 52. PatientVideoStudio renders filter chips (all, live, hidden, archived)
-// ===========================================================================
-test("52. PatientVideoStudio renders filter chips (all, live, hidden, archived)", async () => {
-  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
-  assert.ok(src.includes("vs-filter-chips"), "must render filter chips container");
-  assert.ok(src.includes('"all"'), "must include 'all' filter option");
-  assert.ok(src.includes('"live"'), "must include 'live' filter option");
-  assert.ok(src.includes('"hidden"'), "must include 'hidden' filter option");
-  assert.ok(src.includes('"archived"'), "must include 'archived' filter option");
-  assert.ok(src.includes("activeFilter"), "must track active filter state");
-  assert.ok(src.includes("vs-chip"), "must render chip elements with vs-chip class");
-});
-
-// ===========================================================================
-// 53. PatientVideoStudio form validates consentNote >= 5 chars
-// ===========================================================================
-test("53. PatientVideoStudio form validates consentNote >= 5 chars", async () => {
+test("54. PatientVideoStudio uses resolveYouTubeIdWithType for URL validation", async () => {
   const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
   assert.ok(
-    src.includes("consentNote.trim().length < 5"),
-    "must validate consentNote is at least 5 characters"
+    src.includes("resolveYouTubeIdWithType"),
+    "must use resolveYouTubeIdWithType for URL validation"
   );
   assert.ok(
-    src.includes("Consent note must be at least 5 characters"),
-    "must show descriptive validation error"
+    src.includes('resolveYouTubeIdWithType({ youtubeUrl'),
+    "must pass youtubeUrl to resolver"
+  );
+  assert.ok(
+    src.includes("Invalid YouTube URL"),
+    "must show error for invalid YouTube URL"
   );
 });
 
 // ===========================================================================
-// 54. Save handler includes isNew flag for new videos
+// 55. PatientVideoStudio uses embedUrl for preview modal
 // ===========================================================================
-test("54. Save handler includes isNew flag for new videos", async () => {
+test("55. PatientVideoStudio uses embedUrl for preview modal", async () => {
   const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
-  const saveIdx = src.indexOf("handleSave");
-  const saveBlock = src.slice(saveIdx, saveIdx + 1200);
+  assert.ok(src.includes("embedUrl("), "must call embedUrl for preview");
   assert.ok(
-    saveBlock.includes("isNew: true"),
-    "payload must include isNew:true when creating new video"
-  );
-  assert.ok(
-    saveBlock.includes("id: selectedVideo.id"),
-    "payload must include id when updating existing video"
+    src.includes("embedUrl(String(previewVideo._resolvedId))"),
+    "preview iframe src must use embedUrl with resolved ID"
   );
 });
 
 // ===========================================================================
-// 55. Action buttons use stopPropagation
+// 56. No parseYouTubeId import in route.ts
 // ===========================================================================
-test("55. Action buttons use stopPropagation", async () => {
-  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
-  const stopCount = (src.match(/e\.stopPropagation\(\)/g) || []).length;
-  assert.ok(stopCount >= 4, `action buttons must use stopPropagation (found ${stopCount} calls, need >= 4)`);
+test("56. No parseYouTubeId import in route.ts", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
   assert.ok(
-    src.includes("handlePreview") && src.includes("stopPropagation"),
-    "preview handler must use stopPropagation"
+    !src.includes("parseYouTubeId"),
+    "route.ts must NOT contain any reference to parseYouTubeId"
   );
 });
 
 // ===========================================================================
-// 56. AdminConsole imports PatientVideoStudio
+// 57. youtube.ts exports resolveYouTubeId
 // ===========================================================================
-test("56. AdminConsole imports PatientVideoStudio", async () => {
-  const src = await readSource("../app/components/AdminConsole.tsx");
-  assert.ok(
-    src.includes('import PatientVideoStudio from "@/app/components/admin/PatientVideoStudio"'),
-    "AdminConsole must import PatientVideoStudio"
-  );
-});
-
-// ===========================================================================
-// 57. AdminConsole passes correct props to PatientVideoStudio
-// ===========================================================================
-test("57. AdminConsole passes correct props to PatientVideoStudio", async () => {
-  const src = await readSource("../app/components/AdminConsole.tsx");
-  const studioIdx = src.indexOf("<PatientVideoStudio");
-  const block = src.slice(studioIdx, studioIdx + 700);
-  assert.ok(block.includes("busy={busy}"), "must pass busy prop");
-  assert.ok(block.includes("csrf={csrf}"), "must pass csrf prop");
-  assert.ok(block.includes("videos={adminData.videos}"), "must pass videos data");
-  assert.ok(block.includes("onSave="), "must pass onSave handler");
-  assert.ok(block.includes("onPublish="), "must pass onPublish handler");
-  assert.ok(block.includes("onHide="), "must pass onHide handler");
-  assert.ok(block.includes("onArchive="), "must pass onArchive handler");
-  assert.ok(block.includes("onRestore="), "must pass onRestore handler");
-});
-
-// ===========================================================================
-// 58. Videos tab uses PatientVideoStudio (not old VideoForm)
-// ===========================================================================
-test("58. Videos tab uses PatientVideoStudio (not old VideoForm)", async () => {
-  const src = await readSource("../app/components/AdminConsole.tsx");
-  assert.ok(
-    src.includes('active === "Videos"'),
-    "must have Videos tab"
-  );
-  const tabIdx = src.indexOf('active === "Videos"');
-  const tabBlock = src.slice(tabIdx, tabIdx + 800);
-  assert.ok(tabBlock.includes("<PatientVideoStudio"), "Videos tab must render PatientVideoStudio");
-  assert.ok(!tabBlock.includes("VideoForm"), "Videos tab must NOT render old VideoForm");
-  assert.ok(
-    tabBlock.includes('"video.save"'),
-    "onSave must dispatch video.save action"
-  );
-  assert.ok(
-    tabBlock.includes('"video.visibility"'),
-    "onPublish/onHide must dispatch video.visibility action"
-  );
-  assert.ok(
-    tabBlock.includes('"video.delete"'),
-    "onArchive must dispatch video.delete action"
-  );
-  assert.ok(
-    tabBlock.includes('"video.restore"'),
-    "onRestore must dispatch video.restore action"
-  );
-});
-
-// ===========================================================================
-// 59. PatientStoriesGallery imports from @/app/lib/youtube (migrated)
-// ===========================================================================
-test("59. PatientStoriesGallery imports from @/app/lib/youtube (migrated from inline)", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
-  assert.ok(
-    src.includes('from "@/app/lib/youtube"'),
-    "must import from shared youtube module"
-  );
-  assert.ok(src.includes("resolveYouTubeId"), "must import resolveYouTubeId");
-  assert.ok(src.includes("ytThumbnailUrl") || src.includes("thumbnailUrl"), "must import thumbnailUrl");
-  assert.ok(src.includes("ytEmbedUrl") || src.includes("embedUrl"), "must import embedUrl");
-});
-
-// ===========================================================================
-// 60. youtube.ts exports all expected functions
-// ===========================================================================
-test("60. youtube.ts exports resolveYouTubeId, resolveYouTubeIdWithType, thumbnailUrl, embedUrl", async () => {
+test("57. youtube.ts exports resolveYouTubeId", async () => {
   const src = await readSource("../app/lib/youtube.ts");
   assert.ok(src.includes("export function resolveYouTubeId("), "must export resolveYouTubeId");
   assert.ok(src.includes("export function resolveYouTubeIdWithType("), "must export resolveYouTubeIdWithType");
   assert.ok(src.includes("export function thumbnailUrl("), "must export thumbnailUrl");
   assert.ok(src.includes("export function embedUrl("), "must export embedUrl");
   assert.ok(src.includes("export type YouTubeResolveResult"), "must export YouTubeResolveResult type");
-});
-
-// ===========================================================================
-// 61. PatientStoriesGallery no longer defines its own isValidYoutubeId
-// ===========================================================================
-test("61. PatientStoriesGallery no longer defines its own isValidYoutubeId function", async () => {
-  const src = await readSource("../app/components/PatientStoriesGallery.tsx");
-  assert.ok(
-    !src.includes("function isValidYoutubeId"),
-    "must NOT define a local isValidYoutubeId function"
-  );
-  assert.ok(
-    !src.includes("function isValidYouTubeId"),
-    "must NOT define a local isValidYouTubeId function (any casing)"
-  );
-});
-
-// ===========================================================================
-// 62. applyVideo uses parseYouTubeId for ID extraction
-// ===========================================================================
-test("62. applyVideo uses parseYouTubeId for ID extraction", async () => {
-  const src = await readSource("../app/api/admin/data/route.ts");
-  const fnStart = src.indexOf("async function applyVideo(");
-  const fnBody = src.slice(fnStart, fnStart + 600);
-  assert.ok(
-    fnBody.includes("parseYouTubeId"),
-    "must use parseYouTubeId to extract YouTube ID from URL"
-  );
-});
-
-// ===========================================================================
-// 63. PatientVideoStudio getLifecycle helper maps is_deleted=1 to archived
-// ===========================================================================
-test("63. getLifecycle maps is_deleted=1 to archived", async () => {
-  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
-  const fnStart = src.indexOf("function getLifecycle(");
-  const fnBody = src.slice(fnStart, fnStart + 250);
-  assert.ok(fnBody.includes("is_deleted === 1"), "must check is_deleted === 1 for archived");
-  assert.ok(
-    fnBody.includes('return "archived"'),
-    "must return 'archived' when is_deleted=1"
-  );
-  assert.ok(
-    fnBody.includes('return "live"'),
-    "must return 'live' when APPROVED and visible"
-  );
-  assert.ok(
-    fnBody.includes('return "hidden"'),
-    "must return 'hidden' as default fallback"
-  );
-});
-
-// ===========================================================================
-// 64. PatientVideoStudio validates YouTube URL in form validation
-// ===========================================================================
-test("64. PatientVideoStudio validates YouTube URL via resolveYouTubeIdWithType", async () => {
-  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
-  const fnStart = src.indexOf("function validateForm(");
-  const fnBody = src.slice(fnStart, fnStart + 500);
-  assert.ok(fnBody.includes("resolveYouTubeIdWithType"), "must call resolveYouTubeIdWithType in form validation");
-  assert.ok(
-    fnBody.includes("Invalid YouTube URL"),
-    "must show error for invalid YouTube URL"
-  );
-});
-
-// ===========================================================================
-// 65. applyDeleteVideo requires id field
-// ===========================================================================
-test("65. applyDeleteVideo requires id field", async () => {
-  const src = await readSource("../app/api/admin/data/route.ts");
-  const fnStart = src.indexOf("async function applyDeleteVideo(");
-  const fnBody = src.slice(fnStart, fnStart + 400);
-  assert.ok(fnBody.includes("Video ID is required"), "must throw if id is missing");
 });

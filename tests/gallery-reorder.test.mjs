@@ -53,7 +53,8 @@ const mockedDataRouteContent = dataRouteContent
   .replace(/from "@\/app\/lib\/utils";/g, 'from "../app/lib/utils.ts";')
   .replace(/from "@\/app\/lib\/doctor-admin";/g, 'from "../app/lib/doctor-admin.ts";')
   .replace(/from "@\/app\/lib\/blog-admin";/g, 'from "../app/lib/blog-admin.ts";')
-  .replace(/from "@\/app\/lib\/gallery-v2";/g, 'from "./gallery-v2-reorder-mocked.ts";');
+  .replace(/from "@\/app\/lib\/gallery-v2";/g, 'from "./gallery-v2-reorder-mocked.ts";')
+  .replace(/from "@\/app\/lib\/youtube";/g, 'from "../app/lib/youtube.ts";');
 await writeFile(new URL("./data-route-real-mocked-db.ts", import.meta.url), mockedDataRouteContent, "utf8");
 
 // 3. Setup dynamic mock for media-library and gallery-v2

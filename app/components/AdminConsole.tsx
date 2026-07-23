@@ -729,6 +729,25 @@ export function AdminConsole({
     }
   }
 
+  async function videoMutate(
+    payload: Record<string, unknown>,
+  ): Promise<{ ok: boolean; outcome?: string; error?: string }> {
+    setBusy(true);
+    setNotice("");
+    try {
+      const result = await postAdmin(session.csrf, payload);
+      await refreshData(true);
+      return { ok: true, outcome: String(result.outcome || "APPLIED") };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Admin action failed.";
+      setNotice(msg);
+      await refreshData(true);
+      return { ok: false, error: msg };
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function uploadMedia(formData: FormData): Promise<{ url: string; mediaId: string }> {
     setBusy(true);
     setNotice("");
@@ -1303,13 +1322,8 @@ export function AdminConsole({
         {active === "Videos" ? (
           <PatientVideoStudio
             busy={busy}
-            csrf={csrf}
             videos={adminData.videos}
-            onSave={(payload) => mutate({ action: "video.save", payload }, "Patient video saved.")}
-            onPublish={(id) => mutate({ action: "video.visibility", payload: { id, action: "publish" } }, "Video published.")}
-            onHide={(id) => mutate({ action: "video.visibility", payload: { id, action: "hide" } }, "Video hidden.")}
-            onArchive={(id) => mutate({ action: "video.delete", id }, "Video archived.")}
-            onRestore={(id) => mutate({ action: "video.restore", id }, "Video restored.")}
+            videoMutate={videoMutate}
           />
         ) : null}
 
@@ -2617,6 +2631,7 @@ function CareerForm({
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- legacy form retained for reference
 function VideoForm({
   busy,
   onSave,
