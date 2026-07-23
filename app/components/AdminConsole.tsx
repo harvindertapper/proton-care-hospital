@@ -735,7 +735,7 @@ export function AdminConsole({
     try {
       const result = await postAdmin(session.csrf, payload);
       await refreshData(true);
-      const data = (result.data ?? result) as { blogId?: string; version?: number } | undefined;
+      const data = (result.data ?? result) as { blogId?: string; version?: number; slug?: string } | undefined;
       return { ok: true, outcome: String(result.outcome || "APPLIED"), ...(data ? { data } : {}) };
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Blog operation failed.";

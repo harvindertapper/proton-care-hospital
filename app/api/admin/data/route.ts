@@ -241,13 +241,17 @@ async function applyDoctor(payload: Record<string, unknown>, actorEmail: string)
 }
 
 async function applyBlog(payload: Record<string, unknown>, actorEmail: string) {
+  const mode = clean(payload.mode, 10).toUpperCase() as "CREATE" | "UPDATE";
+  if (mode !== "CREATE" && mode !== "UPDATE") {
+    throw new Error("mode must be 'CREATE' or 'UPDATE'.");
+  }
+
   const title = clean(payload.title, 180);
-  const slug = clean(payload.slug, 100) || slugify(title);
+  const slug = clean(payload.slug, 100);
+  if (!title || !slug) throw new Error("Invalid blog payload.");
   const excerpt = clean(payload.excerpt, 300);
   const body = clean(payload.body, 8000);
-  if (!title || !slug || !excerpt || !body) throw new Error("Invalid blog payload.");
-
-  const blogId = typeof payload.blogId === "string" ? clean(payload.blogId, 140) || "" : "";
+  if (!excerpt || !body) throw new Error("Invalid blog payload.");
 
   const coverMediaIdHasKey = Object.prototype.hasOwnProperty.call(payload, "coverMediaId");
   let coverMediaIdExplicitlyProvided = false;
@@ -267,12 +271,15 @@ async function applyBlog(payload: Record<string, unknown>, actorEmail: string) {
     ? parseExpectedVersion(payload.expectedVersion, { minimum: 0 })
     : NaN;
 
-  if (blogId) {
+  if (mode === "UPDATE") {
+    const blogId = typeof payload.blogId === "string" ? clean(payload.blogId, 140) || "" : "";
+    if (!blogId) throw new Error("blogId is required for UPDATE mode.");
+
     const existing = await loadBlogById(blogRepo, blogId);
     if (!existing) throw new MutationNotFoundError("Blog post");
     if (existing.is_deleted) throw new MutationNotFoundError("Blog post");
     if (Number.isNaN(expectedVersion) || expectedVersion < 1) {
-      throw new Error("expectedVersion is required for existing blog posts.");
+      throw new Error("expectedVersion is required for UPDATE mode.");
     }
     if (existing.version !== expectedVersion) {
       throw new MutationConflictError("Blog post was modified by another session. Refresh and try again.");
@@ -285,7 +292,7 @@ async function applyBlog(payload: Record<string, unknown>, actorEmail: string) {
     }
 
     return updateBlog(blogRepo, blogId, expectedVersion, {
-      title, excerpt, body,
+      title, slug, excerpt, body,
       coverMediaId: coverMediaId,
       coverMediaIdExplicitlyProvided,
     }, actorEmail);
@@ -293,7 +300,7 @@ async function applyBlog(payload: Record<string, unknown>, actorEmail: string) {
 
   const existingBySlug = await loadBlog(blogRepo, slug);
   if (existingBySlug) {
-    throw new MutationConflictError("A blog with this slug already exists. Use blogId to update.");
+    throw new MutationConflictError("A blog with this slug already exists. Use UPDATE mode.");
   }
 
   if (!Number.isNaN(expectedVersion) && expectedVersion > 0) {
@@ -1021,19 +1028,16 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (typeof obj.endTime !== "string" || !obj.endTime.trim()) return { ok: false, error: "End time is required." };
     if (typeof obj.days !== "string" || !obj.days.trim()) return { ok: false, error: "Days parameter is required." };
   } else if (action === "blog.save") {
+    if (typeof obj.mode !== "string" || !["CREATE", "UPDATE"].includes(clean(obj.mode, 10).toUpperCase())) return { ok: false, error: "mode must be 'CREATE' or 'UPDATE'." };
     if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Blog title is required." };
     if (typeof obj.body !== "string" || !obj.body.trim()) return { ok: false, error: "Blog body is required." };
     if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Blog slug is required." };
-    if (obj.blogId !== undefined && obj.blogId !== null && obj.blogId !== "") {
-      if (typeof obj.blogId !== "string" || obj.blogId.length > 140) return { ok: false, error: "blogId must be a string of at most 140 characters." };
-    }
+    if (clean(obj.mode, 10).toUpperCase() === "UPDATE" && (typeof obj.blogId !== "string" || !obj.blogId.trim())) return { ok: false, error: "blogId is required for UPDATE mode." };
     if (obj.coverMediaId !== undefined && obj.coverMediaId !== null && obj.coverMediaId !== "") {
       if (typeof obj.coverMediaId !== "string" || obj.coverMediaId.length > 140) return { ok: false, error: "coverMediaId must be a string of at most 140 characters." };
     }
     if (obj.expectedVersion !== undefined) {
-      if (typeof obj.expectedVersion !== "number" || Number.isNaN(parseExpectedVersion(obj.expectedVersion))) {
-        return { ok: false, error: "expectedVersion must be a non-negative integer." };
-      }
+      if (typeof obj.expectedVersion !== "number" || Number.isNaN(parseExpectedVersion(obj.expectedVersion))) return { ok: false, error: "expectedVersion must be a non-negative integer." };
     }
   } else if (action === "blog.visibility") {
     if (typeof obj.blogId !== "string" || !obj.blogId.trim()) return { ok: false, error: "blogId is required." };

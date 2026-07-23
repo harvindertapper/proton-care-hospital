@@ -244,7 +244,7 @@ export async function createBlog(
     coverMediaId: string | null;
   },
   actorEmail: string,
-): Promise<{ outcome: "APPLIED"; blogId: string }> {
+): Promise<{ outcome: "APPLIED"; blogId: string; version: number; slug: string }> {
   const blogId = crypto.randomUUID();
   const status = "NEEDS_REVIEW";
   const isVisible = 0;
@@ -272,7 +272,7 @@ export async function createBlog(
     throw new Error("Blog post creation failed unexpectedly.");
   }
   await repo.audit(actorEmail, "BLOG_CREATED", "BlogPost", blogId, `slug=${slug}; title=${fields.title}`);
-  return { outcome: "APPLIED", blogId };
+  return { outcome: "APPLIED", blogId, version: 1, slug };
 }
 
 export async function updateBlog(
@@ -281,13 +281,14 @@ export async function updateBlog(
   expectedVersion: number,
   fields: {
     title: string;
+    slug: string;
     excerpt: string;
     body: string;
     coverMediaId: string | null;
     coverMediaIdExplicitlyProvided: boolean;
   },
   actorEmail: string,
-): Promise<{ outcome: "APPLIED" }> {
+): Promise<{ outcome: "APPLIED"; blogId: string; version: number; slug: string }> {
   const current = await loadBlogById(repo, blogId);
   if (!current) throw new MutationNotFoundError("Blog post");
   if (current.is_deleted) {
@@ -297,15 +298,26 @@ export async function updateBlog(
     throw new MutationConflictError("Blog post was modified by another session. Refresh and try again.");
   }
 
+  if (fields.slug !== current.slug) {
+    const collision = await repo.query(
+      "SELECT id FROM blog_posts WHERE slug = ? AND id <> ? AND is_deleted = 0 LIMIT 1",
+      fields.slug, blogId,
+    );
+    if (collision.results?.length) {
+      throw new MutationConflictError("A blog with this slug already exists. Choose a different slug.");
+    }
+  }
+
   const effectiveCoverMediaId = fields.coverMediaIdExplicitlyProvided
     ? fields.coverMediaId
     : current.cover_media_id;
 
+  const newVersion = expectedVersion + 1;
   const result = await repo.run(
-    `UPDATE blog_posts SET title = ?, excerpt = ?, body = ?, cover_media_id = ?,
+    `UPDATE blog_posts SET slug = ?, title = ?, excerpt = ?, body = ?, cover_media_id = ?,
       version = version + 1
      WHERE id = ? AND version = ? AND is_deleted = 0`,
-    fields.title, fields.excerpt, fields.body, effectiveCoverMediaId,
+    fields.slug, fields.title, fields.excerpt, fields.body, effectiveCoverMediaId,
     blogId, expectedVersion,
   );
   if (Number(result.meta?.changes || 0) < 1) {
@@ -315,8 +327,8 @@ export async function updateBlog(
     }
     throw new MutationConflictError("Blog post was modified by another session. Refresh and try again.");
   }
-  await repo.audit(actorEmail, "BLOG_UPDATED", "BlogPost", blogId, `slug=${current.slug}; title=${fields.title}`);
-  return { outcome: "APPLIED" };
+  await repo.audit(actorEmail, "BLOG_UPDATED", "BlogPost", blogId, `slug=${fields.slug}; title=${fields.title}`);
+  return { outcome: "APPLIED", blogId, version: newVersion, slug: fields.slug };
 }
 
 export async function publishBlog(
@@ -324,7 +336,7 @@ export async function publishBlog(
   blogId: string,
   expectedVersion: number,
   actorEmail: string,
-): Promise<{ outcome: "APPLIED" }> {
+): Promise<{ outcome: "APPLIED" | "NO_OP"; blogId: string; version: number; slug: string }> {
   const current = await loadBlogById(repo, blogId);
   if (!current) throw new MutationNotFoundError("Blog post");
   if (current.is_deleted) throw new MutationNotFoundError("Blog post");
@@ -332,11 +344,20 @@ export async function publishBlog(
     throw new MutationConflictError("Blog post was modified by another session. Refresh and try again.");
   }
 
+  if (
+    current.status === "APPROVED" &&
+    current.is_visible === 1 &&
+    current.lifecycle_status === "PUBLISHED"
+  ) {
+    return { outcome: "NO_OP", blogId, version: current.version, slug: current.slug };
+  }
+
   if (current.cover_media_id) {
     const mediaCheck = await validateCoverForPublication(repo, current.cover_media_id);
     if (!mediaCheck.ok) throw new Error(mediaCheck.error);
   }
 
+  const newVersion = expectedVersion + 1;
   const result = await repo.run(
     `UPDATE blog_posts SET status = 'APPROVED', is_visible = 1, lifecycle_status = 'PUBLISHED',
       version = version + 1
@@ -349,7 +370,7 @@ export async function publishBlog(
     throw new MutationConflictError("Blog post was modified by another session. Refresh and try again.");
   }
   await repo.audit(actorEmail, "BLOG_PUBLISHED", "BlogPost", blogId, `slug=${current.slug}`);
-  return { outcome: "APPLIED" };
+  return { outcome: "APPLIED", blogId, version: newVersion, slug: current.slug };
 }
 
 export async function hideBlog(
@@ -357,7 +378,7 @@ export async function hideBlog(
   blogId: string,
   expectedVersion: number,
   actorEmail: string,
-): Promise<{ outcome: "APPLIED" }> {
+): Promise<{ outcome: "APPLIED" | "NO_OP"; blogId: string; version: number; slug: string }> {
   const current = await loadBlogById(repo, blogId);
   if (!current) throw new MutationNotFoundError("Blog post");
   if (current.is_deleted) throw new MutationNotFoundError("Blog post");
@@ -365,8 +386,17 @@ export async function hideBlog(
     throw new MutationConflictError("Blog post was modified by another session. Refresh and try again.");
   }
 
+  if (
+    current.status === "HIDDEN" &&
+    current.is_visible === 0 &&
+    current.lifecycle_status === "DRAFT"
+  ) {
+    return { outcome: "NO_OP", blogId, version: current.version, slug: current.slug };
+  }
+
+  const newVersion = expectedVersion + 1;
   const result = await repo.run(
-    `UPDATE blog_posts SET status = 'HIDDEN', is_visible = 0,
+    `UPDATE blog_posts SET status = 'HIDDEN', is_visible = 0, lifecycle_status = 'DRAFT',
       version = version + 1
      WHERE id = ? AND version = ? AND is_deleted = 0`,
     blogId, expectedVersion,
@@ -377,7 +407,7 @@ export async function hideBlog(
     throw new MutationConflictError("Blog post was modified by another session. Refresh and try again.");
   }
   await repo.audit(actorEmail, "BLOG_HIDDEN", "BlogPost", blogId, `slug=${current.slug}`);
-  return { outcome: "APPLIED" };
+  return { outcome: "APPLIED", blogId, version: newVersion, slug: current.slug };
 }
 
 export async function archiveBlog(
@@ -385,7 +415,7 @@ export async function archiveBlog(
   blogId: string,
   expectedVersion: number,
   actorEmail: string,
-): Promise<{ outcome: "APPLIED" }> {
+): Promise<{ outcome: "APPLIED"; blogId: string; version: number; slug: string }> {
   const current = await loadBlogById(repo, blogId);
   if (!current) throw new MutationNotFoundError("Blog post");
   if (current.is_deleted) {
@@ -395,8 +425,10 @@ export async function archiveBlog(
     throw new MutationConflictError("Blog post was modified by another session. Refresh and try again.");
   }
 
+  const newVersion = expectedVersion + 1;
   const result = await repo.run(
     `UPDATE blog_posts SET is_deleted = 1, is_visible = 0, status = 'HIDDEN',
+      lifecycle_status = 'ARCHIVED',
       deleted_at = CURRENT_TIMESTAMP,
       version = version + 1
      WHERE id = ? AND version = ? AND is_deleted = 0`,
@@ -408,5 +440,5 @@ export async function archiveBlog(
     throw new MutationConflictError("Blog post was modified by another session. Refresh and try again.");
   }
   await repo.audit(actorEmail, "BLOG_ARCHIVED", "BlogPost", blogId, `slug=${current.slug}`);
-  return { outcome: "APPLIED" };
+  return { outcome: "APPLIED", blogId, version: newVersion, slug: current.slug };
 }

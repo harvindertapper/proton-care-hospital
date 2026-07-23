@@ -148,7 +148,7 @@ test("ID.3 — updateBlog uses blogId for identity (not slug)", async () => {
   const repo = makeRepo(db);
   const blogId = insertBlog(db, { version: 1, status: "DRAFT" });
   await updateBlog(repo, blogId, 1, {
-    title: "Updated", excerpt: "E", body: "B", coverMediaId: null, coverMediaIdExplicitlyProvided: false,
+    title: "Updated", slug: "updated-test", excerpt: "E", body: "B", coverMediaId: null, coverMediaIdExplicitlyProvided: false,
   }, "admin@test.com");
   const row = db.prepare("SELECT title FROM blog_posts WHERE id = ?").get(blogId);
   assert.equal(row.title, "Updated", "title updated via blogId");
@@ -185,7 +185,7 @@ test("VC.6 — updateBlog rejects stale version", async () => {
   const repo = makeRepo(db);
   const blogId = insertBlog(db, { version: 1 });
   await assert.rejects(
-    () => updateBlog(repo, blogId, 2, { title: "X", excerpt: "E", body: "B", coverMediaId: null, coverMediaIdExplicitlyProvided: false }, "a@t.com"),
+    () => updateBlog(repo, blogId, 2, { title: "X", slug: "x-slug", excerpt: "E", body: "B", coverMediaId: null, coverMediaIdExplicitlyProvided: false }, "a@t.com"),
     MutationConflictError,
   );
   db.close();
@@ -228,7 +228,7 @@ test("VC.10 — updateBlog succeeds with matching version", async () => {
   const db = openFullDb();
   const repo = makeRepo(db);
   const blogId = insertBlog(db, { version: 1 });
-  await updateBlog(repo, blogId, 1, { title: "New", excerpt: "E", body: "B", coverMediaId: null, coverMediaIdExplicitlyProvided: false }, "a@t.com");
+  await updateBlog(repo, blogId, 1, { title: "New", slug: "new-slug", excerpt: "E", body: "B", coverMediaId: null, coverMediaIdExplicitlyProvided: false }, "a@t.com");
   const loaded = await loadBlogById(repo, blogId);
   assert.equal(loaded.version, 2, "version incremented");
   const row = db.prepare("SELECT title FROM blog_posts WHERE id = ?").get(blogId);
@@ -345,7 +345,7 @@ test("ARC.20 — updateBlog rejects archived blog", async () => {
   const blogId = insertBlog(db, { version: 1 });
   await archiveBlog(repo, blogId, 1, "a@t.com");
   await assert.rejects(
-    () => updateBlog(repo, blogId, 2, { title: "X", excerpt: "E", body: "B", coverMediaId: null, coverMediaIdExplicitlyProvided: false }, "a@t.com"),
+    () => updateBlog(repo, blogId, 2, { title: "X", slug: "x-slug", excerpt: "E", body: "B", coverMediaId: null, coverMediaIdExplicitlyProvided: false }, "a@t.com"),
     MutationNotFoundError,
   );
   db.close();
@@ -389,7 +389,7 @@ test("COV.24 — updateBlog preserves cover when coverMediaIdExplicitlyProvided=
   const db = openFullDb();
   const repo = makeRepo(db);
   const blogId = insertBlog(db, { version: 1, coverMediaId: "cover-original" });
-  await updateBlog(repo, blogId, 1, { title: "Updated", excerpt: "E", body: "B", coverMediaId: null, coverMediaIdExplicitlyProvided: false }, "a@t.com");
+  await updateBlog(repo, blogId, 1, { title: "Updated", slug: "updated-slug", excerpt: "E", body: "B", coverMediaId: null, coverMediaIdExplicitlyProvided: false }, "a@t.com");
   const loaded = await loadBlogById(repo, blogId);
   assert.equal(loaded.cover_media_id, "cover-original", "cover preserved");
   db.close();
@@ -399,7 +399,7 @@ test("COV.25 — updateBlog replaces cover when explicit with new id", async () 
   const db = openFullDb();
   const repo = makeRepo(db);
   const blogId = insertBlog(db, { version: 1, coverMediaId: "cover-1" });
-  await updateBlog(repo, blogId, 1, { title: "Updated", excerpt: "E", body: "B", coverMediaId: "cover-2", coverMediaIdExplicitlyProvided: true }, "a@t.com");
+  await updateBlog(repo, blogId, 1, { title: "Updated", slug: "updated-slug", excerpt: "E", body: "B", coverMediaId: "cover-2", coverMediaIdExplicitlyProvided: true }, "a@t.com");
   const loaded = await loadBlogById(repo, blogId);
   assert.equal(loaded.cover_media_id, "cover-2", "cover replaced");
   db.close();
@@ -409,7 +409,7 @@ test("COV.26 — updateBlog clears cover when explicit with null", async () => {
   const db = openFullDb();
   const repo = makeRepo(db);
   const blogId = insertBlog(db, { version: 1, coverMediaId: "cover-1" });
-  await updateBlog(repo, blogId, 1, { title: "Updated", excerpt: "E", body: "B", coverMediaId: null, coverMediaIdExplicitlyProvided: true }, "a@t.com");
+  await updateBlog(repo, blogId, 1, { title: "Updated", slug: "updated-slug", excerpt: "E", body: "B", coverMediaId: null, coverMediaIdExplicitlyProvided: true }, "a@t.com");
   const loaded = await loadBlogById(repo, blogId);
   assert.equal(loaded.cover_media_id, null, "cover cleared");
   db.close();
@@ -474,26 +474,28 @@ test("PUB.32 — publishBlog sets lifecycle_status=PUBLISHED", async () => {
   db.close();
 });
 
-test("PUB.33 — re-publish still succeeds and increments version", async () => {
+test("PUB.33 — re-publish returns NO_OP when already fully published", async () => {
   const db = openFullDb();
   const repo = makeRepo(db);
   const blogId = insertBlog(db, { version: 1 });
   await publishBlog(repo, blogId, 1, "a@t.com");
   const after = await loadBlogById(repo, blogId);
-  await publishBlog(repo, blogId, after.version, "a@t.com");
+  const result = await publishBlog(repo, blogId, after.version, "a@t.com");
+  assert.equal(result.outcome, "NO_OP", "already published returns NO_OP");
   const final = await loadBlogById(repo, blogId);
-  assert.equal(final.version, after.version + 1, "version incremented again");
+  assert.equal(final.version, after.version, "version unchanged on NO_OP");
   db.close();
 });
 
-test("PUB.34 — hideBlog sets status=HIDDEN and is_visible=0", async () => {
+test("PUB.34 — hideBlog sets status=HIDDEN, is_visible=0, lifecycle_status=DRAFT", async () => {
   const db = openFullDb();
   const repo = makeRepo(db);
-  const blogId = insertBlog(db, { version: 1, status: "APPROVED", isVisible: true });
+  const blogId = insertBlog(db, { version: 1, status: "APPROVED", isVisible: true, lifecycleStatus: "PUBLISHED" });
   await hideBlog(repo, blogId, 1, "a@t.com");
   const loaded = await loadBlogById(repo, blogId);
   assert.equal(loaded.status, "HIDDEN");
   assert.equal(loaded.is_visible, 0);
+  assert.equal(loaded.lifecycle_status, "DRAFT", "hide resets lifecycle to DRAFT");
   db.close();
 });
 
@@ -538,6 +540,7 @@ test("FE.39 — BlogStudio uses selectedBlogId for isEditing", () => {
 test("FE.40 — BlogStudio sends blogId in UPDATE payload", () => {
   const src = readSource("app/components/admin/BlogStudio.tsx");
   assert.ok(src.includes("payload.blogId = selectedBlogId"), "sends blogId in update");
+  assert.ok(src.includes('mode: "UPDATE"') || src.includes("mode,") || src.includes("mode:"), "sends mode in payload");
 });
 
 test("FE.41 — BlogStudio sends coverMediaId on CREATE when present", () => {

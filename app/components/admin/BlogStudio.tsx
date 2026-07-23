@@ -23,7 +23,7 @@ import MediaPickerDialog from "@/app/components/admin/MediaPickerDialog";
 /* -------------------------------------------------------------------------- */
 
 export type BlogMutateResult =
-  | { ok: true; outcome: string; data?: { blogId?: string; version?: number } }
+  | { ok: true; outcome: string; data?: { blogId?: string; version?: number; slug?: string } }
   | { ok: false; error: string };
 
 type Props = {
@@ -591,6 +591,7 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
     "all" | "live" | "hidden" | "draft" | "archived"
   >("all");
   const [coverImgFailed, setCoverImgFailed] = useState(false);
+  const [slugTouched, setSlugTouched] = useState(false);
 
   /* ------------------------------------------------------------------ */
   /*  Derived state                                                     */
@@ -723,6 +724,7 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
       setFormErrors(EMPTY_ERRORS);
       setIsDirty(false);
       setCoverImgFailed(false);
+      setSlugTouched(true);
     },
     [guardDirty],
   );
@@ -735,6 +737,7 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
     setFormErrors(EMPTY_ERRORS);
     setIsDirty(false);
     setCoverImgFailed(false);
+    setSlugTouched(false);
   }, [guardDirty]);
 
   const handleSave = useCallback(async () => {
@@ -744,14 +747,19 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
 
     const effectiveSlug = form.slug.trim() || slugify(form.title);
 
+    const isUpdate = isEditing && Boolean(selectedBlogId);
+    const mode = isUpdate ? "UPDATE" : "CREATE";
+
     const payload: Record<string, unknown> = {
+      action: "blog.save",
+      mode,
       title: form.title.trim(),
       slug: effectiveSlug,
       excerpt: form.excerpt.trim(),
       body: form.body.trim(),
     };
 
-    if (isEditing && selectedBlogId) {
+    if (isUpdate && selectedBlogId) {
       payload.blogId = selectedBlogId;
       payload.expectedVersion = form.expectedVersion;
 
@@ -764,15 +772,16 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
       }
     }
 
-    const result = await blogMutate({ action: "blog.save", payload });
+    const result = await blogMutate(payload);
 
     if (result.ok) {
-      if (isEditing && selectedBlogId) {
+      const serverSlug = result.data?.slug || effectiveSlug;
+      if (isUpdate && selectedBlogId) {
         const updatedVersion =
           result.data?.version ?? form.expectedVersion + 1;
         const snapshot: FormState = {
           ...form,
-          slug: effectiveSlug,
+          slug: serverSlug,
           expectedVersion: updatedVersion,
         };
         baselineRef.current = snapshot;
@@ -784,7 +793,7 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
         const updatedVersion = result.data?.version ?? 1;
         const snapshot: FormState = {
           title: form.title.trim(),
-          slug: effectiveSlug,
+          slug: serverSlug,
           excerpt: form.excerpt.trim(),
           body: form.body.trim(),
           coverMediaId: form.coverMediaId,
@@ -796,6 +805,7 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
         baselineRef.current = snapshot;
         setForm(snapshot);
         setIsDirty(false);
+        setSlugTouched(true);
         showNotice(
           "Blog created as draft. Publish it when ready.",
           "success",
@@ -844,30 +854,29 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
     [blogMutate, showNotice],
   );
 
-  const handleDelete = useCallback(
-    async (slug: string, title: string) => {
+  const handleArchive = useCallback(
+    async (blogId: string, version: number, title: string) => {
       if (
         !window.confirm(
-          `Are you sure you want to delete the blog "${title}"?`,
+          `Are you sure you want to archive the blog "${title}"?`,
         )
       )
         return;
-      const result = await blogMutate({ action: "blog.delete", slug });
+      const result = await blogMutate({
+        action: "blog.archive",
+        blogId,
+        expectedVersion: version,
+      });
       if (result.ok) {
-        showNotice("Blog deleted.", "success");
-        if (selectedBlogId) {
-          const match = resolvedBlogs.find(
-            (b) => String(b.slug) === slug && String(b.id) === selectedBlogId,
-          );
-          if (match) {
-            handleAddNew();
-          }
+        showNotice("Blog archived.", "success");
+        if (selectedBlogId === blogId) {
+          handleAddNew();
         }
       } else {
-        showNotice(result.error || "Delete failed.", "error");
+        showNotice(result.error || "Archive failed.", "error");
       }
     },
-    [blogMutate, showNotice, selectedBlogId, resolvedBlogs, handleAddNew],
+    [blogMutate, showNotice, selectedBlogId, handleAddNew],
   );
 
   const handleFormSubmit = useCallback(
@@ -1100,12 +1109,16 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
               <input
                 type="text"
                 value={form.title}
-                onChange={(e) =>
-                  markDirty({
-                    title: e.target.value,
-                    slug: slugify(e.target.value),
-                  })
-                }
+                onChange={(e) => {
+                  if (!slugTouched) {
+                    markDirty({
+                      title: e.target.value,
+                      slug: slugify(e.target.value),
+                    });
+                  } else {
+                    markDirty({ title: e.target.value });
+                  }
+                }}
                 style={
                   formErrors.title ? S.editorInputError : S.editorInput
                 }
@@ -1123,7 +1136,7 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
               <input
                 type="text"
                 value={form.slug}
-                onChange={(e) => markDirty({ slug: slugify(e.target.value) })}
+                onChange={(e) => { setSlugTouched(true); markDirty({ slug: slugify(e.target.value) }); }}
                 style={
                   formErrors.slug ? S.editorInputError : S.editorInput
                 }
@@ -1421,8 +1434,9 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
                           style={S.buttonDanger}
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleDelete(
-                              String(row.slug || ""),
+                            handleArchive(
+                              blogId,
+                              version,
                               String(row.title || "Untitled"),
                             );
                           }}

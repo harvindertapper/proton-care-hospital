@@ -37,7 +37,7 @@ export function requireAppliedMutation(
 export async function executeRoleMutation<TRevision>(input: {
   isStaff: boolean;
   createRevision: () => Promise<TRevision>;
-  applyMutation: () => Promise<{ outcome?: MutationOutcome } | void>;
+  applyMutation: () => Promise<{ outcome?: MutationOutcome } & Record<string, unknown> | void>;
 }) {
   if (input.isStaff) {
     return {
@@ -47,7 +47,8 @@ export async function executeRoleMutation<TRevision>(input: {
   }
 
   const result = await input.applyMutation();
-  return { outcome: result?.outcome || ("APPLIED" as const) };
+  const { outcome: _outcome, ...rest } = (result || {}) as { outcome?: MutationOutcome } & Record<string, unknown>;
+  return { outcome: _outcome || ("APPLIED" as const), ...rest };
 }
 
 export async function executeMediaDeletion<TAsset>(input: {

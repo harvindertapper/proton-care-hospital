@@ -208,7 +208,7 @@ test("CONC.12 — updateBlog throws MutationConflictError on version mismatch", 
 
   try {
     await updateBlog(repo, blogId, 1, {
-      title: "Updated", excerpt: "Updated", body: "Updated",
+      title: "Updated", slug: "updated-slug", excerpt: "Updated", body: "Updated",
       coverMediaId: null, coverMediaIdExplicitlyProvided: false,
     }, "test@test.com");
     assert.fail("Should have thrown");
@@ -224,7 +224,7 @@ test("CONC.13 — updateBlog succeeds on correct version", async () => {
   const repo = makeRepo(db);
 
   const result = await updateBlog(repo, blogId, 1, {
-    title: "Updated Title", excerpt: "Updated", body: "Updated body",
+    title: "Updated Title", slug: "updated-title", excerpt: "Updated", body: "Updated body",
     coverMediaId: null, coverMediaIdExplicitlyProvided: false,
   }, "test@test.com");
   assert.equal(result.outcome, "APPLIED", "updateBlog returns APPLIED");
@@ -269,7 +269,7 @@ test("CONC.15 — createBlog throws MutationConflictError on duplicate slug", as
 test("CONC.16 — applyBlog requires expectedVersion for existing blogs", () => {
   const src = fs.readFileSync(path.join(ROOT, "app", "api", "admin", "data", "route.ts"), "utf-8");
   const applyBlogBlock = src.substring(src.indexOf("async function applyBlog"), src.indexOf("async function applyCareer"));
-  assert.match(applyBlogBlock, /expectedVersion is required for existing blog posts/, "requires expectedVersion for existing");
+  assert.match(applyBlogBlock, /expectedVersion is required for (existing blog posts|UPDATE mode)/, "requires expectedVersion for existing");
 });
 
 test("CONC.17 — applyBlog no longer uses UPSERT", () => {
@@ -298,7 +298,7 @@ test("TRI.19 — coverMediaId omission preserves existing cover on update", asyn
   const repo = makeRepo(db);
 
   await updateBlog(repo, blogId, 1, {
-    title: "Updated", excerpt: "Updated", body: "Updated",
+    title: "Updated", slug: "updated-slug", excerpt: "Updated", body: "Updated",
     coverMediaId: null, coverMediaIdExplicitlyProvided: false,
   }, "test@test.com");
 
@@ -314,7 +314,7 @@ test("TRI.20 — coverMediaId null explicitly clears existing cover on update", 
   const repo = makeRepo(db);
 
   await updateBlog(repo, blogId, 1, {
-    title: "Updated", excerpt: "Updated", body: "Updated",
+    title: "Updated", slug: "updated-slug", excerpt: "Updated", body: "Updated",
     coverMediaId: null, coverMediaIdExplicitlyProvided: true,
   }, "test@test.com");
 
@@ -331,7 +331,7 @@ test("TRI.21 — coverMediaId value sets new cover on update", async () => {
   const repo = makeRepo(db);
 
   await updateBlog(repo, blogId, 1, {
-    title: "Updated", excerpt: "Updated", body: "Updated",
+    title: "Updated", slug: "updated-slug", excerpt: "Updated", body: "Updated",
     coverMediaId: media2.id, coverMediaIdExplicitlyProvided: true,
   }, "test@test.com");
 
