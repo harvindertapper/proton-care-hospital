@@ -7,7 +7,6 @@ import {
   EyeOff,
   FileText,
   LogOut,
-  Newspaper,
   ShieldCheck,
   Stethoscope,
   Upload,

@@ -3,58 +3,16 @@ import fs from "node:fs";
 import test from "node:test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DatabaseSync } from "node:sqlite";
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
-
-import {
-  createBlog,
-  updateBlog,
-  publishBlog,
-  hideBlog,
-  archiveBlog,
-  loadBlogById,
-  loadBlog,
-} from "../app/lib/blog-admin.ts";
-
-import { executeRoleMutation } from "../app/lib/mutation-result.ts";
 
 /* ═════════════════════════════════════════════════════════════════════════════
    Helpers
    ═════════════════════════════════════════════════════════════════════════════ */
 
-function readMigration(name) {
-  return fs.readFileSync(path.join(ROOT, "migrations", name), "utf-8");
-}
-
 function readSource(rel) {
   return fs.readFileSync(path.join(ROOT, rel), "utf-8");
-}
-
-function createTestDb() {
-  const db = new DatabaseSync(":memory:");
-  db.exec("PRAGMA journal_mode = WAL;");
-  db.exec("PRAGMA foreign_keys = ON;");
-  const migrations = fs.readdirSync(path.join(ROOT, "migrations")).filter((f) => f.endsWith(".sql")).sort();
-  for (const m of migrations) {
-    const sql = fs.readFileSync(path.join(ROOT, "migrations", m), "utf-8");
-    db.exec(sql);
-  }
-  return db;
-}
-
-function makeRepo(db) {
-  const query = (sql, params = []) => {
-    const stmt = db.prepare(sql);
-    return stmt.all(...params);
-  };
-  const run = (sql, params = []) => {
-    const stmt = db.prepare(sql);
-    return stmt.run(...params);
-  };
-  const audit = () => {};
-  return { query, run, audit };
 }
 
 /* ═════════════════════════════════════════════════════════════════════════════

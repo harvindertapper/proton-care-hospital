@@ -2,7 +2,6 @@
 
 import React, { useState, useCallback, useMemo } from "react";
 import {
-  Eye,
   EyeOff,
   Archive,
   ExternalLink,

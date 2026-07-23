@@ -17,7 +17,7 @@ import {
   loadBlogById,
 } from "../app/lib/blog-admin.ts";
 
-import { MutationConflictError, MutationNotFoundError } from "../app/lib/mutation-result.ts";
+import { MutationConflictError } from "../app/lib/mutation-result.ts";
 import { executeRoleMutation } from "../app/lib/mutation-result.ts";
 
 /* ═════════════════════════════════════════════════════════════════════════════
@@ -154,7 +154,7 @@ test("SLG.7 — updateBlog persists slug change in database", async () => {
 test("SLG.8 — updateBlog rejects duplicate slug from another blog", async () => {
   const db = openFullDb();
   const repo = makeRepo(db);
-  const id1 = insertBlog(db, { version: 1, slug: "slug-a" });
+  insertBlog(db, { version: 1, slug: "slug-a" });
   const id2 = insertBlog(db, { version: 1, slug: "slug-b" });
   await assert.rejects(
     () => updateBlog(repo, id2, 1, {

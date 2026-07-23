@@ -17,7 +17,6 @@ import {
   loadBlogById,
   validateBlogMediaRelation,
   validateCoverForPublication,
-  ARCHIVED_BLOG_SAVE_ERROR,
 } from "../app/lib/blog-admin.ts";
 
 import { MutationConflictError, MutationNotFoundError } from "../app/lib/mutation-result.ts";
