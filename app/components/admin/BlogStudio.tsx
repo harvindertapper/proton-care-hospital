@@ -29,6 +29,7 @@ export type BlogMutateResult =
 type Props = {
   busy: boolean;
   csrf: string;
+  role?: "SUPER_ADMIN" | "STAFF";
   blogs: Record<string, string | number | null>[];
   blogMutate: (payload: Record<string, unknown>) => Promise<BlogMutateResult>;
 };
@@ -39,6 +40,7 @@ type FormState = {
   excerpt: string;
   body: string;
   coverMediaId: string;
+  coverMediaVerified: boolean;
   expectedVersion: number;
 };
 
@@ -51,12 +53,15 @@ type FormErrors = {
 
 type Lifecycle = "live" | "hidden" | "archived" | "draft";
 
+type CoverMeta = { id: string; verified: boolean } | null;
+
 const EMPTY_FORM: FormState = {
   title: "",
   slug: "",
   excerpt: "",
   body: "",
   coverMediaId: "",
+  coverMediaVerified: false,
   expectedVersion: 0,
 };
 
@@ -68,8 +73,22 @@ const EMPTY_ERRORS: FormErrors = { title: "", slug: "", body: "", excerpt: "" };
 
 function getLifecycle(row: Record<string, string | number | null>): Lifecycle {
   if (row.is_deleted === 1) return "archived";
-  if (row.status === "APPROVED" && row.is_visible === 1) return "live";
-  if (row.status === "APPROVED" && row.is_visible === 0) return "hidden";
+  if (
+    String(row.lifecycle_status || "").toUpperCase() === "ARCHIVED"
+  ) return "archived";
+  if (
+    String(row.status || "").toUpperCase() === "APPROVED" &&
+    row.is_visible === 1 &&
+    String(row.lifecycle_status || "").toUpperCase() === "PUBLISHED"
+  ) return "live";
+  if (
+    String(row.status || "").toUpperCase() === "HIDDEN" &&
+    row.is_visible === 0
+  ) return "hidden";
+  if (
+    row.is_visible === 0 &&
+    String(row.lifecycle_status || "").toUpperCase() === "DRAFT"
+  ) return "hidden";
   return "draft";
 }
 
@@ -91,6 +110,28 @@ function formHasChanges(a: FormState, b: FormState): boolean {
     a.body.trim() !== b.body.trim() ||
     a.coverMediaId !== b.coverMediaId
   );
+}
+
+function isStaffRole(role?: string): boolean {
+  return role === "STAFF";
+}
+
+function roleLabelSave(isStaff: boolean, isEditing: boolean): string {
+  if (isStaff && isEditing) return "Submit changes for approval";
+  if (isStaff) return "Submit for approval";
+  return isEditing ? "Update Blog" : "Save Blog";
+}
+
+function roleLabelPublish(isStaff: boolean): string {
+  return isStaff ? "Propose publication" : "Publish";
+}
+
+function roleLabelHide(isStaff: boolean): string {
+  return isStaff ? "Propose hide" : "Hide";
+}
+
+function roleLabelArchive(isStaff: boolean): string {
+  return isStaff ? "Propose archive" : "Archive";
 }
 
 function formatDate(value: string | number | null): string {
@@ -574,7 +615,7 @@ const S = {
 /*                             Component                                      */
 /* -------------------------------------------------------------------------- */
 
-export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
+export default function BlogStudio({ busy, csrf, role, blogs, blogMutate }: Props) {
   /* ------------------------------------------------------------------ */
   /*  State                                                             */
   /* ------------------------------------------------------------------ */
@@ -592,6 +633,8 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
   >("all");
   const [coverImgFailed, setCoverImgFailed] = useState(false);
   const [slugTouched, setSlugTouched] = useState(false);
+  const [coverMeta, setCoverMeta] = useState<CoverMeta>(null);
+  const [pendingNotice, setPendingNotice] = useState("");
 
   /* ------------------------------------------------------------------ */
   /*  Derived state                                                     */
@@ -710,12 +753,14 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
     (row: Record<string, string | number | null>) => {
       if (!guardDirty()) return;
       const blogId = String(row.id || "");
+      const coverId = String(row.cover_media_id || "");
       const snapshot: FormState = {
         title: String(row.title || ""),
         slug: String(row.slug || ""),
         excerpt: String(row.excerpt || ""),
         body: String(row.body || ""),
-        coverMediaId: String(row.cover_media_id || ""),
+        coverMediaId: coverId,
+        coverMediaVerified: Boolean(coverId),
         expectedVersion: Number(row.version || 0),
       };
       setSelectedBlogId(blogId);
@@ -725,6 +770,8 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
       setIsDirty(false);
       setCoverImgFailed(false);
       setSlugTouched(true);
+      setCoverMeta(coverId ? { id: coverId, verified: true } : null);
+      setPendingNotice("");
     },
     [guardDirty],
   );
@@ -738,6 +785,8 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
     setIsDirty(false);
     setCoverImgFailed(false);
     setSlugTouched(false);
+    setCoverMeta(null);
+    setPendingNotice("");
   }, [guardDirty]);
 
   const handleSave = useCallback(async () => {
@@ -773,48 +822,70 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
     }
 
     const result = await blogMutate(payload);
+    const staff = isStaffRole(role);
 
     if (result.ok) {
+      const outcome = String(result.outcome || "APPLIED").toUpperCase();
+
+      if (outcome === "PENDING_APPROVAL" || outcome === "NO_OP" && staff) {
+        const msg = staff
+          ? "Change submitted for Super Admin approval."
+          : "Blog updated.";
+        setPendingNotice(msg);
+        showNotice(msg, "success");
+        return;
+      }
+
+      if (outcome === "NO_OP") {
+        showNotice("Blog is already in this state.", "success");
+        return;
+      }
+
+      const serverBlogId = result.data?.blogId;
+      const serverVersion = result.data?.version;
       const serverSlug = result.data?.slug || effectiveSlug;
+
       if (isUpdate && selectedBlogId) {
-        const updatedVersion =
-          result.data?.version ?? form.expectedVersion + 1;
+        const updatedVersion = serverVersion ?? form.expectedVersion + 1;
         const snapshot: FormState = {
           ...form,
           slug: serverSlug,
           expectedVersion: updatedVersion,
+          coverMediaVerified: true,
         };
         baselineRef.current = snapshot;
         setForm(snapshot);
         setIsDirty(false);
         showNotice("Blog updated successfully.", "success");
       } else {
-        const newBlogId = result.data?.blogId || "";
-        const updatedVersion = result.data?.version ?? 1;
+        if (!serverBlogId) {
+          showNotice("Save succeeded but server did not return a blog ID. Refresh and verify.", "error");
+          return;
+        }
+        const updatedVersion = serverVersion ?? 1;
         const snapshot: FormState = {
           title: form.title.trim(),
           slug: serverSlug,
           excerpt: form.excerpt.trim(),
           body: form.body.trim(),
           coverMediaId: form.coverMediaId,
+          coverMediaVerified: Boolean(form.coverMediaId),
           expectedVersion: updatedVersion,
         };
-        if (newBlogId) {
-          setSelectedBlogId(newBlogId);
-        }
+        setSelectedBlogId(serverBlogId);
         baselineRef.current = snapshot;
         setForm(snapshot);
         setIsDirty(false);
         setSlugTouched(true);
         showNotice(
-          "Blog created as draft. Publish it when ready.",
+          staff ? "Blog submitted for approval." : "Blog created as draft. Publish it when ready.",
           "success",
         );
       }
     } else {
       showNotice(result.error || "Save failed.", "error");
     }
-  }, [form, isEditing, selectedBlogId, blogMutate, showNotice]);
+  }, [form, isEditing, selectedBlogId, blogMutate, showNotice, role]);
 
   const handlePublish = useCallback(
     async (blogId: string, version: number) => {
@@ -822,17 +893,21 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
         action: "blog.visibility",
         payload: { blogId, action: "publish", expectedVersion: version },
       });
+      const staff = isStaffRole(role);
       if (result.ok) {
-        if (result.outcome === "NO_OP") {
+        const outcome = String(result.outcome || "APPLIED").toUpperCase();
+        if (outcome === "NO_OP") {
           showNotice("Blog is already published.", "success");
+        } else if (outcome === "PENDING_APPROVAL") {
+          showNotice("Publication submitted for Super Admin approval.", "success");
         } else {
-          showNotice("Blog published.", "success");
+          showNotice(staff ? "Publication submitted for approval." : "Blog published.", "success");
         }
       } else {
         showNotice(result.error || "Publish failed.", "error");
       }
     },
-    [blogMutate, showNotice],
+    [blogMutate, showNotice, role],
   );
 
   const handleHide = useCallback(
@@ -841,17 +916,21 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
         action: "blog.visibility",
         payload: { blogId, action: "hide", expectedVersion: version },
       });
+      const staff = isStaffRole(role);
       if (result.ok) {
-        if (result.outcome === "NO_OP") {
+        const outcome = String(result.outcome || "APPLIED").toUpperCase();
+        if (outcome === "NO_OP") {
           showNotice("Blog is already hidden.", "success");
+        } else if (outcome === "PENDING_APPROVAL") {
+          showNotice("Hide submitted for Super Admin approval.", "success");
         } else {
-          showNotice("Blog hidden.", "success");
+          showNotice(staff ? "Hide submitted for approval." : "Blog hidden.", "success");
         }
       } else {
         showNotice(result.error || "Hide failed.", "error");
       }
     },
-    [blogMutate, showNotice],
+    [blogMutate, showNotice, role],
   );
 
   const handleArchive = useCallback(
@@ -867,16 +946,22 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
         blogId,
         expectedVersion: version,
       });
+      const staff = isStaffRole(role);
       if (result.ok) {
-        showNotice("Blog archived.", "success");
-        if (selectedBlogId === blogId) {
+        const outcome = String(result.outcome || "APPLIED").toUpperCase();
+        if (outcome === "PENDING_APPROVAL") {
+          showNotice("Archive submitted for Super Admin approval.", "success");
+        } else {
+          showNotice(staff ? "Archive submitted for approval." : "Blog archived.", "success");
+        }
+        if (selectedBlogId === blogId && !staff) {
           handleAddNew();
         }
       } else {
         showNotice(result.error || "Archive failed.", "error");
       }
     },
-    [blogMutate, showNotice, selectedBlogId, handleAddNew],
+    [blogMutate, showNotice, selectedBlogId, handleAddNew, role],
   );
 
   const handleFormSubmit = useCallback(
@@ -893,6 +978,7 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
 
   React.useEffect(() => {
     if (!selectedBlogId) return;
+    if (pendingNotice) return;
     const match = blogs.find((b) => String(b.id) === selectedBlogId);
     if (match) {
       const freshVersion = Number(match.version || 0);
@@ -907,7 +993,7 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
         });
       }
     }
-  }, [blogs, selectedBlogId]);
+  }, [blogs, selectedBlogId, pendingNotice]);
 
   /* ------------------------------------------------------------------ */
   /*  Render                                                            */
@@ -1102,6 +1188,23 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
             </div>
           )}
 
+          {pendingNotice && (
+            <div
+              style={{
+                background: "#fefce8",
+                color: "#854d0e",
+                padding: "10px 14px",
+                borderRadius: 10,
+                fontSize: 13,
+                fontWeight: 500,
+                marginBottom: 16,
+                border: "1px solid #fde68a",
+              }}
+            >
+              {pendingNotice}
+            </div>
+          )}
+
           <form onSubmit={handleFormSubmit}>
             {/* Title */}
             <label style={S.editorLabel}>
@@ -1208,13 +1311,18 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
                   style={{
                     ...S.coverPreview,
                     display: "flex",
+                    flexDirection: "column",
                     alignItems: "center",
                     justifyContent: "center",
-                    background: "#f1f5f9",
-                    paddingTop: 60,
+                    background: "#fef2f2",
+                    paddingTop: 40,
+                    gap: 6,
                   }}
                 >
-                  <ImageIcon size={32} color="#94a3b8" />
+                  <ImageIcon size={32} color="#dc2626" />
+                  <span style={{ fontSize: 12, color: "#dc2626", fontWeight: 500 }}>
+                    Selected cover is unavailable.
+                  </span>
                 </div>
               ) : (
                 <div
@@ -1254,8 +1362,9 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
                     type="button"
                     style={S.buttonDanger}
                     onClick={() => {
-                      markDirty({ coverMediaId: "" });
+                      markDirty({ coverMediaId: "", coverMediaVerified: false });
                       setCoverImgFailed(false);
+                      setCoverMeta(null);
                     }}
                     disabled={busy}
                   >
@@ -1272,7 +1381,7 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
               disabled={!canSave}
             >
               <Newspaper size={16} />
-              {isEditing ? "Update Blog" : "Save Blog"}
+              {roleLabelSave(isStaffRole(role), isEditing)}
             </button>
           </form>
         </div>
@@ -1405,9 +1514,9 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
                             handlePublish(blogId, version);
                           }}
                           disabled={busy}
-                          aria-label={`Publish ${row.title}`}
+                          aria-label={`${roleLabelPublish(isStaffRole(role))} ${row.title}`}
                         >
-                          <CheckCircle size={14} /> Publish
+                          <CheckCircle size={14} /> {roleLabelPublish(isStaffRole(role))}
                         </button>
                       )}
 
@@ -1421,9 +1530,9 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
                             handleHide(blogId, version);
                           }}
                           disabled={busy}
-                          aria-label={`Hide ${row.title}`}
+                          aria-label={`${roleLabelHide(isStaffRole(role))} ${row.title}`}
                         >
-                          <EyeOff size={14} /> Hide
+                          <EyeOff size={14} /> {roleLabelHide(isStaffRole(role))}
                         </button>
                       )}
 
@@ -1441,9 +1550,9 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
                             );
                           }}
                           disabled={busy}
-                          aria-label={`Archive ${row.title}`}
+                          aria-label={`${roleLabelArchive(isStaffRole(role))} ${row.title}`}
                         >
-                          <Archive size={14} /> Archive
+                          <Archive size={14} /> {roleLabelArchive(isStaffRole(role))}
                         </button>
                       )}
 
@@ -1481,8 +1590,9 @@ export default function BlogStudio({ busy, csrf, blogs, blogMutate }: Props) {
           selectedId={form.coverMediaId || null}
           onClose={() => setShowCoverPicker(false)}
           onSelect={(asset) => {
-            markDirty({ coverMediaId: asset.id });
+            markDirty({ coverMediaId: asset.id, coverMediaVerified: true });
             setCoverImgFailed(false);
+            setCoverMeta({ id: asset.id, verified: true });
             setShowCoverPicker(false);
           }}
         />

@@ -303,6 +303,10 @@ async function applyBlog(payload: Record<string, unknown>, actorEmail: string) {
     throw new MutationConflictError("A blog with this slug already exists. Use UPDATE mode.");
   }
 
+  if (typeof payload.blogId === "string" && payload.blogId.trim()) {
+    throw new Error("blogId must not be provided for CREATE mode.");
+  }
+
   if (!Number.isNaN(expectedVersion) && expectedVersion > 0) {
     throw new MutationConflictError("Blog post was created by another session. Refresh and try again.");
   }
@@ -974,7 +978,20 @@ export async function POST(request: Request) {
       clean(payload.id, 180) ||
       action;
     const entityType = action.split(".")[0] || "content";
-    const entityId = clean(payload.slug, 120) || clean(payload.departmentSlug, 120) || clean(payload.id, 120) || crypto.randomUUID();
+
+    let entityId: string;
+    if (action === "blog.save" || action === "blog.visibility" || action === "blog.archive") {
+      const blogId = typeof payload.blogId === "string" ? clean(payload.blogId, 140) || "" : "";
+      if (blogId) {
+        entityId = blogId;
+      } else if (action === "blog.save" && clean(payload.mode, 10).toUpperCase() === "CREATE") {
+        entityId = crypto.randomUUID();
+      } else {
+        entityId = clean(payload.slug, 120) || crypto.randomUUID();
+      }
+    } else {
+      entityId = clean(payload.slug, 120) || clean(payload.departmentSlug, 120) || clean(payload.id, 120) || crypto.randomUUID();
+    }
 
     const preCheck = validatePayload(action, payload);
     if (!preCheck.ok) {
@@ -1033,41 +1050,27 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (typeof obj.body !== "string" || !obj.body.trim()) return { ok: false, error: "Blog body is required." };
     if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Blog slug is required." };
     if (clean(obj.mode, 10).toUpperCase() === "UPDATE" && (typeof obj.blogId !== "string" || !obj.blogId.trim())) return { ok: false, error: "blogId is required for UPDATE mode." };
-    if (obj.coverMediaId !== undefined && obj.coverMediaId !== null && obj.coverMediaId !== "") {
-      if (typeof obj.coverMediaId !== "string" || obj.coverMediaId.length > 140) return { ok: false, error: "coverMediaId must be a string of at most 140 characters." };
-    }
-    if (obj.expectedVersion !== undefined) {
-      if (typeof obj.expectedVersion !== "number" || Number.isNaN(parseExpectedVersion(obj.expectedVersion))) return { ok: false, error: "expectedVersion must be a non-negative integer." };
-    }
+    if (obj.coverMediaId != null && obj.coverMediaId !== "" && (typeof obj.coverMediaId !== "string" || obj.coverMediaId.length > 140)) return { ok: false, error: "coverMediaId must be a string of at most 140 characters." };
+    if (clean(obj.mode, 10).toUpperCase() === "UPDATE" && (typeof obj.expectedVersion !== "number" || Number.isNaN(parseExpectedVersion(obj.expectedVersion, { minimum: 1 })))) return { ok: false, error: "expectedVersion must be a positive integer for UPDATE mode." };
   } else if (action === "blog.visibility") {
     if (typeof obj.blogId !== "string" || !obj.blogId.trim()) return { ok: false, error: "blogId is required." };
-    if (typeof obj.expectedVersion !== "number" || Number.isNaN(parseExpectedVersion(obj.expectedVersion, { minimum: 1 }))) {
-      return { ok: false, error: "expectedVersion must be a positive integer." };
-    }
-    if (typeof obj.action !== "string" || !["publish", "hide"].includes(clean(obj.action, 40).toLowerCase())) {
-      return { ok: false, error: "action must be 'publish' or 'hide'." };
-    }
+    if (typeof obj.expectedVersion !== "number" || Number.isNaN(parseExpectedVersion(obj.expectedVersion, { minimum: 1 }))) return { ok: false, error: "expectedVersion must be a positive integer." };
+    if (typeof obj.action !== "string" || !["publish", "hide"].includes(clean(obj.action, 40).toLowerCase())) return { ok: false, error: "action must be 'publish' or 'hide'." };
   } else if (action === "blog.archive") {
     if (typeof obj.blogId !== "string" || !obj.blogId.trim()) return { ok: false, error: "blogId is required." };
-    if (typeof obj.expectedVersion !== "number" || Number.isNaN(parseExpectedVersion(obj.expectedVersion, { minimum: 1 }))) {
-      return { ok: false, error: "expectedVersion must be a positive integer." };
-    }
+    if (typeof obj.expectedVersion !== "number" || Number.isNaN(parseExpectedVersion(obj.expectedVersion, { minimum: 1 }))) return { ok: false, error: "expectedVersion must be a positive integer." };
   } else if (action === "career.save") {
     if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Job title is required." };
     if (typeof obj.description !== "string" || !obj.description.trim()) return { ok: false, error: "Job description is required." };
     if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Job slug is required." };
   } else if (action === "video.save") {
-    if (typeof obj.mode !== "string" || !["CREATE", "UPDATE"].includes(clean(obj.mode, 10).toUpperCase())) {
-      return { ok: false, error: "mode must be 'CREATE' or 'UPDATE'." };
-    }
+    if (typeof obj.mode !== "string" || !["CREATE", "UPDATE"].includes(clean(obj.mode, 10).toUpperCase())) return { ok: false, error: "mode must be 'CREATE' or 'UPDATE'." };
     if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Video title is required." };
     if (typeof obj.youtubeUrl !== "string" || !obj.youtubeUrl.trim()) return { ok: false, error: "YouTube URL is required." };
     if (typeof obj.consentNote !== "string" || obj.consentNote.trim().length < 5) return { ok: false, error: "Consent note must be at least 5 characters." };
   } else if (action === "video.visibility") {
     if (typeof obj.id !== "string" || !obj.id.trim()) return { ok: false, error: "Video ID is required." };
-    if (typeof obj.action !== "string" || !["publish", "hide"].includes(clean(obj.action, 40).toLowerCase())) {
-      return { ok: false, error: "action must be 'publish' or 'hide'." };
-    }
+    if (typeof obj.action !== "string" || !["publish", "hide"].includes(clean(obj.action, 40).toLowerCase())) return { ok: false, error: "action must be 'publish' or 'hide'." };
   } else if (action === "video.delete") {
     if (typeof obj.id !== "string" || !obj.id.trim()) return { ok: false, error: "Video ID is required." };
   } else if (action === "video.restore") {

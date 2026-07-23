@@ -1319,6 +1319,7 @@ export function AdminConsole({
           <BlogStudio
             busy={busy}
             csrf={session.csrf}
+            role={session.role}
             blogs={adminData.blogs}
             blogMutate={blogMutate}
           />
