@@ -679,11 +679,11 @@ export default function PatientVideoStudio({
     return resolveYouTubeIdWithType({ youtubeUrl: form.youtubeUrl });
   }, [form.youtubeUrl]);
 
-  const prevResolvedIdRef = useRef<string | null | undefined>(null);
-  if (prevResolvedIdRef.current !== resolved?.id) {
-    prevResolvedIdRef.current = resolved?.id;
+  /* eslint-disable react-hooks/set-state-in-effect -- intentional: reset thumbnail failure on video ID change */
+  useEffect(() => {
     setEditorThumbFailed(false);
-  }
+  }, [resolved?.id]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   /* ------------------------------------------------------------------ */
   /*  Notice helper                                                     */

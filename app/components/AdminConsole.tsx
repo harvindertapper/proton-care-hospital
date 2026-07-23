@@ -733,14 +733,12 @@ export function AdminConsole({
     payload: Record<string, unknown>,
   ): Promise<{ ok: boolean; outcome?: string; error?: string }> {
     setBusy(true);
-    setNotice("");
     try {
       const result = await postAdmin(session.csrf, payload);
       await refreshData(true);
       return { ok: true, outcome: String(result.outcome || "APPLIED") };
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Admin action failed.";
-      setNotice(msg);
       await refreshData(true);
       return { ok: false, error: msg };
     } finally {

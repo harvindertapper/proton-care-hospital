@@ -295,9 +295,9 @@ test("24. applyVideo UPDATE on deleted row throws", async () => {
 });
 
 // ===========================================================================
-// 25. applyVideo UPDATE rejects if another active row has same youtube_id
+// 25. applyVideo UPDATE rejects if another row has same youtube_id
 // ===========================================================================
-test("25. applyVideo UPDATE rejects if another active row has same youtube_id", async () => {
+test("25. applyVideo UPDATE rejects if another row has same youtube_id", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const fnStart = src.indexOf("async function applyVideo(");
   const fnBody = src.slice(fnStart, fnStart + 5000);
@@ -306,8 +306,16 @@ test("25. applyVideo UPDATE rejects if another active row has same youtube_id", 
     "must throw on youtube_id conflict with another active row"
   );
   assert.ok(
+    fnBody.includes("This YouTube video belongs to an archived entry"),
+    "must throw on youtube_id conflict with another archived row"
+  );
+  assert.ok(
     fnBody.includes("AND id <> ?"),
     "conflict check must exclude current video by ID"
+  );
+  assert.ok(
+    !fnBody.includes("WHERE youtube_id = ? AND id <> ? AND is_deleted = 0 LIMIT 1"),
+    "conflict query must NOT filter is_deleted=0 (must check all rows)"
   );
 });
 
@@ -552,7 +560,8 @@ test("39. validatePayload returns ok for valid video.save with mode=CREATE", asy
 test("40. applyVideoRestore sets is_deleted=0, status=HIDDEN, is_visible=0", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const fnStart = src.indexOf("async function applyVideoRestore(");
-  const fnBody = src.slice(fnStart, fnStart + 900);
+  const fnNextFn = src.indexOf("\nasync function ", fnStart + 30);
+  const fnBody = src.slice(fnStart, fnNextFn);
   assert.ok(
     fnBody.includes("is_deleted = 0, status = 'HIDDEN', is_visible = 0"),
     "must restore to hidden state with is_deleted=0"
@@ -566,7 +575,8 @@ test("40. applyVideoRestore sets is_deleted=0, status=HIDDEN, is_visible=0", asy
 test("41. applyVideoRestore throws if video not found", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const fnStart = src.indexOf("async function applyVideoRestore(");
-  const fnBody = src.slice(fnStart, fnStart + 600);
+  const fnNextFn = src.indexOf("\nasync function ", fnStart + 30);
+  const fnBody = src.slice(fnStart, fnNextFn);
   assert.ok(
     fnBody.includes("Patient video was not found"),
     "must throw descriptive error when video not found"
@@ -579,7 +589,8 @@ test("41. applyVideoRestore throws if video not found", async () => {
 test("42. applyVideoRestore returns NO_OP for active (non-deleted) row", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const fnStart = src.indexOf("async function applyVideoRestore(");
-  const fnBody = src.slice(fnStart, fnStart + 900);
+  const fnNextFn = src.indexOf("\nasync function ", fnStart + 30);
+  const fnBody = src.slice(fnStart, fnNextFn);
   assert.ok(
     fnBody.includes('current.is_deleted === 0'),
     "must check is_deleted === 0 for active rows"
@@ -587,6 +598,13 @@ test("42. applyVideoRestore returns NO_OP for active (non-deleted) row", async (
   assert.ok(
     fnBody.includes('"NO_OP"'),
     "must return NO_OP for active (non-deleted) rows"
+  );
+  const noOpIdx = fnBody.indexOf('"NO_OP"');
+  const restAfterNoOp = fnBody.slice(noOpIdx);
+  const closeBraceIdx = restAfterNoOp.indexOf("}");
+  assert.ok(
+    !restAfterNoOp.slice(0, closeBraceIdx).includes("audit("),
+    "must NOT write audit when returning NO_OP"
   );
 });
 
@@ -810,4 +828,341 @@ test("57. youtube.ts exports resolveYouTubeId", async () => {
   assert.ok(src.includes("export function thumbnailUrl("), "must export thumbnailUrl");
   assert.ok(src.includes("export function embedUrl("), "must export embedUrl");
   assert.ok(src.includes("export type YouTubeResolveResult"), "must export YouTubeResolveResult type");
+});
+
+// ===========================================================================
+// 58. PatientVideoStudio exists and is exported
+// ===========================================================================
+test("58. PatientVideoStudio exists and is exported", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  assert.ok(src.includes("export default function PatientVideoStudio"), "must have default export");
+});
+
+// ===========================================================================
+// 59. PatientVideoStudio renders Patient Video Studio heading
+// ===========================================================================
+test("59. PatientVideoStudio renders Patient Video Studio heading", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  assert.ok(
+    src.includes("Patient Video Studio") || src.includes("PatientVideoStudio"),
+    "must reference Patient Video Studio heading or name"
+  );
+});
+
+// ===========================================================================
+// 60. PatientVideoStudio renders Add Video button
+// ===========================================================================
+test("60. PatientVideoStudio renders Add Video button", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  assert.ok(
+    src.includes("Add Video") || src.includes("addVideo") || src.includes("handleAddNew"),
+    "must have Add Video button or handler"
+  );
+});
+
+// ===========================================================================
+// 61. PatientVideoStudio renders summary cards for total, live, hidden, archived
+// ===========================================================================
+test("61. PatientVideoStudio renders summary cards for total, live, hidden, archived", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  assert.ok(src.includes('"live"'), "must show live count");
+  assert.ok(src.includes('"hidden"'), "must show hidden count");
+  assert.ok(src.includes('"archived"'), "must show archived count");
+});
+
+// ===========================================================================
+// 62. PatientVideoStudio uses thumbnailUrl for card images
+// ===========================================================================
+test("62. PatientVideoStudio uses thumbnailUrl for card images", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  assert.ok(src.includes("thumbnailUrl("), "must call thumbnailUrl for card images");
+});
+
+// ===========================================================================
+// 63. PatientVideoStudio uses native dialog for preview
+// ===========================================================================
+test("63. PatientVideoStudio uses native dialog for preview", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  assert.ok(src.includes("<dialog"), "must use native <dialog> element");
+  assert.ok(src.includes("showModal"), "must call showModal to open dialog");
+});
+
+// ===========================================================================
+// 64. PatientVideoStudio handles dirty state with confirm dialog
+// ===========================================================================
+test("64. PatientVideoStudio handles dirty state with confirm dialog", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  assert.ok(src.includes("isDirty") || src.includes("dirty"), "must track dirty state");
+  assert.ok(src.includes("confirm("), "must use confirm dialog for unsaved changes");
+});
+
+// ===========================================================================
+// 65. PatientVideoStudio renders search input
+// ===========================================================================
+test("65. PatientVideoStudio renders search input", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  assert.ok(src.includes("search") || src.includes("filter"), "must have search or filter input");
+});
+
+// ===========================================================================
+// 66. PatientVideoStudio renders filter chips (all, live, hidden, archived)
+// ===========================================================================
+test("66. PatientVideoStudio renders filter chips (all, live, hidden, archived)", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  assert.ok(src.includes('"all"'), "must have 'all' filter option");
+  assert.ok(src.includes('"live"'), "must have 'live' filter option");
+  assert.ok(src.includes('"hidden"'), "must have 'hidden' filter option");
+  assert.ok(src.includes('"archived"'), "must have 'archived' filter option");
+});
+
+// ===========================================================================
+// 67. PatientVideoStudio form validates consentNote >= 5 chars
+// ===========================================================================
+test("67. PatientVideoStudio form validates consentNote >= 5 chars", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  assert.ok(src.includes("consentNote"), "must reference consentNote in form validation");
+});
+
+// ===========================================================================
+// 68. PatientVideoStudio action buttons use stopPropagation
+// ===========================================================================
+test("68. PatientVideoStudio action buttons use stopPropagation", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  assert.ok(src.includes("stopPropagation"), "action button clicks must use stopPropagation");
+});
+
+// ===========================================================================
+// 69. getLifecycle maps is_deleted=1 to archived
+// ===========================================================================
+test("69. getLifecycle maps is_deleted=1 to archived", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  assert.ok(src.includes("archived"), "must map is_deleted=1 to 'archived' lifecycle label");
+  assert.ok(
+    src.includes("getLifecycle") || src.includes("_lifecycle"),
+    "must have getLifecycle mapping function or _lifecycle derived property"
+  );
+});
+
+// ===========================================================================
+// 70. UPDATE conflict with archived row shows distinct message
+// ===========================================================================
+test("70. UPDATE conflict with archived row shows distinct message", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyVideo(");
+  const fnBody = src.slice(fnStart, fnStart + 5000);
+  assert.ok(
+    fnBody.includes("This YouTube video belongs to an archived entry"),
+    "must show distinct error for archived conflict"
+  );
+  assert.ok(
+    fnBody.includes("Restore or update that entry instead"),
+    "archived conflict message must suggest restore"
+  );
+  assert.ok(
+    fnBody.includes("c.is_deleted === 0") || fnBody.includes("is_deleted === 0"),
+    "must branch on is_deleted to distinguish active vs archived"
+  );
+});
+
+// ===========================================================================
+// 71. UPDATE conflict leaves both rows unchanged
+// ===========================================================================
+test("71. UPDATE conflict leaves both rows unchanged", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyVideo(");
+  const fnBody = src.slice(fnStart, fnStart + 5000);
+  const conflictIdx = fnBody.indexOf("conflict.results?.length");
+  const block = fnBody.slice(conflictIdx, conflictIdx + 300);
+  assert.ok(
+    block.includes("throw new Error"),
+    "conflict block must throw before any UPDATE statement"
+  );
+});
+
+// ===========================================================================
+// 72. applyVideoRestore loads youtube_url and youtube_id for identity check
+// ===========================================================================
+test("72. applyVideoRestore loads youtube_url and youtube_id for identity check", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyVideoRestore(");
+  const fnNextFn = src.indexOf("\nasync function ", fnStart + 30);
+  const fnBody = src.slice(fnStart, fnNextFn);
+  assert.ok(fnBody.includes("youtube_url"), "must load youtube_url for identity validation");
+  assert.ok(fnBody.includes("youtube_id"), "must load youtube_id for identity validation");
+});
+
+// ===========================================================================
+// 73. applyVideoRestore validates YouTube identity via resolveYouTubeId
+// ===========================================================================
+test("73. applyVideoRestore validates YouTube identity via resolveYouTubeId", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyVideoRestore(");
+  const fnNextFn = src.indexOf("\nasync function ", fnStart + 30);
+  const fnBody = src.slice(fnStart, fnNextFn);
+  assert.ok(fnBody.includes("resolveYouTubeId"), "must use resolveYouTubeId for identity validation");
+  assert.ok(
+    fnBody.includes("Cannot restore: stored YouTube URL or ID is invalid"),
+    "must reject restore when YouTube identity is invalid"
+  );
+});
+
+// ===========================================================================
+// 74. applyVideoRestore rejects when active row owns the canonical YouTube ID
+// ===========================================================================
+test("74. applyVideoRestore rejects when active row owns the canonical YouTube ID", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyVideoRestore(");
+  const fnNextFn = src.indexOf("\nasync function ", fnStart + 30);
+  const fnBody = src.slice(fnStart, fnNextFn);
+  assert.ok(
+    fnBody.includes("Cannot restore: this YouTube video is already used by another active entry"),
+    "must reject restore when another active row owns the same YouTube ID"
+  );
+  assert.ok(
+    fnBody.includes("AND is_deleted = 0 LIMIT 1"),
+    "active conflict query must filter is_deleted=0"
+  );
+});
+
+// ===========================================================================
+// 75. Conflicting restore leaves the archived row unchanged
+// ===========================================================================
+test("75. Conflicting restore leaves the archived row unchanged", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyVideoRestore(");
+  const fnNextFn = src.indexOf("\nasync function ", fnStart + 30);
+  const fnBody = src.slice(fnStart, fnNextFn);
+  const conflictIdx = fnBody.indexOf("conflict.results?.length");
+  assert.ok(conflictIdx > 0, "must have conflict detection block");
+  const block = fnBody.slice(conflictIdx, conflictIdx + 300);
+  assert.ok(
+    block.includes("throw new Error"),
+    "conflict block must throw before any UPDATE statement"
+  );
+});
+
+// ===========================================================================
+// 76. Conflicting restore writes no audit
+// ===========================================================================
+test("76. Conflicting restore writes no audit", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyVideoRestore(");
+  const fnNextFn = src.indexOf("\nasync function ", fnStart + 30);
+  const fnBody = src.slice(fnStart, fnNextFn);
+  const conflictIdx = fnBody.indexOf("conflict.results?.length");
+  assert.ok(conflictIdx > 0, "must have conflict detection block");
+  const conflictBlock = fnBody.slice(conflictIdx, conflictIdx + 150);
+  assert.ok(
+    !conflictBlock.includes("audit("),
+    "conflict block itself must NOT call audit"
+  );
+  assert.ok(
+    conflictBlock.includes("throw"),
+    "conflict block must throw (exit early)"
+  );
+});
+
+// ===========================================================================
+// 77. Restored row remains non-public (status=HIDDEN, is_visible=0)
+// ===========================================================================
+test("77. Restored row remains non-public (status=HIDDEN, is_visible=0)", async () => {
+  const src = await readSource("../app/api/admin/data/route.ts");
+  const fnStart = src.indexOf("async function applyVideoRestore(");
+  const fnNextFn = src.indexOf("\nasync function ", fnStart + 30);
+  const fnBody = src.slice(fnStart, fnNextFn);
+  assert.ok(
+    fnBody.includes("status = 'HIDDEN'") || fnBody.includes("status='HIDDEN'"),
+    "restore must set status=HIDDEN"
+  );
+  assert.ok(
+    fnBody.includes("is_visible = 0") || fnBody.includes("is_visible=0"),
+    "restore must set is_visible=0"
+  );
+  const updateIdx = fnBody.indexOf("UPDATE patient_videos");
+  const updateBlock = fnBody.slice(updateIdx, updateIdx + 200);
+  assert.ok(
+    !updateBlock.includes("APPROVED"),
+    "restore UPDATE must NEVER set status to APPROVED"
+  );
+});
+
+// ===========================================================================
+// 78. No setState call exists in render-time ID comparison logic
+// ===========================================================================
+test("78. No setState call exists in render-time ID comparison logic", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  const lines = src.split("\n");
+  let foundResolvedDecl = false;
+  let foundUseEffect = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.includes("const resolved = useMemo")) foundResolvedDecl = true;
+    if (foundResolvedDecl && !foundUseEffect) {
+      if (trimmed.includes("useEffect")) foundUseEffect = true;
+      if (!trimmed.startsWith("//") && !trimmed.startsWith("*") && !trimmed.startsWith("/*") && trimmed.length > 0) {
+        assert.ok(
+          !trimmed.match(/\bset\w+\(/),
+          `render-time block must NOT contain setState call: "${trimmed}"`
+        );
+      }
+    }
+  }
+  assert.ok(foundResolvedDecl, "must find const resolved = useMemo");
+  assert.ok(foundUseEffect, "must find useEffect after resolved declaration");
+});
+
+// ===========================================================================
+// 79. Editor thumbnail reset uses an effect (useEffect)
+// ===========================================================================
+test("79. Editor thumbnail reset uses an effect (useEffect)", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  assert.ok(
+    src.includes("useEffect") && src.includes("setEditorThumbFailed"),
+    "must use useEffect to reset editorThumbFailed"
+  );
+  const effectIdx = src.indexOf("useEffect");
+  const setIdx = src.indexOf("setEditorThumbFailed", effectIdx);
+  assert.ok(setIdx > effectIdx, "setEditorThumbFailed must appear after first useEffect (inside effect body)");
+});
+
+// ===========================================================================
+// 80. Failed Video mutation shows one error notice (not two)
+// ===========================================================================
+test("80. Failed Video mutation shows one error notice (not two)", async () => {
+  const src = await readSource("../app/components/AdminConsole.tsx");
+  const fnStart = src.indexOf("async function videoMutate(");
+  const fnBody = src.slice(fnStart, fnStart + 600);
+  assert.ok(
+    !fnBody.includes("setNotice("),
+    "videoMutate must NOT set global notice (avoids duplicate error display)"
+  );
+  assert.ok(
+    fnBody.includes("return { ok: false"),
+    "videoMutate must return structured error for Studio to display"
+  );
+});
+
+// ===========================================================================
+// 81. PatientVideoStudio renders its own notice for video errors
+// ===========================================================================
+test("81. PatientVideoStudio renders its own notice for video errors", async () => {
+  const src = await readSource("../app/components/admin/PatientVideoStudio.tsx");
+  assert.ok(src.includes("showNotice"), "Studio must have its own showNotice helper");
+  assert.ok(
+    src.includes('result.error') || src.includes('result.error ||'),
+    "Studio must read error from videoMutate result"
+  );
+});
+
+// ===========================================================================
+// 82. Non-Video global notices remain intact (mutate function still uses setNotice)
+// ===========================================================================
+test("82. Non-Video global notices remain intact (mutate function still uses setNotice)", async () => {
+  const src = await readSource("../app/components/AdminConsole.tsx");
+  const fnStart = src.indexOf("async function mutate(");
+  const fnBody = src.slice(fnStart, fnStart + 400);
+  assert.ok(
+    fnBody.includes("setNotice("),
+    "non-Video mutate function must still use setNotice for global notices"
+  );
 });

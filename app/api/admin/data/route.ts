@@ -385,12 +385,16 @@ async function applyVideo(payload: Record<string, unknown>, actorEmail: string) 
       throw new Error("Cannot edit an archived video. Restore it first.");
     }
     const conflict = await query(
-      "SELECT id FROM patient_videos WHERE youtube_id = ? AND id <> ? AND is_deleted = 0 LIMIT 1",
+      "SELECT id, is_deleted FROM patient_videos WHERE youtube_id = ? AND id <> ? LIMIT 1",
       youtubeId,
       id,
     );
     if (conflict.results?.length) {
-      throw new Error("Another active video already uses this YouTube URL.");
+      const c = conflict.results[0] as { id: string; is_deleted: number };
+      if (c.is_deleted === 0) {
+        throw new Error("Another active video already uses this YouTube URL.");
+      }
+      throw new Error("This YouTube video belongs to an archived entry. Restore or update that entry instead.");
     }
     const result = await run(
       "UPDATE patient_videos SET title = ?, youtube_url = ?, youtube_id = ?, consent_note = ? WHERE id = ? AND is_deleted = 0",
@@ -558,8 +562,10 @@ async function applyVideoVisibility(payload: Record<string, unknown>, actorEmail
 async function applyVideoRestore(payload: Record<string, unknown>, actorEmail: string) {
   const id = clean(payload.id, 120);
   if (!id) throw new Error("Video ID is required.");
-  const rows = await query<{ id: string; is_deleted: number; status: string; is_visible: number }>(
-    "SELECT id, is_deleted, status, is_visible FROM patient_videos WHERE id = ? LIMIT 1",
+  const rows = await query<{
+    id: string; youtube_url: string; youtube_id: string; is_deleted: number; status: string; is_visible: number;
+  }>(
+    "SELECT id, youtube_url, youtube_id, is_deleted, status, is_visible FROM patient_videos WHERE id = ? LIMIT 1",
     id,
   );
   if (!rows.results?.length) throw new Error("Patient video was not found.");
@@ -567,6 +573,21 @@ async function applyVideoRestore(payload: Record<string, unknown>, actorEmail: s
   if (current.is_deleted === 0) {
     return { outcome: "NO_OP" as const };
   }
+
+  const resolvedId = resolveYouTubeId({ youtubeId: current.youtube_id, youtubeUrl: current.youtube_url });
+  if (!resolvedId) {
+    throw new Error("Cannot restore: stored YouTube URL or ID is invalid.");
+  }
+
+  const conflict = await query(
+    "SELECT id FROM patient_videos WHERE youtube_id = ? AND id <> ? AND is_deleted = 0 LIMIT 1",
+    resolvedId,
+    id,
+  );
+  if (conflict.results?.length) {
+    throw new Error("Cannot restore: this YouTube video is already used by another active entry.");
+  }
+
   const result = await run(
     "UPDATE patient_videos SET is_deleted = 0, status = 'HIDDEN', is_visible = 0 WHERE id = ?",
     id,
