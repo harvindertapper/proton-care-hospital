@@ -36,6 +36,7 @@ import {
   updateBlog,
   publishBlog,
   hideBlog,
+  archiveBlog,
   type BlogRepo,
 } from "@/app/lib/blog-admin";
 import { departmentBySlug } from "@/app/lib/data";
@@ -683,6 +684,7 @@ async function applyAction(action: string, payload: Record<string, unknown>, act
   if (action === "closure.delete") return applyDeleteClosure(payload, actorEmail);
   if (action === "doctor.delete") return applyDeleteDoctor(payload, actorEmail);
   if (action === "doctor.restore") return applyRestoreDoctor(payload, actorEmail);
+  if (action === "blog.archive") return applyArchiveBlog(payload, actorEmail);
   if (action === "blog.delete") return applyDeleteBlog(payload, actorEmail);
   if (action === "career.delete") return applyDeleteCareer(payload, actorEmail);
   if (action === "video.delete") return applyDeleteVideo(payload, actorEmail);
@@ -1041,6 +1043,11 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (typeof obj.action !== "string" || !["publish", "hide"].includes(clean(obj.action, 40).toLowerCase())) {
       return { ok: false, error: "action must be 'publish' or 'hide'." };
     }
+  } else if (action === "blog.archive") {
+    if (typeof obj.blogId !== "string" || !obj.blogId.trim()) return { ok: false, error: "blogId is required." };
+    if (typeof obj.expectedVersion !== "number" || Number.isNaN(parseExpectedVersion(obj.expectedVersion, { minimum: 1 }))) {
+      return { ok: false, error: "expectedVersion must be a positive integer." };
+    }
   } else if (action === "career.save") {
     if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Job title is required." };
     if (typeof obj.description !== "string" || !obj.description.trim()) return { ok: false, error: "Job description is required." };
@@ -1196,6 +1203,19 @@ async function applyDeleteBlog(payload: Record<string, unknown>, actorEmail: str
   requireAppliedMutation(result, Boolean(existing.results?.length), "Blog post");
   await audit(actorEmail, "BLOG_DELETED", "BlogPost", slug, `Soft deleted blog post with slug: ${slug}`);
   return { outcome: "APPLIED" as const };
+}
+
+async function applyArchiveBlog(payload: Record<string, unknown>, actorEmail: string) {
+  const blogId = typeof payload.blogId === "string" ? clean(payload.blogId, 140) || "" : "";
+  if (!blogId) throw new Error("Blog ID is required.");
+  const expectedVersion = typeof payload.expectedVersion === "number"
+    ? parseExpectedVersion(payload.expectedVersion, { minimum: 1 })
+    : NaN;
+  if (Number.isNaN(expectedVersion)) {
+    throw new Error("expectedVersion is required for blog archive.");
+  }
+  const blogRepo: BlogRepo = { query, run, audit };
+  return archiveBlog(blogRepo, blogId, expectedVersion, actorEmail);
 }
 
 async function applyDeleteCareer(payload: Record<string, unknown>, actorEmail: string) {

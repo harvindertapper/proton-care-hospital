@@ -592,82 +592,69 @@ test("GW.54 — gateway rejects invalid path segments", () => {
 });
 
 /* ═════════════════════════════════════════════════════════════════════════════
-   VIII. Admin UX — BlogForm version, preview, expectedVersion
+   VIII. Admin UX — BlogStudio version, preview, expectedVersion
    ═════════════════════════════════════════════════════════════════════════════ */
 
-test("UX.55 — BlogForm state includes expectedVersion", () => {
-  const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
-  const blogFormIdx = src.indexOf("function BlogForm");
-  const block = src.substring(blogFormIdx, blogFormIdx + 1000);
-  assert.match(block, /expectedVersion/, "BlogForm state includes expectedVersion");
+function readBlogStudioSrc() {
+  return fs.readFileSync(path.join(ROOT, "app", "components", "admin", "BlogStudio.tsx"), "utf-8");
+}
+
+test("UX.55 — BlogStudio state includes expectedVersion", () => {
+  const src = readBlogStudioSrc();
+  assert.match(src, /expectedVersion/, "BlogStudio state includes expectedVersion");
 });
 
-test("UX.56 — BlogForm state includes blogId", () => {
-  const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
-  const blogFormIdx = src.indexOf("function BlogForm");
-  const block = src.substring(blogFormIdx, blogFormIdx + 1000);
-  assert.match(block, /blogId/, "BlogForm state includes blogId");
+test("UX.56 — BlogStudio state includes selectedBlogId", () => {
+  const src = readBlogStudioSrc();
+  assert.match(src, /selectedBlogId/, "BlogStudio state includes selectedBlogId");
 });
 
-test("UX.57 — BlogForm sends expectedVersion in save payload", () => {
-  const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
-  const blogFormIdx = src.indexOf("function BlogForm");
-  const block = src.substring(blogFormIdx, blogFormIdx + 2000);
-  assert.match(block, /expectedVersion: isEditing/, "sends expectedVersion");
+test("UX.57 — BlogStudio sends expectedVersion in save payload for UPDATE", () => {
+  const src = readBlogStudioSrc();
+  assert.match(src, /payload\.expectedVersion = form\.expectedVersion/, "sends expectedVersion for update");
 });
 
-test("UX.58 — BlogForm onRowClick populates version and blogId", () => {
-  const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
+test("UX.58 — BlogStudio onRowClick populates version and blogId", () => {
+  const src = readBlogStudioSrc();
   assert.ok(src.includes("row.version"), "populates expectedVersion from row.version");
-  assert.ok(src.includes("row.id"), "populates blogId from row.id");
+  assert.ok(src.includes("String(row.id"), "populates blogId from row.id");
   assert.ok(src.includes("expectedVersion: Number(row.version"), "expectedVersion mapped from row.version");
 });
 
-test("UX.59 — BlogForm cover shows image preview using canonical media URL", () => {
-  const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
-  const blogFormIdx = src.indexOf("function BlogForm");
-  const block = src.substring(blogFormIdx, blogFormIdx + 4000);
-  assert.match(block, /<img/, "renders img element");
-  assert.match(block, /Cover set/, "user-friendly label");
-  assert.match(block, /\/api\/media\/\$\{form\.coverMediaId\}/, "uses canonical media URL for preview");
+test("UX.59 — BlogStudio cover shows image preview using canonical media URL", () => {
+  const src = readBlogStudioSrc();
+  assert.match(src, /<img/, "renders img element");
+  assert.match(src, /\/api\/media\/\$\{form\.coverMediaId\}/, "uses canonical media URL for preview");
 });
 
-test("UX.60 — BlogForm cover img uses alt attribute with title fallback", () => {
-  const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
-  const blogFormIdx = src.indexOf("function BlogForm");
-  const block = src.substring(blogFormIdx, blogFormIdx + 4000);
-  assert.match(block, /alt=\{form\.title \|\| "Blog cover"\}/, "alt uses title with fallback");
+test("UX.60 — BlogStudio cover img uses alt attribute with title fallback", () => {
+  const src = readBlogStudioSrc();
+  assert.match(src, /alt=\{form\.title \|\| "Blog cover"\}/, "alt uses title with fallback");
 });
 
-test("UX.61 — BlogForm cover img has dimensions", () => {
-  const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
-  const blogFormIdx = src.indexOf("function BlogForm");
-  const block = src.substring(blogFormIdx, blogFormIdx + 4000);
-  assert.match(block, /width: 48/, "has width");
-  assert.match(block, /height: 48/, "has height");
+test("UX.61 — BlogStudio cover img has styling", () => {
+  const src = readBlogStudioSrc();
+  assert.match(src, /coverPreviewImg/, "has coverPreviewImg style");
+  assert.match(src, /objectFit: "cover"/, "uses cover object-fit");
 });
 
-test("UX.62 — BlogForm Create New resets expectedVersion to 0", () => {
-  const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
-  const blogFormIdx = src.indexOf("function BlogForm");
-  const block = src.substring(blogFormIdx, blogFormIdx + 2000);
-  assert.match(block, /expectedVersion: 0/, "resets to 0");
+test("UX.62 — BlogStudio Create New resets selectedBlogId to null", () => {
+  const src = readBlogStudioSrc();
+  const idx = src.indexOf("handleAddNew");
+  const block = src.substring(idx, idx + 500);
+  assert.match(block, /setSelectedBlogId\(null\)/, "resets selectedBlogId to null");
 });
 
-test("UX.63 — BlogForm shows editing banner when isEditing", () => {
-  const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
-  const blogFormIdx = src.indexOf("function BlogForm");
-  const block = src.substring(blogFormIdx, blogFormIdx + 2000);
-  assert.match(block, /isEditing/, "uses isEditing variable");
-  assert.match(block, /Editing blog post/, "shows editing banner");
+test("UX.63 — BlogStudio shows editing banner when isEditing", () => {
+  const src = readBlogStudioSrc();
+  assert.match(src, /const isEditing = Boolean\(selectedBlogId\)/, "uses selectedBlogId for isEditing");
+  assert.match(src, /Editing/, "shows editing banner");
 });
 
-test("UX.64 — BlogForm MediaPickerDialog category is BLOG", () => {
-  const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
-  const blogFormIdx = src.indexOf("function BlogForm");
-  const block = src.substring(blogFormIdx, blogFormIdx + 5000);
-  assert.ok(block.includes('category="BLOG"'), "category is BLOG");
-  assert.ok(block.includes('categoryLabel="Blog Cover"'), "categoryLabel is Blog Cover");
+test("UX.64 — BlogStudio MediaPickerDialog category is BLOG", () => {
+  const src = readBlogStudioSrc();
+  assert.ok(src.includes('category="BLOG"'), "category is BLOG");
+  assert.ok(src.includes('categoryLabel="Blog Cover"'), "categoryLabel is Blog Cover");
 });
 
 /* ═════════════════════════════════════════════════════════════════════════════
@@ -929,17 +916,16 @@ test("GW.98 — gateway BLOG compatibility path checks status = 'APPROVED'", () 
   assert.ok(block.includes("status = 'APPROVED'"), "BLOG compatibility path checks status=APPROVED");
 });
 
-test("UX.99 — BlogForm editing banner shows version number", () => {
-  const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
-  const blogFormIdx = src.indexOf("function BlogForm");
-  const block = src.substring(blogFormIdx, blogFormIdx + 2000);
-  assert.match(block, /Editing blog post.*\(v\{form\.expectedVersion\}\)/s, "shows version in editing banner");
+test("UX.99 — BlogStudio editing banner shows version number", () => {
+  const src = fs.readFileSync(path.join(ROOT, "app", "components", "admin", "BlogStudio.tsx"), "utf-8");
+  assert.ok(src.includes("v{form.expectedVersion}"), "shows version in editing banner");
 });
 
-test("UX.100 — BlogForm send blogId and coverDirty guard on save", () => {
-  const src = fs.readFileSync(path.join(ROOT, "app", "components", "AdminConsole.tsx"), "utf-8");
-  const blogFormIdx = src.indexOf("function BlogForm");
-  const block = src.substring(blogFormIdx, blogFormIdx + 2000);
-  assert.match(block, /if \(isEditing && form\.blogId\)/, "sends blogId only when editing");
-  assert.match(block, /if \(isEditing && coverDirty\)/, "sends coverMediaId only when coverDirty");
+test("UX.100 — BlogStudio uses blogId-based identity and smart cover handling", () => {
+  const src = fs.readFileSync(path.join(ROOT, "app", "components", "admin", "BlogStudio.tsx"), "utf-8");
+  const idx = src.indexOf("export default function BlogStudio");
+  assert.ok(idx > 0, "BlogStudio function found");
+  const block = src.substring(idx, idx + 12000);
+  assert.match(block, /const isEditing = Boolean\(selectedBlogId\)/, "uses selectedBlogId for isEditing");
+  assert.match(block, /form\.coverMediaId !== baselineRef\.current\.coverMediaId/, "uses baseline comparison for cover changes");
 });

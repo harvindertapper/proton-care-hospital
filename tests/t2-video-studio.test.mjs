@@ -543,7 +543,7 @@ test("38. validatePayload video.visibility requires action publish or hide", asy
 test("39. validatePayload returns ok for valid video.save with mode=CREATE", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const vpIdx = src.indexOf("function validatePayload(");
-  const section = src.slice(vpIdx, vpIdx + 9000);
+  const section = src.slice(vpIdx, vpIdx + 11000);
   assert.ok(
     section.includes("return { ok: true }"),
     "must return ok:true for valid payloads"

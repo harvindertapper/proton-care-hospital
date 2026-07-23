@@ -19,6 +19,7 @@ import { slugify } from "@/app/lib/utils";
 import { resolveDoctorManagerRows } from "@/app/lib/doctor-admin.ts";
 import { computeCropPlan } from "@/app/lib/media-policy.ts";
 import PatientVideoStudio from "@/app/components/admin/PatientVideoStudio";
+import BlogStudio, { type BlogMutateResult } from "@/app/components/admin/BlogStudio";
 import { MediaLibraryPanel } from "@/app/components/admin/MediaLibraryPanel";
 import { GalleryManagerPanel } from "@/app/components/admin/GalleryManagerPanel";
 import MediaPickerDialog from "@/app/components/admin/MediaPickerDialog";
@@ -729,6 +730,22 @@ export function AdminConsole({
     }
   }
 
+  async function blogMutate(payload: Record<string, unknown>): Promise<BlogMutateResult> {
+    setBusy(true);
+    try {
+      const result = await postAdmin(session.csrf, payload);
+      await refreshData(true);
+      const data = (result.data ?? result) as { blogId?: string; version?: number } | undefined;
+      return { ok: true, outcome: String(result.outcome || "APPLIED"), ...(data ? { data } : {}) };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Blog operation failed.";
+      await refreshData(true);
+      return { ok: false, error: msg };
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function videoMutate(
     payload: Record<string, unknown>,
   ): Promise<{ ok: boolean; outcome?: string; error?: string }> {
@@ -1299,13 +1316,11 @@ export function AdminConsole({
         ) : null}
 
         {active === "Blogs" ? (
-          <BlogForm
+          <BlogStudio
             busy={busy}
             csrf={session.csrf}
-            onSave={(payload) => mutate({ action: "blog.save", payload }, "Blog saved or sent for approval.")}
-            onVisibility={(slug, blogId, action, expectedVersion) => mutate({ action: "blog.visibility", payload: { blogId, action, expectedVersion } }, action === "publish" ? "Blog published publicly." : "Blog hidden from public site.")}
-            onDelete={(slug) => mutate({ action: "blog.delete", slug }, "Blog deleted successfully.")}
-            rows={adminData.blogs}
+            blogs={adminData.blogs}
+            blogMutate={blogMutate}
           />
         ) : null}
         {active === "Careers" ? (
@@ -2414,144 +2429,6 @@ function DoctorManager({
           }}
         />
       )}
-    </div>
-  );
-}
-
-function BlogForm({
-  busy,
-  csrf,
-  onSave,
-  onVisibility,
-  onDelete,
-  rows,
-}: {
-  busy: boolean;
-  csrf: string;
-  onSave: (payload: Record<string, unknown>) => void;
-  onVisibility?: (slug: string, blogId: string, action: string, expectedVersion: number) => void;
-  onDelete?: (slug: string) => void;
-  rows: AdminData["blogs"];
-}) {
-  const [form, setForm] = useState({ title: "", slug: "", excerpt: "", body: "", coverMediaId: "", blogId: "", expectedVersion: 0 });
-  const [showCoverPicker, setShowCoverPicker] = useState(false);
-  const [coverDirty, setCoverDirty] = useState(false);
-  const isEditing = rows.some(b => b.slug === form.slug && form.slug);
-  return (
-    <div className="admin-panel-grid">
-      <form className="admin-form" onSubmit={(event) => {
-        event.preventDefault();
-        const payload: Record<string, unknown> = {
-          title: form.title,
-          slug: form.slug || slugify(form.title),
-          excerpt: form.excerpt,
-          body: form.body,
-          expectedVersion: isEditing ? form.expectedVersion : 0,
-        };
-        if (isEditing && form.blogId) {
-          payload.blogId = form.blogId;
-        }
-        if (isEditing && coverDirty) {
-          payload.coverMediaId = form.coverMediaId || null;
-        }
-        onSave(payload);
-      }}>
-        {isEditing && (
-          <div style={{ background: "#e0f2fe", color: "#0369a1", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <span>Editing blog post: <strong>{form.title}</strong> (v{form.expectedVersion})</span>
-            <button type="button" className="button subtle small" style={{ padding: "4px 8px" }} onClick={() => { setForm({ title: "", slug: "", excerpt: "", body: "", coverMediaId: "", blogId: "", expectedVersion: 0 }); setCoverDirty(false); }}>
-              Create New
-            </button>
-          </div>
-        )}
-        <label>Title<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value, slug: slugify(event.target.value) })} /></label>
-        <label>Slug<input value={form.slug} onChange={(event) => setForm({ ...form, slug: slugify(event.target.value) })} /></label>
-        <label>Excerpt<textarea rows={3} value={form.excerpt} onChange={(event) => setForm({ ...form, excerpt: event.target.value })} /></label>
-        <label>Body<textarea rows={7} value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} /></label>
-
-        <div style={{ borderTop: "1px solid var(--line)", paddingTop: 12, marginTop: 8 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "var(--navy)" }}>Blog Cover Image</div>
-          {form.coverMediaId ? (
-            <div style={{ fontSize: 12, color: "#16a34a", background: "#f0fdf4", padding: "6px 10px", borderRadius: 6, marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
-              <img src={`/api/media/${form.coverMediaId}`} alt={form.title || "Blog cover"} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 4 }} />
-              <span>Cover set</span>
-            </div>
-          ) : (
-            <div style={{ fontSize: 12, color: "#64748b", background: "#f1f5f9", padding: "6px 10px", borderRadius: 6, marginBottom: 8 }}>
-              No cover image set.
-            </div>
-          )}
-          <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-            <button type="button" className="button secondary small" onClick={() => setShowCoverPicker(true)}>
-              Select from Media Library
-            </button>
-            {form.coverMediaId && (
-              <button type="button" className="button secondary small" style={{ color: "#dc2626" }} onClick={() => { setForm({ ...form, coverMediaId: "" }); setCoverDirty(true); }}>
-                Remove Cover
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-          <button className="button primary" style={{ flex: 1 }} disabled={busy}><Newspaper size={17} aria-hidden="true" /> Save Blog</button>
-          {form.slug && (
-            <button
-              type="button"
-              className="button danger"
-              style={{ background: "#e11d48", color: "white" }}
-              disabled={busy}
-              onClick={() => {
-                if (window.confirm(`Are you sure you want to delete the blog "${form.title}"?`)) {
-                  onDelete?.(form.slug);
-                }
-              }}
-            >
-              Delete Blog
-            </button>
-          )}
-        </div>
-      </form>
-      {showCoverPicker && (
-        <MediaPickerDialog
-          csrf={csrf}
-          category="BLOG"
-          categoryLabel="Blog Cover"
-          selectedId={form.coverMediaId || null}
-          onClose={() => setShowCoverPicker(false)}
-          onSelect={(asset) => {
-            setForm({ ...form, coverMediaId: asset.id });
-            setCoverDirty(true);
-            setShowCoverPicker(false);
-          }}
-        />
-      )}
-      <DataTable
-        rows={rows}
-        columns={["title", "status", "is_visible", "created_at"]}
-        onRowClick={(row) => {
-          setForm({
-            title: String(row.title || ""),
-            slug: String(row.slug || ""),
-            excerpt: String(row.excerpt || ""),
-            body: String(row.body || ""),
-            coverMediaId: String(row.cover_media_id || ""),
-            blogId: String(row.id || ""),
-            expectedVersion: Number(row.version || 0),
-          });
-          setCoverDirty(false);
-        }}
-        actions={onVisibility && isEditing ? (row) => (
-          <div className="table-actions">
-            <button
-              disabled={busy || row.status !== "APPROVED"}
-              onClick={() => onVisibility(String(row.slug), String(row.id || ""), row.is_visible ? "hide" : "publish", Number(row.version || 0))}
-            >
-              {row.is_visible ? "Hide" : "Publish"}
-            </button>
-          </div>
-        ) : undefined}
-      />
     </div>
   );
 }

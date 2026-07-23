@@ -379,3 +379,34 @@ export async function hideBlog(
   await repo.audit(actorEmail, "BLOG_HIDDEN", "BlogPost", blogId, `slug=${current.slug}`);
   return { outcome: "APPLIED" };
 }
+
+export async function archiveBlog(
+  repo: BlogRepo,
+  blogId: string,
+  expectedVersion: number,
+  actorEmail: string,
+): Promise<{ outcome: "APPLIED" }> {
+  const current = await loadBlogById(repo, blogId);
+  if (!current) throw new MutationNotFoundError("Blog post");
+  if (current.is_deleted) {
+    throw new MutationNotFoundError("Blog post");
+  }
+  if (current.version !== expectedVersion) {
+    throw new MutationConflictError("Blog post was modified by another session. Refresh and try again.");
+  }
+
+  const result = await repo.run(
+    `UPDATE blog_posts SET is_deleted = 1, is_visible = 0, status = 'HIDDEN',
+      deleted_at = CURRENT_TIMESTAMP,
+      version = version + 1
+     WHERE id = ? AND version = ? AND is_deleted = 0`,
+    blogId, expectedVersion,
+  );
+  if (Number(result.meta?.changes || 0) < 1) {
+    const recheck = await loadBlogById(repo, blogId);
+    if (!recheck || recheck.is_deleted) throw new MutationNotFoundError("Blog post");
+    throw new MutationConflictError("Blog post was modified by another session. Refresh and try again.");
+  }
+  await repo.audit(actorEmail, "BLOG_ARCHIVED", "BlogPost", blogId, `slug=${current.slug}`);
+  return { outcome: "APPLIED" };
+}
