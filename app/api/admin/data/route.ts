@@ -308,7 +308,7 @@ async function applyBlog(payload: Record<string, unknown>, actorEmail: string) {
   }
 
   if (!Number.isNaN(expectedVersion) && expectedVersion > 0) {
-    throw new MutationConflictError("Blog post was created by another session. Refresh and try again.");
+    throw new Error("expectedVersion must not be positive for CREATE mode.");
   }
 
   if (coverMediaIdExplicitlyProvided && coverMediaId) {
@@ -1045,13 +1045,20 @@ function validatePayload(action: string, payload: unknown): { ok: boolean; error
     if (typeof obj.endTime !== "string" || !obj.endTime.trim()) return { ok: false, error: "End time is required." };
     if (typeof obj.days !== "string" || !obj.days.trim()) return { ok: false, error: "Days parameter is required." };
   } else if (action === "blog.save") {
-    if (typeof obj.mode !== "string" || !["CREATE", "UPDATE"].includes(clean(obj.mode, 10).toUpperCase())) return { ok: false, error: "mode must be 'CREATE' or 'UPDATE'." };
+    const bm = clean(obj.mode, 10).toUpperCase();
+    if (typeof obj.mode !== "string" || !["CREATE", "UPDATE"].includes(bm)) return { ok: false, error: "mode must be 'CREATE' or 'UPDATE'." };
     if (typeof obj.title !== "string" || !obj.title.trim()) return { ok: false, error: "Blog title is required." };
     if (typeof obj.body !== "string" || !obj.body.trim()) return { ok: false, error: "Blog body is required." };
     if (typeof obj.slug !== "string" || !obj.slug.trim()) return { ok: false, error: "Blog slug is required." };
-    if (clean(obj.mode, 10).toUpperCase() === "UPDATE" && (typeof obj.blogId !== "string" || !obj.blogId.trim())) return { ok: false, error: "blogId is required for UPDATE mode." };
     if (obj.coverMediaId != null && obj.coverMediaId !== "" && (typeof obj.coverMediaId !== "string" || obj.coverMediaId.length > 140)) return { ok: false, error: "coverMediaId must be a string of at most 140 characters." };
-    if (clean(obj.mode, 10).toUpperCase() === "UPDATE" && (typeof obj.expectedVersion !== "number" || Number.isNaN(parseExpectedVersion(obj.expectedVersion, { minimum: 1 })))) return { ok: false, error: "expectedVersion must be a positive integer for UPDATE mode." };
+    if (bm === "UPDATE") {
+      if (typeof obj.blogId !== "string" || !obj.blogId.trim()) return { ok: false, error: "blogId is required for UPDATE mode." };
+      if (typeof obj.expectedVersion !== "number" || Number.isNaN(parseExpectedVersion(obj.expectedVersion, { minimum: 1 }))) return { ok: false, error: "expectedVersion must be a positive integer for UPDATE mode." };
+    }
+    if (bm === "CREATE") {
+      if (typeof obj.blogId === "string" && obj.blogId.trim()) return { ok: false, error: "blogId must not be provided for CREATE mode." };
+      if (typeof obj.expectedVersion === "number" && parseExpectedVersion(obj.expectedVersion) > 0) return { ok: false, error: "expectedVersion must not be positive for CREATE mode." };
+    }
   } else if (action === "blog.visibility") {
     if (typeof obj.blogId !== "string" || !obj.blogId.trim()) return { ok: false, error: "blogId is required." };
     if (typeof obj.expectedVersion !== "number" || Number.isNaN(parseExpectedVersion(obj.expectedVersion, { minimum: 1 }))) return { ok: false, error: "expectedVersion must be a positive integer." };

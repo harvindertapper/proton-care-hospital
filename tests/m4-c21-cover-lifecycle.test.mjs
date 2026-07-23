@@ -623,13 +623,14 @@ test("UX.58 — BlogStudio onRowClick populates version and blogId", () => {
 
 test("UX.59 — BlogStudio cover shows image preview using canonical media URL", () => {
   const src = readBlogStudioSrc();
-  assert.match(src, /<img/, "renders img element");
-  assert.match(src, /\/api\/media\/\$\{form\.coverMediaId\}/, "uses canonical media URL for preview");
+  assert.ok(src.includes("<img"), "renders img element");
+  assert.ok(src.includes("/api/media/"), "uses canonical media gateway for preview");
+  assert.ok(src.includes("coverMeta.previewUrl"), "uses resolved coverMeta.previewUrl for image src");
 });
 
-test("UX.60 — BlogStudio cover img uses alt attribute with title fallback", () => {
+test("UX.60 — BlogStudio cover img uses alt attribute with media label", () => {
   const src = readBlogStudioSrc();
-  assert.match(src, /alt=\{form\.title \|\| "Blog cover"\}/, "alt uses title with fallback");
+  assert.ok(src.includes("alt={coverMeta.label}"), "alt uses resolved cover label");
 });
 
 test("UX.61 — BlogStudio cover img has styling", () => {

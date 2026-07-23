@@ -194,7 +194,7 @@ test("SLT.11 — BlogStudio sets slugTouched true on slug input change", () => {
 test("SLT.12 — BlogStudio sets slugTouched true on select existing blog", () => {
   const src = readSource("app/components/admin/BlogStudio.tsx");
   const selectIdx = src.indexOf("handleSelectBlog");
-  const block = src.substring(selectIdx, selectIdx + 800);
+  const block = src.substring(selectIdx, selectIdx + 1200);
   assert.ok(block.includes("setSlugTouched(true)"), "sets slugTouched true when selecting existing blog");
 });
 

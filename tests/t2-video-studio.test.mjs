@@ -475,7 +475,7 @@ test("34. validatePayload video.save requires title", async () => {
 test("35. validatePayload video.save requires youtubeUrl", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const vpIdx = src.indexOf("function validatePayload(");
-  const section = src.slice(vpIdx, vpIdx + 5000);
+  const section = src.slice(vpIdx, vpIdx + 5500);
   const videoSaveIdx = section.indexOf('"video.save"');
   const block = section.slice(videoSaveIdx, videoSaveIdx + 500);
   assert.ok(
@@ -491,7 +491,7 @@ test("35. validatePayload video.save requires youtubeUrl", async () => {
 test("36. validatePayload video.save requires consentNote >= 5 chars", async () => {
   const src = await readSource("../app/api/admin/data/route.ts");
   const vpIdx = src.indexOf("function validatePayload(");
-  const section = src.slice(vpIdx, vpIdx + 5000);
+  const section = src.slice(vpIdx, vpIdx + 5500);
   const videoSaveIdx = section.indexOf('"video.save"');
   const block = section.slice(videoSaveIdx, videoSaveIdx + 1000);
   assert.ok(

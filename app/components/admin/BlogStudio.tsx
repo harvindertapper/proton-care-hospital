@@ -31,6 +31,7 @@ type Props = {
   csrf: string;
   role?: "SUPER_ADMIN" | "STAFF";
   blogs: Record<string, string | number | null>[];
+  media: Record<string, string | number | null>[];
   blogMutate: (payload: Record<string, unknown>) => Promise<BlogMutateResult>;
 };
 
@@ -53,7 +54,15 @@ type FormErrors = {
 
 type Lifecycle = "live" | "hidden" | "archived" | "draft";
 
-type CoverMeta = { id: string; verified: boolean } | null;
+type CoverMeta = {
+  id: string;
+  label: string;
+  category: string;
+  lifecycleStatus: string;
+  deletedAt: string | null;
+  previewUrl: string;
+  verified: boolean;
+} | null;
 
 const EMPTY_FORM: FormState = {
   title: "",
@@ -114,6 +123,30 @@ function formHasChanges(a: FormState, b: FormState): boolean {
 
 function isStaffRole(role?: string): boolean {
   return role === "STAFF";
+}
+
+function resolveBlogCoverMeta(
+  coverMediaId: string | null | undefined,
+  media: Record<string, string | number | null>[],
+): CoverMeta {
+  if (!coverMediaId) return null;
+  const row = media.find((m) => String(m.id) === coverMediaId);
+  if (!row) return null;
+  if (String(row.category || "").toUpperCase() !== "BLOG") return null;
+  if (row.deleted_at != null && row.deleted_at !== "") return null;
+  const storageType = String(row.storage_type || "");
+  if (storageType !== "R2" && storageType !== "PUBLIC") return null;
+  if (storageType === "R2" && !row.r2_key) return null;
+  if (storageType === "PUBLIC" && !row.public_path && !row.display_public_path) return null;
+  return {
+    id: coverMediaId,
+    label: String(row.file_name || row.title || coverMediaId),
+    category: String(row.category),
+    lifecycleStatus: String(row.lifecycle_status || ""),
+    deletedAt: row.deleted_at ? String(row.deleted_at) : null,
+    previewUrl: `/api/media/${encodeURIComponent(coverMediaId)}`,
+    verified: true,
+  };
 }
 
 function roleLabelSave(isStaff: boolean, isEditing: boolean): string {
@@ -615,7 +648,7 @@ const S = {
 /*                             Component                                      */
 /* -------------------------------------------------------------------------- */
 
-export default function BlogStudio({ busy, csrf, role, blogs, blogMutate }: Props) {
+export default function BlogStudio({ busy, csrf, role, blogs, media, blogMutate }: Props) {
   /* ------------------------------------------------------------------ */
   /*  State                                                             */
   /* ------------------------------------------------------------------ */
@@ -754,13 +787,14 @@ export default function BlogStudio({ busy, csrf, role, blogs, blogMutate }: Prop
       if (!guardDirty()) return;
       const blogId = String(row.id || "");
       const coverId = String(row.cover_media_id || "");
+      const resolvedCover = resolveBlogCoverMeta(coverId || null, media);
       const snapshot: FormState = {
         title: String(row.title || ""),
         slug: String(row.slug || ""),
         excerpt: String(row.excerpt || ""),
         body: String(row.body || ""),
         coverMediaId: coverId,
-        coverMediaVerified: Boolean(coverId),
+        coverMediaVerified: resolvedCover?.verified ?? false,
         expectedVersion: Number(row.version || 0),
       };
       setSelectedBlogId(blogId);
@@ -770,10 +804,10 @@ export default function BlogStudio({ busy, csrf, role, blogs, blogMutate }: Prop
       setIsDirty(false);
       setCoverImgFailed(false);
       setSlugTouched(true);
-      setCoverMeta(coverId ? { id: coverId, verified: true } : null);
+      setCoverMeta(resolvedCover);
       setPendingNotice("");
     },
-    [guardDirty],
+    [guardDirty, media],
   );
 
   const handleAddNew = useCallback(() => {
@@ -827,10 +861,10 @@ export default function BlogStudio({ busy, csrf, role, blogs, blogMutate }: Prop
     if (result.ok) {
       const outcome = String(result.outcome || "APPLIED").toUpperCase();
 
-      if (outcome === "PENDING_APPROVAL" || outcome === "NO_OP" && staff) {
+      if (outcome === "PENDING_APPROVAL") {
         const msg = staff
           ? "Change submitted for Super Admin approval."
-          : "Blog updated.";
+          : "Blog update pending review.";
         setPendingNotice(msg);
         showNotice(msg, "success");
         return;
@@ -841,36 +875,40 @@ export default function BlogStudio({ busy, csrf, role, blogs, blogMutate }: Prop
         return;
       }
 
+      if (outcome !== "APPLIED") {
+        showNotice("Unexpected server response. Please refresh and verify.", "error");
+        return;
+      }
+
       const serverBlogId = result.data?.blogId;
       const serverVersion = result.data?.version;
-      const serverSlug = result.data?.slug || effectiveSlug;
+      const serverSlug = result.data?.slug;
+
+      if (!serverBlogId || serverVersion == null || !serverSlug) {
+        showNotice("Save succeeded but the server did not return expected identity. Please refresh and verify.", "error");
+        return;
+      }
 
       if (isUpdate && selectedBlogId) {
-        const updatedVersion = serverVersion ?? form.expectedVersion + 1;
         const snapshot: FormState = {
           ...form,
           slug: serverSlug,
-          expectedVersion: updatedVersion,
-          coverMediaVerified: true,
+          expectedVersion: serverVersion,
+          coverMediaVerified: coverMeta?.verified ?? false,
         };
         baselineRef.current = snapshot;
         setForm(snapshot);
         setIsDirty(false);
         showNotice("Blog updated successfully.", "success");
       } else {
-        if (!serverBlogId) {
-          showNotice("Save succeeded but server did not return a blog ID. Refresh and verify.", "error");
-          return;
-        }
-        const updatedVersion = serverVersion ?? 1;
         const snapshot: FormState = {
           title: form.title.trim(),
           slug: serverSlug,
           excerpt: form.excerpt.trim(),
           body: form.body.trim(),
           coverMediaId: form.coverMediaId,
-          coverMediaVerified: Boolean(form.coverMediaId),
-          expectedVersion: updatedVersion,
+          coverMediaVerified: coverMeta?.verified ?? false,
+          expectedVersion: serverVersion,
         };
         setSelectedBlogId(serverBlogId);
         baselineRef.current = snapshot;
@@ -885,7 +923,7 @@ export default function BlogStudio({ busy, csrf, role, blogs, blogMutate }: Prop
     } else {
       showNotice(result.error || "Save failed.", "error");
     }
-  }, [form, isEditing, selectedBlogId, blogMutate, showNotice, role]);
+  }, [form, isEditing, selectedBlogId, blogMutate, showNotice, role, coverMeta]);
 
   const handlePublish = useCallback(
     async (blogId: string, version: number) => {
@@ -1297,16 +1335,27 @@ export default function BlogStudio({ busy, csrf, role, blogs, blogMutate }: Prop
             {/* Cover Image */}
             <div style={S.coverSection}>
               <div style={S.coverLabel}>Cover Image</div>
-              {form.coverMediaId && !coverImgFailed ? (
+              {form.coverMediaId && coverMeta?.verified && !coverImgFailed ? (
                 <div style={S.coverPreview}>
                   <img
-                    src={`/api/media/${form.coverMediaId}`}
-                    alt={form.title || "Blog cover"}
+                    src={coverMeta.previewUrl}
+                    alt={coverMeta.label}
                     style={S.coverPreviewImg}
                     onError={() => setCoverImgFailed(true)}
                   />
+                  <div
+                    style={{
+                      padding: "6px 10px",
+                      fontSize: 12,
+                      color: "#64748b",
+                      background: "#f8fafc",
+                      borderTop: "1px solid #E2E8F0",
+                    }}
+                  >
+                    {coverMeta.label}
+                  </div>
                 </div>
-              ) : form.coverMediaId && coverImgFailed ? (
+              ) : form.coverMediaId && coverMeta?.verified && coverImgFailed ? (
                 <div
                   style={{
                     ...S.coverPreview,
@@ -1321,7 +1370,25 @@ export default function BlogStudio({ busy, csrf, role, blogs, blogMutate }: Prop
                 >
                   <ImageIcon size={32} color="#dc2626" />
                   <span style={{ fontSize: 12, color: "#dc2626", fontWeight: 500 }}>
-                    Selected cover is unavailable.
+                    Cover image failed to load. Replace it.
+                  </span>
+                </div>
+              ) : form.coverMediaId ? (
+                <div
+                  style={{
+                    ...S.coverPreview,
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: "#fef2f2",
+                    paddingTop: 40,
+                    gap: 6,
+                  }}
+                >
+                  <ImageIcon size={32} color="#dc2626" />
+                  <span style={{ fontSize: 12, color: "#dc2626", fontWeight: 500 }}>
+                    Selected cover is unavailable. Choose another Blog cover.
                   </span>
                 </div>
               ) : (
@@ -1428,33 +1495,35 @@ export default function BlogStudio({ busy, csrf, role, blogs, blogMutate }: Prop
                 >
                   {/* Cover thumbnail */}
                   <div style={S.cardCover} className="bs-card-cover">
-                    {row.cover_media_id && (
-                      <img
-                        src={`/api/media/${row.cover_media_id}`}
-                        alt={String(row.title || "Blog cover")}
-                        style={S.cardCoverImg}
-                        onError={(e) => {
-                          const img = e.target as HTMLImageElement;
-                          img.style.display = "none";
-                        }}
-                      />
-                    )}
-                    {!row.cover_media_id && (
-                      <div
-                        style={{
-                          position: "absolute",
-                          top: 0,
-                          left: 0,
-                          width: "100%",
-                          height: "100%",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                        }}
-                      >
-                        <Newspaper size={36} color="#334155" />
-                      </div>
-                    )}
+                    {(() => {
+                      const cardCover = resolveBlogCoverMeta(String(row.cover_media_id || "") || null, media);
+                      return cardCover ? (
+                        <img
+                          src={cardCover.previewUrl}
+                          alt={String(row.title || "Blog cover")}
+                          style={S.cardCoverImg}
+                          onError={(e) => {
+                            const img = e.target as HTMLImageElement;
+                            img.style.display = "none";
+                          }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: 0,
+                            left: 0,
+                            width: "100%",
+                            height: "100%",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <Newspaper size={36} color="#334155" />
+                        </div>
+                      );
+                    })()}
                     <span style={S.cardBadge(lifecycle)} className={`bs-badge ${lifecycle}`}>
                       {lifecycle === "live" && <CheckCircle size={10} />}
                       {lifecycle === "hidden" && <EyeOff size={10} />}
@@ -1592,7 +1661,15 @@ export default function BlogStudio({ busy, csrf, role, blogs, blogMutate }: Prop
           onSelect={(asset) => {
             markDirty({ coverMediaId: asset.id, coverMediaVerified: true });
             setCoverImgFailed(false);
-            setCoverMeta({ id: asset.id, verified: true });
+            setCoverMeta({
+              id: asset.id,
+              label: asset.fileName || asset.title || asset.id,
+              category: asset.category,
+              lifecycleStatus: asset.lifecycleStatus,
+              deletedAt: asset.deletedAt,
+              previewUrl: `/api/media/${encodeURIComponent(asset.id)}`,
+              verified: true,
+            });
             setShowCoverPicker(false);
           }}
         />

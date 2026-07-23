@@ -1321,6 +1321,7 @@ export function AdminConsole({
             csrf={session.csrf}
             role={session.role}
             blogs={adminData.blogs}
+            media={adminData.media}
             blogMutate={blogMutate}
           />
         ) : null}
